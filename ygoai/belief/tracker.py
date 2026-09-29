@@ -274,6 +274,24 @@ class Tracker:
             self.needs.append(v)
             self.searched.append((v, None))
 
+    def _public_hand(self, lst: list[Var], cards: list[dict]) -> None:
+        """Cards kept revealed in a hand (EFFECT_PUBLIC) stay revealed through a
+        shuffle: if a shuffled hand shows the same public codes as were public
+        before, each is one of the earlier public cards of its code. (Public
+        status can also end and start between two views; then the codes differ
+        and nothing is concluded.)"""
+        public = [(v, c.get("code", 0)) for v, c in zip(lst, cards) if c.get("is_public")]
+        pools = {v.pool.index: v.pool for v, _ in public if v.kind == "claim" and v.pool is not None}
+        if len(pools) == 1 and all(v.pool is next(iter(pools.values())) for v, _ in public):
+            pool = next(iter(pools.values()))
+            carriers = [(m.id, mk[1]) for m in pool.members for mk in m.marks if mk[0] == "public"]
+            if carriers and sorted(c for _, c in carriers) == sorted(c for _, c in public):
+                for v, code in public:
+                    same = frozenset(i for i, c in carriers if c == code)
+                    v.allowed = same if v.allowed is None else v.allowed & same
+        for v, code in public:
+            v.marks = v.marks | {("public", code)}
+
     def _card_hint(self, m: dict) -> None:
         """Card hints stick to a physical card; after a shuffle the core shows them
         again at the card's new position, which tells which copy went where."""
@@ -381,7 +399,8 @@ class Tracker:
                 self._left_hand.append(v)
             self._batch["vars"].append(v)
             self._batch["pos"].append(self._start_pos(frm["con"], frm["loc"], v) if v is not None else None)
-        elif self._batch is not None:
+        elif self._batch is not None and t != "SET":
+            # (a group SSet announces each card right after its move)
             self._flush_batch()
         if t not in ("CONFIRM_CARDS", "CONFIRM_DECKTOP", "CONFIRM_EXTRATOP", "SHUFFLE_DECK", "SHUFFLE_HAND",
                      "SHUFFLE_EXTRA", "HINT", "CARD_HINT", "RANDOM_SELECTED"):
@@ -658,6 +677,8 @@ class Tracker:
                     for v, card in zip(lst, cards):
                         self.observe(v, card.get("code", 0))
                         v.faceup = bool(card.get("position", 0) & C.POS_FACEUP)
+                    if loc == C.LOCATION_HAND:
+                        self._public_hand(lst, cards)
 
     # -- solving -------------------------------------------------------------
     def solve(self, completion=None, card_db=None) -> Hypothesis:

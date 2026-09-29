@@ -206,6 +206,23 @@ class FlowSolver:
         for v in t.all_vars:
             if v.allowed is not None or v.same_as is not None or v.not_same:
                 linked.add(v.id)
+        # creation order constraints between cards of one player: cards are
+        # created sorted by code (game.setup_duel), so a card created earlier
+        # has a code that sorts no later (the order among copies is left to
+        # Solver._relabel)
+        ordered: list[tuple[Var, Var]] = []
+        for va, vb in t.rank_constraints:
+            if va.kind == "created" or vb.kind == "created" or va is vb:
+                continue
+            if known_code(va) is not None and known_code(vb) is not None:
+                continue  # nothing to decide
+            oa, ob = owners.get(va.id), owners.get(vb.id)
+            if oa is None or len(oa) != 1 or oa != ob:
+                continue
+            if (va.kind == "claim" and va.pool is None) or (vb.kind == "claim" and vb.pool is None):
+                continue
+            ordered.append((va, vb))
+            linked.update((va.id, vb.id))
         edges: dict[tuple, list[Var]] = defaultdict(list)
         for v in t.all_vars:
             if v.kind == "claim" and v.pool is None:
@@ -340,6 +357,19 @@ class FlowSolver:
                             terms.append((mine[k], 1.0))
                         add_row(terms, -np.inf, 0)
                     add_row([(mine[k], 1.0) for k in ts if k in mine], 1, 1)
+        def sort_key(k: int):
+            code = code_of(k)
+            return None if isinstance(code, str) else (self._is_extra(code), code)
+        for va, vb in ordered:
+            ca, cb = var_cols(va), var_cols(vb)
+            kb = sorted(((sort_key(k), j) for k, j in cb.items() if sort_key(k) is not None))
+            for k, j in ca.items():
+                key = sort_key(k)
+                if key is None:
+                    continue
+                below = [(jj, 1.0) for kk, jj in kb if kk < key]
+                if below:
+                    add_row([(j, 1.0)] + below, -np.inf, 1)
         a = coo_matrix((vals, (rows, colsi)), shape=(r, ncol)).tocsr()
         res = milp(c=np.array(cost), constraints=LinearConstraint(a, np.array(rlo), np.array(rhi)),
                    integrality=np.ones(ncol), bounds=Bounds(np.array(lo), np.array(hi)),

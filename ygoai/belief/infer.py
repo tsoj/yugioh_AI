@@ -75,18 +75,19 @@ def match_chaining(options: list[dict], ch: dict, before: list[dict]) -> list[in
              if o["code"] == ch["code"] and o.get("desc", 0) == ch["desc"]]
     if len(cands) <= 1:
         return cands
+    # a card that moved into the activation's zone first (e.g. a field spell from
+    # the hand replacing one Set in the field zone) was activated from where it came
+    src = source_of(ch, before)
+    if src is not None:
+        from_src = [i for i in cands if same_loc(options[i], src)]
+        if from_src:
+            return from_src + [i for i in cands if i not in from_src]
     # the activated card's location identifies the copy
     exact = [i for i in cands if same_loc(options[i], ch)]
     if len(exact) == 1:
         return exact
     if exact:
         return exact + [i for i in cands if i not in exact]
-    src = source_of(ch, before)
-    if src is not None:
-        from_src = [i for i in cands if same_loc(options[i], src)]
-        if len(from_src) == 1:
-            return from_src
-        return from_src + [i for i in cands if i not in from_src]
     return cands
 
 
@@ -97,11 +98,36 @@ def _first_defining(up: list[dict], skip: set[str]) -> int | None:
     return None
 
 
+# timing events of the window the non-turn player gets when the turn player
+# leaves the Main Phase (23) or the Battle Step (29)
+PHASE_LEAVE_EVENTS = (23, 29)
+
+
+def phase_leave(prompt: dict, m: dict, up_ext: list[dict], moves: dict[int, str]) -> tuple[list[dict], bool] | None:
+    """Candidates if `m` is the window opened by a phase-change command. No
+    other command shows a timing event before its own defining message."""
+    if not (m["type"] == "HINT" and m["hint_type"] == C.HINT_EVENT and m["data"] in PHASE_LEAVE_EVENTS):
+        return None
+    kinds = [k for k in moves.values() if prompt[k]]
+    if not kinds:
+        return None
+    # the phase entered afterwards (if the window restarts the command instead,
+    # the choice has no effect)
+    target = next((moves.get(x["phase"]) for x in up_ext if x["type"] == "NEW_PHASE"), None)
+    if target in kinds:
+        kinds.remove(target)
+        kinds.insert(0, target)
+    return [{"kind": k} for k in kinds], True
+
+
 def infer_idle(prompt: dict, up: list[dict], up_ext: list[dict] | None = None) -> tuple[list[dict], bool]:
     opts = idle_options(prompt)
     for i, m in enumerate(up):
         t = m["type"]
         before = up[:i]
+        leave = phase_leave(prompt, m, up_ext or [], {C.PHASE_BATTLE_START: "to_bp", C.PHASE_END: "to_ep"})
+        if leave:
+            return leave
         if t == "CHAINING":
             idx = match_chaining(prompt["activatable"], m, before)
             if idx:
@@ -165,6 +191,9 @@ def infer_battle(prompt: dict, up: list[dict], up_ext: list[dict] | None = None)
     opts = battle_options(prompt)
     for i, m in enumerate(up):
         t = m["type"]
+        leave = phase_leave(prompt, m, up_ext or [], {C.PHASE_MAIN2: "to_m2", C.PHASE_END: "to_ep"})
+        if leave:
+            return leave
         if t == "CHAINING":
             idx = match_chaining(prompt["activatable"], m, up[:i])
             if idx:
@@ -521,7 +550,9 @@ _MAX_CANDIDATES = 64
 
 # messages that end the action a selection belongs to: moves after them are
 # consequences of later decisions
-_WINDOW_END = frozenset(("CHAINING", "CHAINED", "CHAIN_SOLVED", "CHAIN_END", "NEW_PHASE", "NEW_TURN", "WIN"))
+_WINDOW_END = frozenset(("CHAINING", "CHAINED", "CHAIN_SOLVED", "CHAIN_END", "NEW_PHASE", "NEW_TURN", "WIN",
+                         # a summon's materials/costs move before the summon itself
+                         "SUMMONING", "SPSUMMONING", "FLIPSUMMONING"))
 
 
 def selection_window(up: list[dict]) -> list[dict]:

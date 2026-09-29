@@ -177,6 +177,9 @@ class BeliefReplay:
         self.snapshot_cps: set[int] = set()
         self.failed_assumptions: set[tuple] = set()
         self.failed_exclusions: set[tuple] = set()
+        # one-decision backtracking: (stream position, index among the decisions
+        # at that position) -> candidate to use instead of the inferred one
+        self.overrides: dict[tuple[int, int], int] = {}
         self._last_hyp_fix: str | None = None
         # opponent decisions of earlier attempts: (pos, prompt) -> response
         self.memo: dict[tuple, dict] = {}
@@ -209,6 +212,8 @@ class BeliefReplay:
         self.last_shuffle_cp: dict[tuple[int, int], int] = {}
         self._shuffle_count = 0  # shuffles so far (index into the hypothesis' shuffles)
         self._event_hint = None  # (stream position, data) of the opponent's latest timing event
+        self._decisions_at: dict[int, int] = {}  # stream position -> decisions made there
+        self._recent: list[tuple] = []  # (key, candidates, chosen) of the decisions since the last item
         # where the previous attempt shuffled (for folding swaps into shuffles)
         self.prev_shuffle_cps = getattr(self, "shuffle_cps", {})
         self.shuffle_cps: dict[tuple[int, int], list[int]] = {}
@@ -338,6 +343,15 @@ class BeliefReplay:
                 duel.close()
                 last = e
                 if e.fix is None or not self._add_fix(e.fix):
+                    # the decisions made since the last observed item are the ones
+                    # whose consequence diverged: try the latest one differently
+                    alt = next(((k, i + 1) for k, n, i in reversed(self._recent) if i + 1 < n), None)
+                    if alt is not None and self.overrides.get(alt[0], -1) < alt[1]:
+                        self.overrides[alt[0]] = alt[1]
+                        if self.log:
+                            self.log(f"restart {self.stats.restarts}: {e.reason} -> decision {alt[0]} candidate {alt[1]}")
+                        self.stats.restarts += 1
+                        continue
                     if self.memo:
                         # a remembered decision may be wrong under the repairs made
                         # since; try once more deciding everything afresh
@@ -428,6 +442,7 @@ class BeliefReplay:
         self.lockstep.process(self.items[self.pos])
         self.pos += 1
         self.stall = 0
+        self._recent = []
 
     def _loop(self, duel: Duel, prompt: dict | None, response: dict | None) -> None:
         pending = None  # the prompt whose response the next step processes
@@ -649,6 +664,12 @@ class BeliefReplay:
             if fix is None and exp["type"] == "MOVE" and exp["from"]["con"] == self.opponent \
                     and exp["from"]["loc"] in HIDDEN_PILES and exp != got:
                 fix = self._kind_fix(cp, msgs, idx, exp) or self._match_fix(cp, msgs, idx, exp["from"])
+            elif fix is None and exp["type"] == "MOVE" and exp["from"]["con"] == self.opponent \
+                    and exp["from"]["loc"] and not exp["from"]["loc"] & C.LOCATION_OVERLAY and exp != got:
+                # a public card of the opponent the replay did not take: whether it
+                # qualified can depend on hidden cards (e.g. a cost that needs a
+                # matching card in the deck), so let it match the filters
+                fix = self._match_fix(cp, msgs, idx, exp["from"])
         what = item[1].get("type") if item[0] == "msg" else item[0]
         return Divergence(self.pos, f"message mismatch [{what} vs {got.get('type')}]", item, got, fix)
 
@@ -1067,15 +1088,13 @@ class BeliefReplay:
             return infer.infer_sort(prompt, up)
         raise Divergence(self.pos, f"no inference for opponent prompt {t}")
 
-    # timing events of the windows the non-turn player gets when the turn player
-    # leaves the Main Phase (23) or the Battle Step (29): if anything is chained
-    # there, the core resolves it and gives the turn player the command again
+    # if anything is chained in a phase-leave window (infer.PHASE_LEAVE_EVENTS),
+    # the core resolves it and gives the turn player the command again
     # (IdleCommand steps 9-10, BattleCommand steps 39-40)
-    _PHASE_LEAVE_EVENTS = (23, 29)
 
     def _leaving_phase(self) -> bool:
         hint = getattr(self, "_event_hint", None)
-        return hint is not None and hint[0] == self.pos and hint[1] in self._PHASE_LEAVE_EVENTS
+        return hint is not None and hint[0] == self.pos and hint[1] in infer.PHASE_LEAVE_EVENTS
 
     def _restarts_after_chain(self) -> bool:
         """Whether the stream shows the turn player's command again after the
@@ -1105,8 +1124,14 @@ class BeliefReplay:
         self._check_force(prompt, up)
         if prompt["type"] == "SELECT_IDLECMD":
             self._check_idle_assumption(prompt, up)
+        if self.depth == 0:
+            n = self._decisions_at.get(self.pos, 0)
+            self._decisions_at[self.pos] = n + 1
+            self._dkey = (self.pos, n)
+        else:
+            self._dkey = None
         key = None
-        if self.depth == 0 and self.use_memo:
+        if self.depth == 0 and self.use_memo and self._dkey not in self.overrides:
             key = (self.pos, self.stall, repr(prompt))
             hit = self.memo.get(key)
             if hit is not None and prompt["type"] not in CARD_PROMPTS:
@@ -1133,6 +1158,18 @@ class BeliefReplay:
                 valid.append(c)
         if not valid:
             raise Divergence(self.pos, f"no candidate response for opponent {prompt['type']}")
+        dkey = self._dkey if self.depth == 0 else None
+        if dkey is not None and dkey in self.overrides and self.overrides[dkey] < len(valid):
+            i = self.overrides[dkey]
+            self._recent.append((dkey, len(valid), i))
+            self._trace(prompt, valid[i], False, len(valid))
+            return valid[i]
+        resp = self._choose(duel, prompt, valid, certain)
+        if dkey is not None:
+            self._recent.append((dkey, len(valid), valid.index(resp)))
+        return resp
+
+    def _choose(self, duel: Duel, prompt: dict, valid: list[dict], certain: bool) -> dict:
         if certain or len(valid) == 1:
             self._trace(prompt, valid[0], True, len(valid))
             return valid[0]

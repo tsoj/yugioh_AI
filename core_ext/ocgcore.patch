@@ -207,7 +207,7 @@ diff -ruN core_a/meson.build core_b/meson.build
  	'processor.cpp',
 diff -ruN core_a/operations.cpp core_b/operations.cpp
 --- a/operations.cpp	2026-09-29 02:42:20.580055354 +0200
-+++ b/operations.cpp	2026-09-29 02:42:33.120710902 +0200
++++ b/operations.cpp	2026-09-30 00:20:53.407526229 +0200
 @@ -14,6 +14,7 @@
  #include "duel.h"
  #include "effect.h"
@@ -216,7 +216,31 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  #include "group.h"
  #include "interpreter.h"
  
-@@ -6066,7 +6067,7 @@
+@@ -2958,14 +2959,21 @@
+ 		auto message = pduel->new_message(MSG_SHUFFLE_SET_CARD);
+ 		message->write<uint8_t>(LOCATION_SZONE);
+ 		message->write<uint8_t>(ct);
++		std::vector<card*> ms;
++		std::vector<uint8_t> seqs;
+ 		uint8_t i = 0;
+ 		for(const auto& pcard : core.operated_set) {
+ 			uint8_t seq = core.set_group_seq[i++];
+ 			if(pcard->data.type & TYPE_FIELD)
+ 				continue;
+ 			message->write(pcard->get_info_location());
+-			player[toplayer].list_szone[seq] = pcard;
+-			pcard->current.sequence = seq;
++			ms.push_back(pcard);
++			seqs.push_back(seq);
++		}
++		ocgext::on_shuffle_set_card(pduel, ms.data(), seqs.data(), static_cast<int32_t>(ms.size()));
++		for(size_t k = 0; k < ms.size(); ++k) {
++			player[toplayer].list_szone[seqs[k]] = ms[k];
++			ms[k]->current.sequence = seqs[k];
+ 		}
+ 		for(i = 0; i < ct; ++i) {
+ 			message->write(loc_info{});
+@@ -6066,7 +6074,7 @@
  		message->write<uint8_t>(count);
  		core.coin_results.reserve(count);
  		for(int32_t i = 0; i < count; ++i) {
@@ -225,7 +249,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			core.coin_results.push_back(static_cast<bool>(coin));
  			message->write<uint8_t>(coin);
  		}
-@@ -6143,7 +6144,7 @@
+@@ -6143,7 +6151,7 @@
  		message->write<uint8_t>(playerid);
  		message->write<uint8_t>(count1);
  		for(int32_t i = 0; i < count1; ++i) {
@@ -234,7 +258,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			core.dice_results.push_back(dice);
  			message->write<uint8_t>(dice);
  		}
-@@ -6152,7 +6153,7 @@
+@@ -6152,7 +6160,7 @@
  			message->write<uint8_t>(1 - playerid);
  			message->write<uint8_t>(count2);
  			for(int32_t i = 0; i < count2; ++i) {
