@@ -1,0 +1,245 @@
+diff -ruN core_a/duel.cpp core_b/duel.cpp
+--- a/duel.cpp	2026-09-29 02:42:20.576126044 +0200
++++ b/duel.cpp	2026-09-29 02:42:33.121169787 +0200
+@@ -10,6 +10,7 @@
+ #include "duel.h"
+ #include "effect.h"
+ #include "field.h"
++#include "ocgext.h"
+ #include "interpreter.h"
+ 
+ duel::duel(const OCG_DuelOptions& options, bool& valid_lua_lib) :
+@@ -26,6 +27,7 @@
+ 	game_field->temp_card = new_card(0);
+ }
+ duel::~duel() {
++	ocgext::on_destroy(this);
+ 	for(auto& pcard : cards)
+ 		delete pcard;
+ 	for(auto& pgroup : groups) {
+diff -ruN core_a/effect.cpp core_b/effect.cpp
+--- a/effect.cpp	2026-09-29 02:42:20.576194679 +0200
++++ b/effect.cpp	2026-09-29 14:07:55.265578292 +0200
+@@ -10,6 +10,7 @@
+ #include "effect.h"
+ #include "field.h"
+ #include "interpreter.h"
++#include "ocgext.h"
+ 
+ bool effect_sort_id(const effect* e1, const effect* e2) {
+ 	return e1->id < e2->id;
+@@ -295,8 +296,13 @@
+ 	int32_t result = TRUE;
+ 	if(!(type & EFFECT_TYPE_CONTINUOUS))
+ 		result = is_action_check(playerid);
+-	if(result)
++	if(result) {
+ 		result = is_activate_ready(playerid, e, neglect_cond, neglect_cost, neglect_target);
++		// forced: skip the cost/target checks only if they fail (the checks can
++		// have side effects the activation relies on, e.g. labels)
++		if(!result && !(neglect_cost && neglect_target) && ocgext::is_forced_activatable(pduel, this, playerid))
++			result = is_activate_ready(playerid, e, neglect_cond, TRUE, TRUE);
++	}
+ 	pduel->game_field->core.reason_effect = oreason;
+ 	pduel->game_field->core.reason_player = op;
+ 	pduel->game_field->restore_lp_cost();
+diff -ruN core_a/field.cpp core_b/field.cpp
+--- a/field.cpp	2026-09-29 02:42:20.576337427 +0200
++++ b/field.cpp	2026-09-29 11:47:05.442824317 +0200
+@@ -12,6 +12,7 @@
+ #include "duel.h"
+ #include "effect.h"
+ #include "field.h"
++#include "ocgext.h"
+ #include "group.h"
+ #include "interpreter.h"
+ 
+@@ -136,6 +137,10 @@
+ 	}
+ 	pcard->current.controler = playerid;
+ 	pcard->current.location = location;
++	// a card entering a hidden pile is a new object: forget position/activation
++	// history, which otherwise shows which physical copy it is when it returns
++	if(location & (LOCATION_DECK | LOCATION_HAND | LOCATION_EXTRA))
++		pcard->set_status(STATUS_JUST_POS | STATUS_CONTINUOUS_POS | STATUS_ATTACK_CANCELED | STATUS_ACT_FROM_HAND, FALSE);
+ 	switch (location) {
+ 	case LOCATION_MZONE: {
+ 		player[playerid].list_mzone[sequence] = pcard;
+@@ -966,6 +971,12 @@
+ 			reset_sequence(playerid, location);
+ 		}
+ 	}
++	{
++		auto forced_count = static_cast<uint32_t>(to_shuffle.size());
++		if(location == LOCATION_EXTRA)
++			forced_count -= player[playerid].extra_p_count;
++		ocgext::on_shuffle(pduel, playerid, location, to_shuffle, forced_count);
++	}
+ 	if(location == LOCATION_HAND || location == LOCATION_EXTRA) {
+ 		auto message = pduel->new_message((location == LOCATION_HAND) ? MSG_SHUFFLE_HAND : MSG_SHUFFLE_EXTRA);
+ 		message->write<uint8_t>(playerid);
+@@ -1425,14 +1436,23 @@
+ 		if(oeit.second == reason_effect)
+ 			oeit.second = nullptr;
+ }
++// Iterating the pointer-keyed effect sets directly is both address dependent
++// (nondeterministic order) and unsafe: removing one effect can remove others
++// from the set, invalidating the iterator. Iterate a snapshot ordered by id.
++static std::vector<effect*> sorted_effects(const field_effect::effect_collection& set) {
++	std::vector<effect*> out(set.begin(), set.end());
++	std::sort(out.begin(), out.end(), [](const effect* a, const effect* b) { return a->id < b->id; });
++	return out;
++}
+ void field::reset_phase(uint32_t phase) {
+-	for(auto eit = effects.pheff.begin(); eit != effects.pheff.end();) {
+-		auto rm = eit++;
+-		if((*rm)->reset(phase, RESET_PHASE)) {
+-			if((*rm)->is_flag(EFFECT_FLAG_FIELD_ONLY))
+-				remove_effect((*rm));
++	for(auto* peffect : sorted_effects(effects.pheff)) {
++		if(!effects.pheff.count(peffect))
++			continue;
++		if(peffect->reset(phase, RESET_PHASE)) {
++			if(peffect->is_flag(EFFECT_FLAG_FIELD_ONLY))
++				remove_effect(peffect);
+ 			else
+-				(*rm)->handler->remove_effect((*rm));
++				peffect->handler->remove_effect(peffect);
+ 		}
+ 	}
+ }
+@@ -1441,12 +1461,13 @@
+ 		ensure_luaL_stack(luaL_unref, pduel->lua->lua_state, LUA_REGISTRYINDEX, ch_lim_p.function);
+ 	core.chain_limit_p.clear();
+ 	core.effect_count_code_chain.clear();
+-	for(auto eit = effects.cheff.begin(); eit != effects.cheff.end();) {
+-		auto rm = eit++;
+-		if((*rm)->is_flag(EFFECT_FLAG_FIELD_ONLY))
+-			remove_effect((*rm));
++	for(auto* peffect : sorted_effects(effects.cheff)) {
++		if(!effects.cheff.count(peffect))
++			continue;
++		if(peffect->is_flag(EFFECT_FLAG_FIELD_ONLY))
++			remove_effect(peffect);
+ 		else
+-			(*rm)->handler->remove_effect((*rm));
++			peffect->handler->remove_effect(peffect);
+ 	}
+ }
+ processor::effect_count_map& field::get_count_map(uint8_t flag) {
+diff -ruN core_a/interpreter.cpp core_b/interpreter.cpp
+--- a/interpreter.cpp	2026-09-29 02:42:20.576597991 +0200
++++ b/interpreter.cpp	2026-09-29 05:31:27.301581026 +0200
+@@ -15,6 +15,7 @@
+ #include "lua_obj.h"
+ #include "group.h"
+ #include "scriptlib.h"
++#include "ocgext.h"
+ 
+ using namespace scriptlib;
+ 
+@@ -449,6 +450,8 @@
+ 		lua_pushvalue(L, idx + i);
+ }
+ bool interpreter::check_matching(card* pcard, int32_t findex, int32_t extraargs) {
++	if(ocgext::is_forced_match(pduel, pcard))
++		return true;
+ 	luaL_checkstack(current_state, extraargs + 2, nullptr);
+ 	lua_pushvalue(current_state, findex);
+ 	pushobject(current_state, pcard);
+@@ -464,6 +467,8 @@
+ bool interpreter::check_matching_table(card* pcard, int32_t findex, int32_t table_index) {
+ 	if(!findex || !lua_istable(current_state, table_index))
+ 		return true;
++	if(ocgext::is_forced_match(pduel, pcard))
++		return true;
+ 	luaL_checkstack(current_state, 2, nullptr);
+ 	lua_pushvalue(current_state, findex);
+ 	pushobject(current_state, pcard);
+diff -ruN core_a/libduel.cpp core_b/libduel.cpp
+--- a/libduel.cpp	2026-09-29 02:42:20.576991425 +0200
++++ b/libduel.cpp	2026-09-29 02:42:33.121111193 +0200
+@@ -12,6 +12,7 @@
+ #include "duel.h"
+ #include "effect.h"
+ #include "field.h"
++#include "ocgext.h"
+ #include "group.h"
+ #include "scriptlib.h"
+ 
+@@ -1418,6 +1419,7 @@
+ 		int32_t s = pduel->get_next_integer(0, i);
+ 		std::swap(ms[i], ms[s]);
+ 	}
++	ocgext::on_shuffle_set_card(pduel, ms, seq, ct);
+ 	auto& field = pduel->game_field;
+ 	auto& list = (loc == LOCATION_MZONE) ? field->player[tp].list_mzone : field->player[tp].list_szone;
+ 	auto message = pduel->new_message(MSG_SHUFFLE_SET_CARD);
+diff -ruN core_a/libgroup.cpp core_b/libgroup.cpp
+--- a/libgroup.cpp	2026-09-29 02:42:20.577097906 +0200
++++ b/libgroup.cpp	2026-09-29 02:42:33.120812188 +0200
+@@ -13,6 +13,7 @@
+ #include "card.h"
+ #include "duel.h"
+ #include "field.h"
++#include "ocgext.h"
+ #include "group.h"
+ #include "scriptlib.h"
+ 
+@@ -323,6 +324,7 @@
+ 			newgroup->container.insert(*cit);
+ 		}
+ 	}
++	ocgext::on_random_select(pduel, self->container, newgroup->container);
+ 	auto message = pduel->new_message(MSG_RANDOM_SELECTED);
+ 	message->write<uint8_t>(playerid);
+ 	message->write<uint32_t>(count);
+diff -ruN core_a/meson.build core_b/meson.build
+--- a/meson.build	2026-09-29 02:42:20.579934222 +0200
++++ b/meson.build	2026-09-29 02:42:33.121183733 +0200
+@@ -31,6 +31,7 @@
+ 	'libeffect.cpp',
+ 	'libgroup.cpp',
+ 	'ocgapi.cpp',
++	'ocgext.cpp',
+ 	'operations.cpp',
+ 	'playerop.cpp',
+ 	'processor.cpp',
+diff -ruN core_a/operations.cpp core_b/operations.cpp
+--- a/operations.cpp	2026-09-29 02:42:20.580055354 +0200
++++ b/operations.cpp	2026-09-29 02:42:33.120710902 +0200
+@@ -14,6 +14,7 @@
+ #include "duel.h"
+ #include "effect.h"
+ #include "field.h"
++#include "ocgext.h"
+ #include "group.h"
+ #include "interpreter.h"
+ 
+@@ -6066,7 +6067,7 @@
+ 		message->write<uint8_t>(count);
+ 		core.coin_results.reserve(count);
+ 		for(int32_t i = 0; i < count; ++i) {
+-			auto coin = pduel->get_next_integer(0, 1);
++			auto coin = ocgext::forced_int(pduel, ocgext::FORCED_COIN, pduel->get_next_integer(0, 1));
+ 			core.coin_results.push_back(static_cast<bool>(coin));
+ 			message->write<uint8_t>(coin);
+ 		}
+@@ -6143,7 +6144,7 @@
+ 		message->write<uint8_t>(playerid);
+ 		message->write<uint8_t>(count1);
+ 		for(int32_t i = 0; i < count1; ++i) {
+-			const auto dice = pduel->get_next_integer(1, 6);
++			const auto dice = ocgext::forced_int(pduel, ocgext::FORCED_DICE, pduel->get_next_integer(1, 6));
+ 			core.dice_results.push_back(dice);
+ 			message->write<uint8_t>(dice);
+ 		}
+@@ -6152,7 +6153,7 @@
+ 			message->write<uint8_t>(1 - playerid);
+ 			message->write<uint8_t>(count2);
+ 			for(int32_t i = 0; i < count2; ++i) {
+-				const auto dice = pduel->get_next_integer(1, 6);
++				const auto dice = ocgext::forced_int(pduel, ocgext::FORCED_DICE, pduel->get_next_integer(1, 6));
+ 				core.dice_results.push_back(dice);
+ 				message->write<uint8_t>(dice);
+ 			}
