@@ -116,6 +116,7 @@ class Tracker:
         self.soft_rank_constraints: list[tuple[Var, Var]] = []
         self._target_run: list[Var] = []  # cards of consecutive BECOME_TARGET messages
         self._batch: dict | None = None  # consecutive moves of one kind (see _flush_batch)
+        self._resolving = False  # between CHAIN_SOLVING and CHAIN_SOLVED
         self._resent_hints = False  # right after a shuffle (see _card_hint)
         self._stamp = 0  # arrival batch counter (see Var.arrival)
         self._confirmed: list[Var] = []  # the cards of the latest CONFIRM_* message
@@ -356,6 +357,9 @@ class Tracker:
         b, self._batch = self._batch, None
         if b is None or len(b["vars"]) < 2 or None in b["pos"]:
             return
+        _, to_con, to_loc = b["key"]
+        if all(p[0] == to_con and p[1] == to_loc for p in b["pos"]):
+            return  # cards reordered within their pile: in the order the player chose
         tp = self.turn_player
 
         def key(pos):
@@ -399,8 +403,9 @@ class Tracker:
                 self._left_hand.append(v)
             self._batch["vars"].append(v)
             self._batch["pos"].append(self._start_pos(frm["con"], frm["loc"], v) if v is not None else None)
-        elif self._batch is not None and t != "SET":
-            # (a group SSet announces each card right after its move)
+        elif self._batch is not None and not (t == "SET" and self._resolving):
+            # (a group SSet announces each card right after its move; Sets by
+            # separate commands look alike, but happen outside chain links)
             self._flush_batch()
         if t not in ("CONFIRM_CARDS", "CONFIRM_DECKTOP", "CONFIRM_EXTRATOP", "SHUFFLE_DECK", "SHUFFLE_HAND",
                      "SHUFFLE_EXTRA", "HINT", "CARD_HINT", "RANDOM_SELECTED"):
@@ -503,7 +508,9 @@ class Tracker:
             self._chain_from_hand.append(m["loc"] == C.LOCATION_HAND)
         elif t == "CHAIN_SOLVING":
             self._left_hand = []
+            self._resolving = True
         elif t == "CHAIN_SOLVED":
+            self._resolving = False
             if self._chain:
                 var, from_hand = self._chain.pop(), self._chain_from_hand.pop()
                 if from_hand and var is not None:

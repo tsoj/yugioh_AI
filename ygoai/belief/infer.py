@@ -35,8 +35,9 @@ def prelude_fits(before: list[dict], ch: dict) -> bool:
             return False  # a timing event starts a new chain window: a later one
         if t in ("HINT", "CARD_HINT"):
             continue
-        if t == "POS_CHANGE" and same_loc(m, ch):
-            continue
+        if t == "POS_CHANGE" and same_loc(m, ch) and m["prev_pos"] & C.POS_FACEDOWN \
+                and m["pos"] & C.POS_FACEUP:
+            continue  # (a change between face-up positions is a separate command)
         if t == "MOVE" and (same_loc(m["to"], ch) or (m["from"]["loc"] == C.LOCATION_SZONE
                                                       and m["from"]["seq"] == 5)):
             continue
@@ -277,7 +278,14 @@ def infer_hint_value(prompt: dict, up: list[dict], hint_type: int) -> int | None
 def infer_place(prompt: dict, up: list[dict]) -> tuple[list[dict], bool]:
     avail = set(available_places(prompt))
     places = []
-    for m in up:
+    for i, m in enumerate(up):
+        if prompt["type"] == "SELECT_DISFIELD" and not places and i < 12 \
+                and m["type"] == "HINT" and m["hint_type"] == C.HINT_ZONE:
+            # the script announces the selected zones (before anything uses them)
+            zone = m["data"]
+            if m["player"] != prompt["player"]:
+                zone = ((zone & 0xffff) << 16) | ((zone >> 16) & 0xffff)  # (relative to the hinted player)
+            return _zone_places(prompt, zone), True
         if m["type"] == "MOVE":
             to = m["to"]
             key = (to["con"], to["loc"], to["seq"])
@@ -285,10 +293,6 @@ def infer_place(prompt: dict, up: list[dict]) -> tuple[list[dict], bool]:
                 places.append(key)
                 if len(places) == prompt["count"]:
                     return [{"places": [list(p) for p in places]}], True
-    if prompt["type"] == "SELECT_DISFIELD":
-        for m in up[:12]:
-            if m["type"] == "HINT" and m["hint_type"] == C.HINT_ZONE:
-                return _zone_places(prompt, m["data"]), False
     # fallback: every single place (only sensible for count == 1)
     return [{"places": [list(p)]} for p in sorted(avail)][:40], False
 
@@ -310,9 +314,14 @@ def infer_position(prompt: dict, up: list[dict]) -> tuple[list[dict], bool]:
     allowed = [p for p in (C.POS_FACEUP_ATTACK, C.POS_FACEDOWN_ATTACK, C.POS_FACEUP_DEFENSE,
                            C.POS_FACEDOWN_DEFENSE) if prompt["positions"] & p]
     for m in up:
+        pos = None
         if m["type"] == "MOVE" and m["to"]["loc"] == C.LOCATION_MZONE and (
                 not m["code"] or not prompt["code"] or m["code"] == prompt["code"]):
             pos = m["to"]["pos"]
+        elif m["type"] == "POS_CHANGE" and m["loc"] == C.LOCATION_MZONE and (
+                not m["code"] or not prompt["code"] or m["code"] == prompt["code"]):
+            pos = m["pos"]  # (Duel.ChangePosition with a choice)
+        if pos is not None:
             if pos in allowed:
                 return [{"position": pos}] + [{"position": p} for p in allowed if p != pos], True
             break

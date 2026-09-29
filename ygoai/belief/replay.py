@@ -58,7 +58,9 @@ from .tracker import Hypothesis, Tracker, TrackerError
 STATUS_END, STATUS_AWAITING, STATUS_CONTINUE = 0, 1, 2
 PROBE_OK, PROBE_FAILED, PROBE_TIMEOUT, PROBE_REPAIRABLE = 0, 1, 3, 4
 # messages after which moves no longer result from the current selection
-_SELECTION_END = frozenset(("CHAINING", "CHAIN_SOLVED", "CHAIN_END", "NEW_PHASE", "NEW_TURN", "WIN"))
+# (a summon ends the selection of what it summons: later moves are other actions)
+_SELECTION_END = frozenset(("CHAINING", "CHAIN_SOLVED", "CHAIN_END", "NEW_PHASE", "NEW_TURN", "WIN",
+                            "SUMMONING", "SPSUMMONING", "FLIPSUMMONING"))
 HIDDEN_PILES = (C.LOCATION_DECK, C.LOCATION_HAND, C.LOCATION_EXTRA)
 UNORDERED_HINTS = ("PLAYER_HINT", "CARD_HINT")
 _SHUFFLE_LOCS = {"SHUFFLE_HAND": C.LOCATION_HAND, "SHUFFLE_DECK": C.LOCATION_DECK,
@@ -161,6 +163,7 @@ class BeliefReplay:
         # activate where the real one could not)
         self.force_windows: list[tuple[int, int, tuple]] = []
         start = 0
+        chaining = None
         for i, it in enumerate(self.items):
             if it[0] != "msg":
                 continue
@@ -168,7 +171,17 @@ class BeliefReplay:
             if m["type"] in ("NEW_PHASE", "NEW_TURN"):
                 start = i
             elif m["type"] == "CHAINING" and m["trigger_con"] == self.opponent:
+                chaining = m["code"]
                 self.force_windows.append((start, i + 1, (self.opponent, m["code"], m["desc"])))
+            elif m["type"] == "CHAINED":
+                chaining = None
+            elif m["type"] == "HINT" and m["hint_type"] == C.HINT_OPSELECTED and m["player"] == self.opponent \
+                    and chaining is not None and m["data"] >> 20 == chaining:
+                # a continuous trap activated together with one of its effects
+                # (field::get_cteffect): that effect was activatable
+                key = (self.opponent, chaining, m["data"])
+                self.forces.add(key)
+                self.force_windows.append((start, i + 1, key))
         self.assumptions: list[tuple[int, int, int, int, int]] = []  # (pos, con, loc, seq, code)
         self.exclusions: list[tuple] = []  # (pos, con, loc, seqs, code)
         self._folded_swaps: set = set()
@@ -260,8 +273,16 @@ class BeliefReplay:
             out = [id_of.get((player, c, r)) for c, r in zip(codes, ranks)]
             return None if None in out else out
 
+        # a swap at the very start exchanges two copies' roles for the whole duel
+        # (every placement by card id included)
+        roles = {}
+        for a, b in self.swaps.get((0, 0), ()):
+            roles[a], roles[b] = roles.get(b, b), roles.get(a, a)
+
+        def swap_roles(lst):
+            return None if lst is None else [roles.get(x, x) for x in lst]
         for p in (0, 1):
-            deck_ids = ids(p, hyp.deck_orders[p], hyp.deck_ranks[p] if hyp.deck_ranks else None)
+            deck_ids = swap_roles(ids(p, hyp.deck_orders[p], hyp.deck_ranks[p] if hyp.deck_ranks else None))
             if deck_ids is not None and not duel.set_location_order_by_id(p, C.LOCATION_DECK, deck_ids):
                 duel.close()
                 raise Divergence(0, f"cannot set deck order of player {p} by card id")
@@ -272,10 +293,10 @@ class BeliefReplay:
                 if not ok:
                     duel.close()
                     raise Divergence(0, f"cannot set extra deck order of player {p}")
-        shuffle_ids = [ids(sh["player"], sh["codes"], sh.get("ranks")) for sh in hyp.shuffles]
+        shuffle_ids = [swap_roles(ids(sh["player"], sh["codes"], sh.get("ranks"))) for sh in hyp.shuffles]
         # a copy swap scheduled for the step that shuffles the pile exchanges the
         # two cards in that shuffle's result
-        self._folded_swaps = set()
+        self._folded_swaps = {((0, 0), a, b) for a, b in self.swaps.get((0, 0), ())}
         for cp, pairs in self.swaps.items():
             for k in self.prev_shuffle_cps.get(cp, ()):
                 lst = shuffle_ids[k] if k < len(shuffle_ids) else None
@@ -489,9 +510,14 @@ class BeliefReplay:
                     # a copy swap must happen before the prompt that chooses the card
                     for cid in infer.prompt_card_ids(duel, msgs[-1]):
                         self.last_listed[cid] = cp
-            if duel.forced_errors():
-                raise Divergence(self.pos, "a forced shuffle/random outcome could not be applied "
-                                 "(the replay's cards differ from the hypothesis)", None, msgs)
+            # reported after the step's messages: an earlier mismatch in them is
+            # the cause (and may have a repair), the failed outcome a consequence
+            forced_error = duel.forced_errors()
+
+            def check_forced():
+                if forced_error:
+                    raise Divergence(self.pos, "a forced shuffle/random outcome could not be applied "
+                                     "(the replay's cards differ from the hypothesis)", None, msgs)
             if status == STATUS_AWAITING and msgs and msgs[-1]["type"] != "RETRY":
                 prompt = msgs.pop()
             for m in msgs:
@@ -512,6 +538,7 @@ class BeliefReplay:
                     continue
                 if self.pos >= len(self.items):
                     if self.depth > 0:
+                        check_forced()
                         return
                     raise Divergence(self.pos, "replay produced more messages than observed", None, o)
                 item = self.items[self.pos]
@@ -520,11 +547,14 @@ class BeliefReplay:
                         raise self._mismatch(cp, msgs, idx, item, o, duel)
                 self._advance()
                 if o["type"] == "WIN":
+                    check_forced()
                     if self.pos < len(self.items) and self.depth == 0:
                         raise Divergence(self.pos, "stream continues after the game ended")
                     return
                 if self.depth > 0 and self._done():
+                    check_forced()
                     return
+            check_forced()
             if status == STATUS_END:
                 if self.pos < len(self.items):
                     raise Divergence(self.pos, "replay ended early", self.items[self.pos])
@@ -656,6 +686,16 @@ class BeliefReplay:
                         and le["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE)):
                     # copies on the field processed in the wrong order
                     fix = self._field_order_fix(cp, msgs, idx, le, lg)
+            if fix is None and exp["type"] == "MOVE" and exp.get("code") and got["type"] != "MOVE" \
+                    and exp["from"]["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE):
+                # the replay handles another copy on the field first (its move comes
+                # later in this step, after messages that belong to it)
+                le = exp["from"]
+                for m in msgs[idx + 1:]:
+                    if m["type"] == "MOVE" and m["code"] == exp["code"] and m["from"]["con"] == le["con"] \
+                            and m["from"]["loc"] == le["loc"] and m["from"]["seq"] != le["seq"]:
+                        fix = self._field_order_fix(cp, msgs, idx, le, m["from"])
+                        break
             if fix is None and exp["type"] == "BECOME_TARGET" and got["type"] != "BECOME_TARGET" \
                     and exp["cards"]:
                 # the opponent targeted a card that the replay's filter rejects
@@ -750,7 +790,11 @@ class BeliefReplay:
             return None
         (cpa, pile_a), (cpb, pile_b) = self.left_pile[a], self.left_pile[b]
         if pile_a != pile_b:
-            return None
+            if pile_a[0] != pile_b[0] or {pile_a[1], pile_b[1]} & {C.LOCATION_EXTRA}:
+                return None
+            # (e.g. one was drawn first) both started in the deck: exchanging
+            # them there exchanges their whole histories
+            return ("swap", (0, 0), a, b)
         return ("swap", min(cpa, cpb), a, b)
 
     def _prompt_copy_fix(self, exp: dict, got: dict, duel: Duel, cp: int) -> tuple | None:
