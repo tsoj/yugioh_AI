@@ -29,6 +29,10 @@ Some divergences can be repaired, after which the replay restarts:
 * "swap": two copies of the same card have to swap places. The core
   processes groups of cards in creation order, which becomes visible when
   e.g. two copies are sent to the grave together.
+* "match"/"matchpile": a filter (of a selection, or of a check that decides
+  which options exist) accepted a hidden card in the real game that the
+  replay's card does not satisfy: during that step, the card (or every card of
+  the opponent's hidden piles) matches every filter.
 
 Any other difference raises `Divergence`.
 """
@@ -59,8 +63,9 @@ STATUS_END, STATUS_AWAITING, STATUS_CONTINUE = 0, 1, 2
 PROBE_OK, PROBE_FAILED, PROBE_TIMEOUT, PROBE_REPAIRABLE = 0, 1, 3, 4
 # messages after which moves no longer result from the current selection
 # (a summon ends the selection of what it summons: later moves are other actions)
-_SELECTION_END = frozenset(("CHAINING", "CHAIN_SOLVED", "CHAIN_END", "NEW_PHASE", "NEW_TURN", "WIN",
-                            "SUMMONING", "SPSUMMONING", "FLIPSUMMONING"))
+# (and a cost's selection ends when the chain link is complete)
+_SELECTION_END = frozenset(("CHAINING", "CHAINED", "CHAIN_SOLVING", "CHAIN_SOLVED", "CHAIN_END", "NEW_PHASE",
+                            "NEW_TURN", "WIN", "SUMMONING", "SPSUMMONING", "FLIPSUMMONING"))
 HIDDEN_PILES = (C.LOCATION_DECK, C.LOCATION_HAND, C.LOCATION_EXTRA)
 UNORDERED_HINTS = ("PLAYER_HINT", "CARD_HINT")
 _SHUFFLE_LOCS = {"SHUFFLE_HAND": C.LOCATION_HAND, "SHUFFLE_DECK": C.LOCATION_DECK,
@@ -187,6 +192,7 @@ class BeliefReplay:
         self._folded_swaps: set = set()
         self.swaps: dict[int, list[tuple[int, int]]] = {}
         self.matches: dict[int, list[int]] = {}  # control point -> card ids matching all filters
+        self.match_piles: set[tuple[int, int]] = set()  # stream positions (from, to): hidden piles match
         self.snapshot_cps: set[int] = set()
         self.failed_assumptions: set[tuple] = set()
         self.failed_exclusions: set[tuple] = set()
@@ -275,9 +281,7 @@ class BeliefReplay:
 
         # a swap at the very start exchanges two copies' roles for the whole duel
         # (every placement by card id included)
-        roles = {}
-        for a, b in self.swaps.get((0, 0), ()):
-            roles[a], roles[b] = roles.get(b, b), roles.get(a, a)
+        roles = self._roles(self.swaps.get((0, 0), ()))
 
         def swap_roles(lst):
             return None if lst is None else [roles.get(x, x) for x in lst]
@@ -435,11 +439,20 @@ class BeliefReplay:
             return True
         if kind == "swap":
             _, cp, a, b = fix
+            if cp == (0, 0) and not self._role_swap_is_new(a, b):
+                return False
             lst = self.swaps.setdefault(cp, [])
-            if (a, b) in lst or (b, a) in lst:
+            if cp != (0, 0) and ((a, b) in lst or (b, a) in lst):
                 return False
             lst.append((a, b))
             self.stats.swaps += 1
+            return True
+        if kind == "matchpile":
+            span = fix[1:]
+            if span in self.match_piles:
+                return False
+            self.match_piles.add(span)
+            self.stats.assumptions += 1
             return True
         if kind == "match":
             _, cp, cid = fix
@@ -493,6 +506,9 @@ class BeliefReplay:
             # active for every step at this stream position: the selection may
             # happen in a step that shows the viewer nothing
             forced_match = self.matches.get(cp[0])
+            if any(a <= cp[0] <= b for a, b in self.match_piles):
+                forced_match = list(forced_match or ()) + [
+                    cid for loc in HIDDEN_PILES for _, cid in duel.location_cards(self.opponent, loc)]
             if forced_match:
                 duel.set_forced_match(forced_match)
             status = duel.process()
@@ -696,6 +712,16 @@ class BeliefReplay:
                             and m["from"]["loc"] == le["loc"] and m["from"]["seq"] != le["seq"]:
                         fix = self._field_order_fix(cp, msgs, idx, le, m["from"])
                         break
+            if fix is None and exp["type"] == "HINT" and exp["hint_type"] == C.HINT_OPSELECTED \
+                    and exp["player"] == self.opponent and exp != got:
+                # the opponent chose an option the replay did not offer or take:
+                # which options exist can depend on hidden cards (e.g. "set a trap
+                # from the deck"); let them qualify from the activation on
+                start = self._chain_start()
+                if start is not None:
+                    fix = ("matchpile", start, self.pos)
+                    if fix[1:] in self.match_piles:
+                        fix = None
             if fix is None and exp["type"] == "BECOME_TARGET" and got["type"] != "BECOME_TARGET" \
                     and exp["cards"]:
                 # the opponent targeted a card that the replay's filter rejects
@@ -797,6 +823,25 @@ class BeliefReplay:
             return ("swap", (0, 0), a, b)
         return ("swap", min(cpa, cpb), a, b)
 
+    @staticmethod
+    def _roles(pairs) -> dict[int, int]:
+        """Slot id -> id placed there after the start-of-duel swaps."""
+        roles: dict[int, int] = {}
+        for a, b in pairs:
+            # (each swap exchanges the ids as the previous ones placed them)
+            roles.setdefault(a, a)
+            roles.setdefault(b, b)
+            for k, v in roles.items():
+                roles[k] = b if v == a else a if v == b else v
+        return roles
+
+    def _role_swap_is_new(self, a: int, b: int) -> bool:
+        pairs = list(self.swaps.get((0, 0), ()))
+        tried = {frozenset((k, v) for k, v in self._roles(pairs[:i]).items() if k != v)
+                 for i in range(len(pairs) + 1)}
+        new = frozenset((k, v) for k, v in self._roles(pairs + [(a, b)]).items() if k != v)
+        return new not in tried
+
     def _prompt_copy_fix(self, exp: dict, got: dict, duel: Duel, cp: int) -> tuple | None:
         """The viewer's prompt lists a different copy of a card (copies can differ in
         hidden history, e.g. which one may be activated this turn): swap the copies
@@ -815,6 +860,10 @@ class BeliefReplay:
                     return None
                 if g["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE):
                     return self._field_copy_fix(a, b)
+                if g["loc"] in (C.LOCATION_GRAVE, C.LOCATION_REMOVED) and self._role_swap_is_new(a, b):
+                    # the positions and histories of public cards show: exchange the
+                    # copies' roles from the start instead of the cards in place
+                    return ("swap", (0, 0), a, b)
                 at = self.last_shuffle_cp.get((g["con"], g["loc"]), cp)
                 if (a, b) in self.swaps.get(at, ()) or (b, a) in self.swaps.get(at, ()):
                     at = cp
@@ -1094,6 +1143,32 @@ class BeliefReplay:
             self._assume(src, codes, "opponent set a card the hypothesis cannot set")
             return
 
+    def _check_summon_condition(self, duel: Duel, prompt: dict, up: list[dict]) -> None:
+        """The opponent special summoned a hand card by its own procedure, which
+        the replay does not offer although it has that card there: the
+        procedure's condition depends on hidden cards (e.g. materials in the
+        hand), so let the hidden cards qualify until the summon."""
+        for i, m in enumerate(up):
+            if m["type"] in ("MOVE", "HINT", "CARD_HINT", "CARD_SELECTED", "CONFIRM_CARDS", "PAY_LPCOST",
+                             "SHUFFLE_HAND", "SHUFFLE_DECK", "SHUFFLE_EXTRA", "LPUPDATE"):
+                continue
+            if m["type"] != "SPSUMMONING":
+                return
+            src = infer.source_of(m, up[:i])
+            if src is None or src["con"] != self.opponent or src["loc"] != C.LOCATION_HAND:
+                return
+            if any(infer.same_loc(e, src) or e["loc"] == C.LOCATION_SZONE for e in prompt["spsummonable"]):
+                return  # (a Pendulum Summon is offered through the scale)
+            lm = infer.LocMap(duel)
+            cid = lm.at(src)
+            if not cid or lm.codes.get(cid) != m["code"]:
+                return
+            span = (self.prompt_cp[0], self.pos + i)
+            if span not in self.match_piles:
+                raise Divergence(self.pos, "opponent summoned a card whose condition the replay does not meet",
+                                 fix=("matchpile", *span))
+            return
+
     def _candidates(self, duel: Duel, prompt: dict, up: list[dict], ids) -> tuple[list[dict], bool]:
         t = prompt["type"]
         if t == "SELECT_IDLECMD":
@@ -1106,6 +1181,13 @@ class BeliefReplay:
                 if not self._restarts_after_chain():
                     # the phase did change: the activation came in a later window
                     cands = [{"index": -1}] + [c for c in cands if c.get("index", -1) >= 0]
+            elif cands and cands[0].get("index", -1) >= 0 and not prompt["forced"] \
+                    and duel.info()["phase"] == C.PHASE_BATTLE_START \
+                    and self._next_state_phase() == C.PHASE_BATTLE_STEP:
+                # the Battle Step starts without a message: an activation seen
+                # in it came from the battle command, not the Start Step window
+                cands = [{"index": -1}] + [c for c in cands if c.get("index", -1) >= 0]
+                certain = True
             return cands, certain
         if t == "SELECT_EFFECTYN":
             descs = [d for code, d in duel.select_chains() if code == prompt["code"]]
@@ -1135,6 +1217,24 @@ class BeliefReplay:
     # if anything is chained in a phase-leave window (infer.PHASE_LEAVE_EVENTS),
     # the core resolves it and gives the turn player the command again
     # (IdleCommand steps 9-10, BattleCommand steps 39-40)
+
+    def _chain_start(self) -> int | None:
+        """Stream position of the opponent's latest CHAINING (shortly before)."""
+        for j in range(self.pos - 1, max(-1, self.pos - 30), -1):
+            it = self.items[j]
+            if it[0] == "msg" and it[1]["type"] == "CHAINING":
+                return j if it[1]["trigger_con"] == self.opponent else None
+        return None
+
+    def _next_state_phase(self) -> int | None:
+        """The phase in the viewer's next state view while the upcoming chain is
+        built (the phase in which it was started)."""
+        for item in self.items[self.pos:self.pos + 400]:
+            if item[0] == "msg" and item[1]["type"] in ("NEW_PHASE", "NEW_TURN", "CHAIN_SOLVING", "CHAIN_END"):
+                return None
+            if item[0] == "prompt" and item[2] is not None:
+                return item[2]["phase"]
+        return None
 
     def _leaving_phase(self) -> bool:
         hint = getattr(self, "_event_hint", None)
@@ -1168,6 +1268,7 @@ class BeliefReplay:
         self._check_force(prompt, up)
         if prompt["type"] == "SELECT_IDLECMD":
             self._check_idle_assumption(prompt, up)
+            self._check_summon_condition(duel, prompt, up)
         if self.depth == 0:
             n = self._decisions_at.get(self.pos, 0)
             self._decisions_at[self.pos] = n + 1

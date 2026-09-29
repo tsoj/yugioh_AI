@@ -117,6 +117,8 @@ class Tracker:
         self._target_run: list[Var] = []  # cards of consecutive BECOME_TARGET messages
         self._batch: dict | None = None  # consecutive moves of one kind (see _flush_batch)
         self._resolving = False  # between CHAIN_SOLVING and CHAIN_SOLVED
+        self._last_prompt: dict | None = None
+        self._chosen: tuple | None = None  # (var, con, code): the viewer's command's hand card
         self._resent_hints = False  # right after a shuffle (see _card_hint)
         self._stamp = 0  # arrival batch counter (see Var.arrival)
         self._confirmed: list[Var] = []  # the cards of the latest CONFIRM_* message
@@ -267,6 +269,8 @@ class Tracker:
             self.prompt(item[1])
             if item[2] is not None:
                 self.state(item[2])
+        elif kind == "response":
+            self.response(item[1])
 
     def _require(self, m: dict, need: tuple) -> None:
         v = self.var_at(m["con"], m["loc"], m["seq"], m.get("pos", 0))
@@ -401,6 +405,10 @@ class Tracker:
             v = self._plain_var(frm["con"], frm["loc"], frm["seq"])
             if frm["loc"] == C.LOCATION_HAND and v is not None:
                 self._left_hand.append(v)
+                if self._chosen is not None and self._chosen[1] == frm["con"] and self._chosen[2] == m["code"] \
+                        and to["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE):
+                    self._identify(v, self._chosen[0])
+                    self._chosen = None
             self._batch["vars"].append(v)
             self._batch["pos"].append(self._start_pos(frm["con"], frm["loc"], v) if v is not None else None)
         elif self._batch is not None and not (t == "SET" and self._resolving):
@@ -507,6 +515,7 @@ class Tracker:
             self._chain.append(v)
             self._chain_from_hand.append(m["loc"] == C.LOCATION_HAND)
         elif t == "CHAIN_SOLVING":
+            self._chosen = None
             self._left_hand = []
             self._resolving = True
         elif t == "CHAIN_SOLVED":
@@ -614,7 +623,28 @@ class Tracker:
         n_fd = sum(1 for v in extra if not v.faceup)
         self.lists[p][C.LOCATION_EXTRA] = extra[:n_fd] + to_extra + extra[n_fd:]
 
+    # (an activation moves its card before the CHAINING, so no shuffle can
+    # come in between; and the card that moves later may be another one)
+    _COMMAND_LISTS = {"summon": "summonable", "spsummon": "spsummonable", "mset": "msetable",
+                      "sset": "ssetable"}
+
+    def response(self, r: dict) -> None:
+        """The viewer's own command names a physical card: the hand card it
+        summons, sets or activates is the one that moves to the field next
+        (even if the hand is shuffled in between, e.g. after a reveal)."""
+        p = self._last_prompt
+        if p is None or p["type"] != "SELECT_IDLECMD" or r.get("kind") not in self._COMMAND_LISTS:
+            return
+        entries = p.get(self._COMMAND_LISTS[r["kind"]], ())
+        i = r.get("index", -1)
+        if 0 <= i < len(entries) and entries[i].get("loc") == C.LOCATION_HAND and entries[i].get("code"):
+            e = entries[i]
+            self._chosen = (self.var_at(e["con"], e["loc"], e["seq"]), e["con"], e["code"])
+
     def prompt(self, p: dict) -> None:
+        self._last_prompt = p
+        if p["type"] in ("SELECT_IDLECMD", "SELECT_BATTLECMD"):
+            self._chosen = None
         self._flush_batch()
         self._releases = 0
         self._target_run = []

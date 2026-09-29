@@ -96,8 +96,13 @@ minimal example.
       card is still there (`SolveChain`), or right before it if the card moved (the
       `proc_workaround.lua` handler), so the viewer can tell whether a card that left the hand was
       the activated one;
-    * groups are processed in card creation order (a script's loop over a group, target
-      announcements), which orders copies of the same card.
+    * groups are processed in card creation order (a script's loop over a group, a group
+      SSet, target announcements), which orders copies of the same card; since cards are
+      created sorted by code (`game.setup_duel`), it also orders the codes of different
+      hidden cards (a reorder within one pile is the player's choice and says nothing);
+    * the hand card the viewer's own command summons or Sets is the card that moves to the
+      field next, even if the hand is shuffled in between (e.g. after a reveal as a cost);
+    * cards kept revealed in a hand stay revealed through a shuffle.
 * `flow.py` solves that model exactly: every slot carries one card code and every shuffle
   conserves the multiset of codes, which makes it an integer multi-commodity flow over the DAG
   of shuffles (a few thousand variables, solved by HiGHS through `scipy.optimize.milp`; no search
@@ -123,8 +128,16 @@ minimal example.
   Phase or the Battle Step makes the core go back to the command (IdleCommand/BattleCommand), so
   the stream after the chain tells in which window the opponent activated.
 * The goal is a single pass. When the replay still cannot reproduce an observation it repairs
-  the hypothesis and restarts (e.g. letting a hidden card satisfy a filter, exchanging two
-  copies); the check scripts report how many reconstructions needed no restart at all.
+  the hypothesis and restarts; the check scripts report how many reconstructions needed no
+  restart at all. The repairs (see the docstring of `replay.py`):
+  * force an effect the stream shows (also one a continuous trap was activated together with);
+  * assume a card of a certain kind or code where the opponent took a hidden card;
+  * let a hidden card satisfy every filter during one step, or, when the opponent chose an
+    option or used a summon procedure whose availability depends on its hidden cards, every
+    card of its hidden piles from the activation until the choice;
+  * exchange two copies of a card, at the step where they last shared a shuffled pile or, for
+    copies whose history is public (graveyard, banished), from the start of the duel;
+  * retry a different candidate for one recent opponent decision.
 
 ### Using the belief replay in an AI
 
@@ -151,20 +164,24 @@ searched decision; making it incremental is an obvious next step.
 
 ## Current results
 
-Measured with `scripts/check_belief.py -n 64` (random and greedy agents, random human deck
-pairs from the corpus, 20% mirror matches; both players; cut after ~1/3, ~2/3 and at the end of
-the game; the reconstruction must reproduce every filtered message, every prompt of the viewer
-and the viewer's state view at every prompt):
+Measured with `scripts/check_belief.py -n 1000 --start 1000` (random and greedy agents, random
+human deck pairs from the corpus, 20% mirror matches; both players; cut after ~1/3, ~2/3 and at
+the end of the game, 6000 reconstructions; the reconstruction must reproduce every filtered
+message, every prompt of the viewer and the viewer's state view at every prompt):
 
 | cut      | consistent |
 |----------|------------|
-| ~1/3     | 95%        |
-| ~2/3     | 88%        |
-| full game| 80%        |
-| overall  | 87.5%      |
+| ~1/3     | 98.6%      |
+| ~2/3     | 97.4%      |
+| full game| 96.5%      |
+| overall  | 97.5%      |
 
-Median reconstruction time is about 0.6s (a few long games take minutes because of repeated
-repair restarts). Plain self-play is fast: about 0.2s CPU per game, ~650 decisions per game.
+88% of all reconstructions need no repair restart at all. The remaining failures are mostly
+effects whose behaviour depends on hidden cards in ways no repair covers yet (e.g. an
+excavation whose result decides what the opponent can pick), and copy identity puzzles.
+
+Median reconstruction time is about 0.3s (a few long games take up to the 90s limit because
+of repeated repair restarts). Plain self-play is fast: about 0.2s CPU per game, ~650 decisions per game.
 
 First match of the example search agent (`belief_mc`: belief replay + flat Monte Carlo with
 greedy rollouts, vanilla deck completion) against `greedy`, 40 openings with swapped seats:
@@ -221,7 +238,8 @@ infer.
 `core_ext/ocgext.cpp`:
 
 * Hooks for forcing outcomes, all no-ops unless the `OCG_Ext*` API is used: shuffle results
-  (deck, hand, extra, `Duel.ShuffleSetCard`), coin and dice results, `Group.RandomSelect`,
+  (deck, hand, extra, `Duel.ShuffleSetCard` and the zone assignment of a group SSet), coin and
+  dice results, `Group.RandomSelect`,
   "treat this effect as activatable" (skips cost/target checks) and "treat this card as
   matching every filter".
 * Extra API: reorder a pile (by code or by card id), force shuffle results by card id, swap two
