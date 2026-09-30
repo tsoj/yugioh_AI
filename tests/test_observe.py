@@ -80,6 +80,13 @@ class FilterTest(unittest.TestCase):
              "cards": [{"code": X, "con": 1, "loc": C.LOCATION_DECK, "seq": 4}]}
         self.assertEqual(filter_message(m, 1)["cards"][0]["code"], X)
 
+    def test_hand_to_deck_as_cost_is_shown(self):
+        m = {"type": "MOVE", "code": X, "from": loc(1, C.LOCATION_HAND, 0, C.POS_FACEDOWN),
+             "to": loc(1, C.LOCATION_DECK, 20, C.POS_FACEDOWN), "reason": C.REASON_COST}
+        self.assertEqual(filter_message(m, 0)["code"], X)
+        # (returned by an effect: not shown)
+        self.assertEqual(filter_message({**m, "reason": C.REASON_EFFECT}, 0)["code"], 0)
+
     def test_card_hint_of_hidden_card_dropped(self):
         m = {"type": "CARD_HINT", **loc(1, C.LOCATION_HAND, 0, C.POS_FACEDOWN),
              "hint_type": C.CHINT_DESC_ADD, "value": X << 4}

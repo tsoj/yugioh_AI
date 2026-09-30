@@ -328,6 +328,12 @@ def _filter_message(msg: dict, viewer: int) -> dict | None:
             msg = {**msg, "reason": 0}
         if to["con"] == viewer or loc_visible(to, viewer):
             return msg
+        if frm["loc"] == C.LOCATION_HAND and to["loc"] & (C.LOCATION_DECK | C.LOCATION_EXTRA) \
+                and msg["reason"] & (C.REASON_COST | C.REASON_MATERIAL):
+            # a card returned from the hand to the Deck as a cost or material has
+            # to meet a requirement: it is shown to the opponent first (the core
+            # moves it face-down), e.g. the materials of Mementoal Tecuhtlica
+            return msg
         return {**msg, "code": 0}
     if t == "DRAW":
         cards = [c if c["pos"] & C.POS_FACEUP else {**c, "pos": C.POS_FACEDOWN_DEFENSE}

@@ -56,6 +56,7 @@ from ..observe import AUTO_RESPONSE, filter_message, filter_prompt, is_hidden_pr
 from ..state import LOCATIONS, capture, view
 from . import infer
 from .completion import DeckCompletion, VanillaCompletion
+from . import tracker as tracker_mod
 from .tracker import Hypothesis, Tracker, TrackerError
 
 STATUS_END, STATUS_AWAITING, STATUS_CONTINUE = 0, 1, 2
@@ -1563,7 +1564,8 @@ class BeliefReplay:
             kind = "msetable" if m["loc"] == C.LOCATION_MZONE else "ssetable"
             filler = self._filler()
             if kind == "msetable":
-                tributes = sum(1 for x in up[:i] if x["type"] == "MOVE" and x["reason"] & C.REASON_RELEASE)
+                tributes = sum(1 for x in up[:i] if x["type"] == "MOVE"
+                               and (x["reason"] & C.REASON_RELEASE or tracker_mod._leaves_field(x)))
                 levels = {0: range(1, 5), 1: range(5, 7)}.get(tributes, range(7, 13))
 
                 def fits(code):

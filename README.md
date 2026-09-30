@@ -178,9 +178,9 @@ message, every prompt of the viewer and the viewer's state view at every prompt)
 | cut      | seeds 1000-1999 | seeds 2000-2999 |
 |----------|-----------------|-----------------|
 | ~1/3     | 99.7%           | 99.8%           |
-| ~2/3     | 99.5%           | 99.4%           |
-| full game| 99.2%           | 99.3%           |
-| overall  | 99.5%           | 99.5%           |
+| ~2/3     | 99.5%           | 99.5%           |
+| full game| 99.5%           | 99.5%           |
+| overall  | 99.6%           | 99.6%           |
 
 About 96% of all reconstructions need no repair restart at all. The remaining failures are mostly
 effects whose behaviour depends on hidden cards in ways no repair covers yet (e.g. an
@@ -275,6 +275,8 @@ filters in a canonical form (and ANNOUNCE_NUMBER options sorted).
   again is announced as a position change. The core only changed its position silently, so
   players saw revealed cards only in their next state view, and a revealed card that was hidden
   again before that was never seen at all.
+* Observations: a card returned from the hand to the Deck or Extra Deck as a cost or material
+  is shown to the opponent (it has to meet a requirement; the core moves it face-down).
 * A card an effect Sets (`Duel.SSet`, e.g. from the Deck) is confirmed to the other player. The
   core named the player who Sets it as the one who looks (pointless); the EDOPro server makes
   up for it by showing every confirmation of cards outside the Deck to both players, which

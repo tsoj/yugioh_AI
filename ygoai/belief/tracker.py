@@ -34,6 +34,15 @@ class TrackerError(RuntimeError):
     pass
 
 
+def _leaves_field(m: dict) -> bool:
+    """A card sent from the field in place of a Tribute (e.g. with Floowandereeze
+    and the Unexplored Winds). Not destroyed cards or cards moved by the rules:
+    those can be consequences of the previous action."""
+    field = C.LOCATION_MZONE | C.LOCATION_SZONE
+    return bool(m["from"]["loc"] & field) and not m["from"]["loc"] & C.LOCATION_OVERLAY \
+        and not m["to"]["loc"] & field and not m.get("reason", 0) & (C.REASON_DESTROY | C.REASON_RULE)
+
+
 class Var:
     __slots__ = ("id", "owner", "code", "pool", "assigned", "kind", "faceup", "overlays",
                  "fixed_code", "resolved", "excluded", "need", "marks", "allowed", "same_as",
@@ -121,6 +130,7 @@ class Tracker:
         # physical cards as far as anything shows (it keeps them in a group)
         self._referenced: list[Var] = []
         self._referenced_piles: set[tuple[int, int]] = set()  # (con, loc) they were revealed in
+        self._picked: list[Var] = []  # of those, the ones picked at random
         self._chain: list[Var | None] = []  # the card of each chain link, by the time it chained
         self._chain_from_hand: list[bool] = []
         self._left_hand: list[Var] = []  # cards that left a hand while the current link resolves
@@ -352,9 +362,11 @@ class Tracker:
                         v.not_same.append(var)
         if t == "NEW_TURN":
             self.turn_player = m["player"]
-        if t in ("CHAIN_SOLVED", "CHAIN_END", "NEW_PHASE", "NEW_TURN"):
+        if t in ("CHAINING", "CHAIN_SOLVING", "CHAIN_SOLVED", "CHAIN_END", "NEW_PHASE", "NEW_TURN"):
+            # (revealed cards belong to the chain link being resolved)
             self._referenced = []
             self._referenced_piles = set()
+            self._picked = []
         if t == "MOVE" and m["from"]["loc"] and not m["from"]["loc"] & C.LOCATION_OVERLAY:
             frm, to = m["from"], m["to"]
             v = self._plain_var(frm["con"], frm["loc"], frm["seq"])
@@ -374,7 +386,9 @@ class Tracker:
             self._resent_hints = True
         else:
             self._resent_hints = False
-        if t == "MOVE" and m.get("reason", 0) & C.REASON_RELEASE:
+        if t == "MOVE" and (m.get("reason", 0) & C.REASON_RELEASE or _leaves_field(m)):
+            # (a card can also be sent instead of Tributed, e.g. with Floowandereeze
+            # and the Unexplored Winds: it counts for the Level of a Set monster)
             self._releases += 1
         elif t not in ("MOVE", "HINT", "CARD_HINT", "SET", "SPSUMMONING"):
             self._releases = 0
@@ -396,7 +410,8 @@ class Tracker:
                 if v.kind == "claim" and v.pool is not None and self._referenced and not v.prefer \
                         and (frm["con"], frm["loc"]) in self._referenced_piles:
                     # (the first move out of the shuffled pile)
-                    v.prefer = [x for x in self._referenced if x is not v]
+                    pool = self._picked if any(x is not v for x in self._picked) else self._referenced
+                    v.prefer = [x for x in pool if x is not v]
             if to["loc"]:
                 self._put(v, to)
             self.observe(v, m["code"])
@@ -484,14 +499,21 @@ class Tracker:
                 if c["code"]:
                     self.observe(v, c["code"])
         elif t == "RANDOM_SELECTED":
-            # right after revealing cards and shuffling them back into their pile,
-            # a random pick from that pile is a pick from the revealed cards
+            # after revealing cards and shuffling them back into their pile, a
+            # random pick from that pile is a pick from the revealed cards (also
+            # the later picks of the same resolution, e.g. Draw of Fate); and a
+            # card taken from the pile later on is preferably the picked one
+            # (e.g. picked before the shuffle, taken after it)
             for c in m["cards"]:
                 if c["loc"] & C.LOCATION_OVERLAY:
                     continue
                 v = self._plain_var(c["con"], c["loc"], c["seq"])
-                if v is not None and v.kind == "claim" and v.pool is not None:
-                    ids = frozenset(x.id for x in v.pool.members if any(x is y for y in self._confirmed))
+                if v is None:
+                    continue
+                if (c["con"], c["loc"]) in self._referenced_piles:
+                    self._picked.append(v)
+                if v.kind == "claim" and v.pool is not None and (c["con"], c["loc"]) in self._referenced_piles:
+                    ids = frozenset(x.id for x in v.pool.members if any(x is y for y in self._referenced))
                     if ids:
                         v.allowed = ids if v.allowed is None else (v.allowed & ids) or v.allowed
         elif t == "REVERSE_DECK":
