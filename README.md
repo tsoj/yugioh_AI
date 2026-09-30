@@ -134,7 +134,9 @@ minimal example.
   * assume a card of a certain kind or code where the opponent took a hidden card;
   * let a hidden card satisfy every filter during one step, or, when the opponent chose an
     option or used a summon procedure whose availability depends on its hidden cards, every
-    card of its hidden piles from the activation until the choice;
+    card of its hidden piles from the activation until the choice; conversely, when the real
+    game did nothing more where the replay found a fitting card among its filler cards, let
+    the hidden cards match no filter for that span;
   * exchange two copies of a card, at the step where they last shared a shuffled pile or, for
     copies whose history is public (graveyard, banished), from the start of the duel;
   * retry a different candidate for one recent opponent decision.
@@ -244,8 +246,8 @@ infer.
 * Hooks for forcing outcomes, all no-ops unless the `OCG_Ext*` API is used: shuffle results
   (deck, hand, extra, `Duel.ShuffleSetCard` and the zone assignment of a group SSet), coin and
   dice results, `Group.RandomSelect`,
-  "treat this effect as activatable" (skips cost/target checks) and "treat this card as
-  matching every filter".
+  "treat this effect as activatable" (skips cost/target checks), "treat this card as
+  matching every filter" and "treat this card as matching no filter".
 * Extra API: reorder a pile (by code or by card id), force shuffle results by card id, swap two
   cards within a pile, read card ids per location, clear the forced activations.
 * A card entering the hand, deck or Extra Deck forgets its position and activation history

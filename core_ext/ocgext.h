@@ -52,6 +52,10 @@ bool is_forced_activatable(duel* pduel, effect* peffect, uint8_t playerid);
 // OCG_ExtSetForcedMatch).
 bool is_forced_match(duel* pduel, card* pcard);
 
+// Whether `pcard` counts as matching no card filter right now (see
+// OCG_ExtSetForcedNoMatch).
+bool is_forced_nomatch(duel* pduel, card* pcard);
+
 void on_destroy(duel* pduel);
 
 } // namespace ocgext

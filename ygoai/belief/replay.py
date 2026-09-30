@@ -67,6 +67,8 @@ PROBE_OK, PROBE_FAILED, PROBE_TIMEOUT, PROBE_REPAIRABLE, PROBE_PROGRESSED = 0, 1
 _SELECTION_END = frozenset(("CHAINING", "CHAINED", "CHAIN_SOLVING", "CHAIN_SOLVED", "CHAIN_END", "NEW_PHASE",
                             "NEW_TURN", "WIN", "SUMMONING", "SPSUMMONING", "FLIPSUMMONING"))
 HIDDEN_PILES = (C.LOCATION_DECK, C.LOCATION_HAND, C.LOCATION_EXTRA)
+# messages by which the real game goes on after an effect did (nothing) more
+_NOTHING_MORE = frozenset(("CHAIN_SOLVED", "CHAIN_END", "PLAYER_HINT", "NEW_PHASE", "NEW_TURN"))
 UNORDERED_HINTS = ("PLAYER_HINT", "CARD_HINT")
 _SHUFFLE_LOCS = {"SHUFFLE_HAND": C.LOCATION_HAND, "SHUFFLE_DECK": C.LOCATION_DECK,
                  "SHUFFLE_EXTRA": C.LOCATION_EXTRA}
@@ -199,6 +201,7 @@ class BeliefReplay:
         self.swaps: dict[int, list[tuple[int, int]]] = {}
         self.matches: dict[int, list[int]] = {}  # control point -> card ids matching all filters
         self.match_piles: set[tuple[int, int]] = set()  # stream positions (from, to): hidden piles match
+        self.nomatch_piles: set[tuple[int, int]] = set()  # ... hidden piles match nothing
         self.snapshot_cps: set[int] = set()
         self.failed_assumptions: set[tuple] = set()
         self.failed_exclusions: set[tuple] = set()
@@ -536,6 +539,13 @@ class BeliefReplay:
             self._last_hyp_fix = "identify"
             self.stats.assumptions += 1
             return True
+        if kind == "nomatchpile":
+            span = fix[1:]
+            if span in self.nomatch_piles:
+                return False
+            self.nomatch_piles.add(span)
+            self.stats.assumptions += 1
+            return True
         if kind == "matchpile":
             span = fix[1:]
             if span in self.match_piles:
@@ -600,8 +610,14 @@ class BeliefReplay:
                     cid for loc in HIDDEN_PILES for _, cid in duel.location_cards(self.opponent, loc)]
             if forced_match:
                 duel.set_forced_match(forced_match)
+            nomatch = any(a <= cp[0] <= b for a, b in self.nomatch_piles)
+            if nomatch:
+                duel.set_forced_nomatch([cid for loc in HIDDEN_PILES
+                                         for _, cid in duel.location_cards(self.opponent, loc)])
             answered, answered_resp = pending, pending_resp  # (the response this step processes)
             status = duel.process()
+            if nomatch:
+                duel.set_forced_nomatch([])
             if forced_match:
                 duel.set_forced_match([])
             msgs = [parse(m) for m in duel.get_messages()]
@@ -866,6 +882,15 @@ class BeliefReplay:
                 if e["con"] == g["con"] and e["loc"] == g["loc"] and e["seq"] != g["seq"] \
                         and e["loc"] in (C.LOCATION_GRAVE, C.LOCATION_REMOVED, *HIDDEN_PILES):
                     fix = self._swap_fix(cp, msgs, idx, e, g, duel)
+            if fix is None and exp["type"] in _NOTHING_MORE and got["type"] not in _NOTHING_MORE \
+                    and got["type"] != exp["type"]:
+                # the replay did something more where the real game went on (e.g. an
+                # effect found a fitting card among the hidden filler cards that
+                # the real deck does not have): let the hidden cards match nothing
+                start = self._chain_start()
+                span = (start if start is not None else self.pos, self.pos)
+                if span not in self.nomatch_piles and span not in self.match_piles:
+                    fix = ("nomatchpile", *span)
             if fix is None and exp["type"] == "BECOME_TARGET" and got["type"] != "BECOME_TARGET" \
                     and exp["cards"]:
                 # the opponent targeted a card that the replay's filter rejects

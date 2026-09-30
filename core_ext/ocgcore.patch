@@ -129,7 +129,7 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  processor::effect_count_map& field::get_count_map(uint8_t flag) {
 diff -ruN core_a/interpreter.cpp core_b/interpreter.cpp
 --- a/interpreter.cpp	2026-09-29 02:42:20.576597991 +0200
-+++ b/interpreter.cpp	2026-09-29 05:31:27.301581026 +0200
++++ b/interpreter.cpp	2026-09-30 04:16:22.083272077 +0200
 @@ -15,6 +15,7 @@
  #include "lua_obj.h"
  #include "group.h"
@@ -138,21 +138,25 @@ diff -ruN core_a/interpreter.cpp core_b/interpreter.cpp
  
  using namespace scriptlib;
  
-@@ -449,6 +450,8 @@
+@@ -449,6 +450,10 @@
  		lua_pushvalue(L, idx + i);
  }
  bool interpreter::check_matching(card* pcard, int32_t findex, int32_t extraargs) {
 +	if(ocgext::is_forced_match(pduel, pcard))
 +		return true;
++	if(ocgext::is_forced_nomatch(pduel, pcard))
++		return false;
  	luaL_checkstack(current_state, extraargs + 2, nullptr);
  	lua_pushvalue(current_state, findex);
  	pushobject(current_state, pcard);
-@@ -464,6 +467,8 @@
+@@ -464,6 +469,10 @@
  bool interpreter::check_matching_table(card* pcard, int32_t findex, int32_t table_index) {
  	if(!findex || !lua_istable(current_state, table_index))
  		return true;
 +	if(ocgext::is_forced_match(pduel, pcard))
 +		return true;
++	if(ocgext::is_forced_nomatch(pduel, pcard))
++		return false;
  	luaL_checkstack(current_state, 2, nullptr);
  	lua_pushvalue(current_state, findex);
  	pushobject(current_state, pcard);

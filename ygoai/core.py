@@ -120,6 +120,7 @@ def _load_library(path: Path) -> ct.CDLL:
         "OCG_ExtClearForceActivatable": (None, [vp]),
         "OCG_ExtSwapCards": (i32, [vp, u32, u32]),
         "OCG_ExtSetForcedMatch": (None, [vp, ct.POINTER(u32), u32]),
+        "OCG_ExtSetForcedNoMatch": (None, [vp, ct.POINTER(u32), u32]),
         "OCG_ExtDebugPendingTriggers": (u32, [vp, ct.POINTER(ct.c_uint64), u32]),
         "OCG_ExtSelectChains": (u32, [vp, ct.POINTER(ct.c_uint64), u32]),
     }
@@ -422,6 +423,10 @@ class Duel:
     def set_forced_match(self, ids: list[int]) -> None:
         arr = (ct.c_uint32 * max(1, len(ids)))(*ids)
         lib().OCG_ExtSetForcedMatch(self.handle, arr, len(ids))
+
+    def set_forced_nomatch(self, ids: list[int]) -> None:
+        arr = (ct.c_uint32 * max(1, len(ids)))(*ids)
+        lib().OCG_ExtSetForcedNoMatch(self.handle, arr, len(ids))
 
     def swap_cards(self, id_a: int, id_b: int) -> bool:
         return bool(lib().OCG_ExtSwapCards(self.handle, id_a, id_b))

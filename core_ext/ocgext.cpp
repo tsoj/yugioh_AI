@@ -42,6 +42,7 @@ struct State {
 	std::set<std::tuple<uint8_t, uint32_t, uint64_t>> forced_activatable;
 	// card ids that count as matching every card filter
 	std::set<uint32_t> forced_match;
+	std::set<uint32_t> forced_nomatch;
 	uint32_t errors = 0;
 	uint32_t consumed = 0;
 };
@@ -239,6 +240,11 @@ bool is_forced_match(duel* pduel, card* pcard) {
 	return st && !st->forced_match.empty() && pcard && st->forced_match.count(pcard->cardid) > 0;
 }
 
+bool is_forced_nomatch(duel* pduel, card* pcard) {
+	auto* st = find_state(pduel);
+	return st && !st->forced_nomatch.empty() && pcard && st->forced_nomatch.count(pcard->cardid) > 0;
+}
+
 void on_destroy(duel* pduel) {
 	states.erase(pduel);
 }
@@ -315,6 +321,16 @@ OCGEXT_API void OCG_ExtSetForcedMatch(OCG_Duel ocg_duel, const uint32_t* ids, ui
 	st.forced_match.clear();
 	for(uint32_t i = 0; i < count; ++i)
 		st.forced_match.insert(ids[i]);
+}
+
+// Until changed again, the cards with these unique ids match no card filter.
+// Used for a single span of the stream in which the observed player's effect
+// found no fitting card although the hypothesis' hidden cards would fit.
+OCGEXT_API void OCG_ExtSetForcedNoMatch(OCG_Duel ocg_duel, const uint32_t* ids, uint32_t count) {
+	auto& st = states[static_cast<duel*>(ocg_duel)];
+	st.forced_nomatch.clear();
+	for(uint32_t i = 0; i < count; ++i)
+		st.forced_nomatch.insert(ids[i]);
 }
 
 // Swaps the places of two cards (by unique card id) in the same pile (deck,
