@@ -252,6 +252,7 @@ class BeliefReplay:
         self._recent: list[tuple] = []  # (key, candidates, chosen) of the decisions since the last item
         self._since_state: list[tuple] = []  # the same, since the last state view that matched
         self._cancelled: set[tuple] = set()  # (stream position, prompt) answered by cancelling
+        self._opp_prompt: dict | None = None  # the opponent's latest prompt
         # where the previous attempt shuffled (for folding swaps into shuffles)
         self.prev_shuffle_cps = getattr(self, "shuffle_cps", {})
         self.shuffle_cps: dict[tuple[int, int], list[int]] = {}
@@ -762,6 +763,7 @@ class BeliefReplay:
                 if self.depth > 0 and self._done():
                     return
             else:
+                self._opp_prompt = prompt
                 resp = self._decide(duel, prompt)
                 self._simlog("prompt", prompt, resp)
                 duel.set_response(encode(prompt, resp))
@@ -868,6 +870,19 @@ class BeliefReplay:
                 # revealed earlier) from where the hypothesis shuffled it: in the real
                 # game that card is at the slot it was moved from
                 fix = self._identify_fix(exp["from"], got["from"])
+            if fix is None and exp["type"] == "MOVE" and exp.get("code") and exp["from"]["loc"] in HIDDEN_PILES \
+                    and self._opp_prompt is not None:
+                # the opponent chose among cards offered to it, one of them a copy
+                # of the card the real game took from elsewhere in the pile: that
+                # copy is the real one (e.g. revealed cards shuffled back, then picked)
+                cards = self._opp_prompt.get("cards") or self._opp_prompt.get("select_cards") or []
+                le = exp["from"]
+                for c in cards:
+                    if c.get("code") == exp["code"] and c["con"] == le["con"] and c["loc"] == le["loc"] \
+                            and c["seq"] != le["seq"]:
+                        fix = self._swap_fix(cp, msgs, idx, le, c, duel)
+                        if fix is not None:
+                            break
             if fix is None and exp["type"] == "MOVE" and got["type"] == "MOVE" and got.get("code") \
                     and exp.get("code") != got["code"] and exp["from"]["loc"] == got["from"]["loc"] \
                     and got["from"]["loc"] in HIDDEN_PILES:
@@ -1270,7 +1285,8 @@ class BeliefReplay:
         below `loc` can be this card."""
         if not code or loc["loc"] not in HIDDEN_PILES or loc["seq"] == 0:
             return None
-        return ("exclude", self.pos, loc["con"], loc["loc"], tuple(range(loc["seq"])), code)
+        fix = ("exclude", self.pos, loc["con"], loc["loc"], tuple(range(loc["seq"])), code)
+        return None if fix[1:] in self.failed_exclusions or fix[1:] in self.exclusions else fix
 
     def _swap_fix(self, cp: int, msgs: list[dict], idx: int, loc_exp: dict, loc_got: dict,
                   duel: Duel) -> tuple | None:
@@ -1391,7 +1407,8 @@ class BeliefReplay:
                 continue
             codes = []
             for c in cards:
-                if c["con"] == f["con"] and c["loc"] == f["loc"] and c["code"] and c["code"] not in codes:
+                if c["con"] == f["con"] and c["loc"] == f["loc"] and c["code"] and c["code"] not in codes \
+                        and self._fits_destination(c["code"], m["to"]):
                     codes.append(c["code"])
             # (the slot as it is now, before the earlier moves shifted the pile)
             src = dict(f)
@@ -1401,6 +1418,17 @@ class BeliefReplay:
                     src["seq"] += 1
             self._assume(src, codes, "opponent selected a card the hypothesis does not provide")
             return
+
+    def _fits_destination(self, code: int, to: dict) -> bool:
+        """Whether a card with `code` can be put face-down where `to` says (the
+        field zone takes field spells, the other spell/trap zones spells, traps
+        or cards Set as such)."""
+        card = self.db.get(code)
+        if card is None or to["loc"] != C.LOCATION_SZONE or not to["pos"] & C.POS_FACEDOWN:
+            return True
+        if to["seq"] == 5:
+            return bool(card.type & C.TYPE_FIELD)
+        return not card.type & C.TYPE_FIELD
 
     def _assume(self, li: dict, codes: list[int], reason: str) -> None:
         """Raises an "assume" fix for the first untried code, if the slot is free."""
@@ -1547,6 +1575,8 @@ class BeliefReplay:
         """Stream position of the opponent's latest CHAINING (shortly before)."""
         for j in range(self.pos - 1, max(-1, self.pos - 30), -1):
             it = self.items[j]
+            if it[0] == "msg" and it[1]["type"] in ("CHAIN_END", "NEW_PHASE", "NEW_TURN"):
+                return None  # (no chain is being built or resolved)
             if it[0] == "msg" and it[1]["type"] == "CHAINING":
                 return j if it[1]["trigger_con"] == self.opponent else None
         return None
