@@ -10,12 +10,14 @@ processes.
 
 from __future__ import annotations
 
+import itertools
+
 from .. import constants as C
 from ..actions import available_places, battle_options, idle_options
 
 # Messages that may appear between an activation decision and its CHAINING
 # (the card is moved to the spell zone / flipped face-up first).
-_ACTIVATION_PRELUDE = {"MOVE", "POS_CHANGE", "HINT", "CARD_HINT"}
+_ACTIVATION_PRELUDE = {"MOVE", "POS_CHANGE", "HINT", "CARD_HINT", "PAY_LPCOST"}
 
 LIST_LOCS = (C.LOCATION_DECK, C.LOCATION_HAND, C.LOCATION_GRAVE, C.LOCATION_REMOVED,
              C.LOCATION_EXTRA)
@@ -28,9 +30,13 @@ def same_loc(a: dict, b: dict) -> bool:
 def prelude_fits(before: list[dict], ch: dict) -> bool:
     """Whether the messages before CHAINING `ch` belong to that activation: the
     card is placed in its zone or flipped face-up there (and a field spell it
-    replaces leaves). Anything else is an earlier, different action."""
+    replaces leaves), or an LP cost of activating is paid (e.g. imposed by a
+    continuous effect). Anything else is an earlier, different action. (An LP
+    payment can also be another effect's maintenance cost: see infer_chain.)"""
     for m in before:
         t = m["type"]
+        if t == "PAY_LPCOST" and m["player"] == ch["trigger_con"]:
+            continue
         if t == "HINT" and m["hint_type"] == C.HINT_EVENT:
             return False  # a timing event starts a new chain window: a later one
         if t in ("HINT", "CARD_HINT"):
@@ -231,6 +237,24 @@ def infer_chain(prompt: dict, up: list[dict]) -> tuple[list[dict], bool]:
         own = [j for j, o in enumerate(prompt["chains"]) if same_loc(o, up[0])]
         if own and (ch is None or not same_loc(ch, up[0])):
             return [{"index": j} for j in own], len(own) == 1
+    if prompt["forced"]:
+        # An option that is no chain link (e.g. Imperial Order's maintenance cost)
+        # acts before the effect that chains next: a card hint naming its card,
+        # or an LP payment, which might as well be the cost of activating the
+        # effect that chains: then try the others first.
+        ch = next((m for m in up if m["type"] == "CHAINING"), None)
+        head = list(itertools.takewhile(lambda m: m["type"] != "CHAINING", up))
+        # (only the hints before anything happens: a later one belongs to a later step)
+        lead = itertools.takewhile(lambda m: m["type"] in ("HINT", "CARD_HINT"), head)
+        named = {m["data"] for m in lead if m["type"] == "HINT" and m["hint_type"] == C.HINT_CARD}
+        others = [j for j, o in enumerate(prompt["chains"]) if ch is None or not same_loc(o, ch)]
+        hinted = [j for j in others if prompt["chains"][j]["code"] in named]
+        if hinted and ch is not None:
+            return [{"index": j} for j in hinted], len(hinted) == 1
+        first = next((m for m in head if m["type"] not in ("HINT", "CARD_HINT")), None)
+        if others and ch is not None and first is not None and first["type"] == "PAY_LPCOST":
+            rest = [j for j in range(n) if j not in others]
+            return [{"index": j} for j in others + rest], False
     for i, m in enumerate(up):
         t = m["type"]
         if t == "CHAINING":
