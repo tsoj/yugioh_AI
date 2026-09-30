@@ -1122,7 +1122,8 @@ class BeliefReplay:
             v = self.lockstep.var_at(le["con"], le["loc"], le["seq"])
         except TrackerError:
             return None
-        if v is None or v.kind != "claim" or not self.lockstep._referenced:
+        if v is None or v.kind != "claim" or not self.lockstep._referenced \
+                or (le["con"], le["loc"]) not in self.lockstep._referenced_piles:
             return None
         first = self.items[self.pos][1]
         entries = []

@@ -120,6 +120,7 @@ class Tracker:
         # shuffles them back and then moves cards of the same names moves the same
         # physical cards as far as anything shows (it keeps them in a group)
         self._referenced: list[Var] = []
+        self._referenced_piles: set[tuple[int, int]] = set()  # (con, loc) they were revealed in
         self._chain: list[Var | None] = []  # the card of each chain link, by the time it chained
         self._chain_from_hand: list[bool] = []
         self._left_hand: list[Var] = []  # cards that left a hand while the current link resolves
@@ -353,6 +354,7 @@ class Tracker:
             self.turn_player = m["player"]
         if t in ("CHAIN_SOLVED", "CHAIN_END", "NEW_PHASE", "NEW_TURN"):
             self._referenced = []
+            self._referenced_piles = set()
         if t == "MOVE" and m["from"]["loc"] and not m["from"]["loc"] & C.LOCATION_OVERLAY:
             frm, to = m["from"], m["to"]
             v = self._plain_var(frm["con"], frm["loc"], frm["seq"])
@@ -391,7 +393,8 @@ class Tracker:
                 v = self._new(to["con"], "created")
             else:
                 v = self._take(frm)
-                if v.kind == "claim" and v.pool is not None and self._referenced and not v.prefer:
+                if v.kind == "claim" and v.pool is not None and self._referenced and not v.prefer \
+                        and (frm["con"], frm["loc"]) in self._referenced_piles:
                     # (the first move out of the shuffled pile)
                     v.prefer = [x for x in self._referenced if x is not v]
             if to["loc"]:
@@ -477,6 +480,7 @@ class Tracker:
                 if v is not None:
                     self._confirmed.append(v)
                     self._referenced.append(v)
+                    self._referenced_piles.add((c["con"], c["loc"]))
                 if c["code"]:
                     self.observe(v, c["code"])
         elif t == "RANDOM_SELECTED":
