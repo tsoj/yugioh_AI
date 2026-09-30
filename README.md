@@ -173,10 +173,10 @@ message, every prompt of the viewer and the viewer's state view at every prompt)
 
 | cut      | consistent |
 |----------|------------|
-| ~1/3     | 99.0%      |
+| ~1/3     | 99.1%      |
 | ~2/3     | 98.0%      |
 | full game| 97.0%      |
-| overall  | 98.0%      |
+| overall  | 98.1%      |
 
 90.5% of all reconstructions need no repair restart at all. The remaining failures are mostly
 effects whose behaviour depends on hidden cards in ways no repair covers yet (e.g. an
