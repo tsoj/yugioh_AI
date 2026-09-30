@@ -407,7 +407,8 @@ class Tracker:
             # (a card can also be sent instead of Tributed, e.g. with Floowandereeze
             # and the Unexplored Winds: it counts for the Level of a Set monster)
             self._releases += 1
-        elif t not in ("MOVE", "HINT", "CARD_HINT", "SET", "SPSUMMONING"):
+        elif t not in ("MOVE", "HINT", "CARD_HINT", "SET", "SPSUMMONING", "ADD_COUNTER", "REMOVE_COUNTER"):
+            # (a counter placed because of the Tribute is a consequence, not a new action)
             self._releases = 0
         if t == "SET" and not m["code"]:
             # a hidden card was Set: its kind follows from the zone (and tributes)

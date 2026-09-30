@@ -288,6 +288,12 @@ class BeliefReplay:
                     if same == REVEALED:
                         revealed.append(tracker.var_at(con, loc, seq))
                         continue
+                    if isinstance(same, tuple) and same[0] == "not":
+                        byid = {v.id: v for v in tracker.all_vars}
+                        v = tracker.var_at(con, loc, seq)
+                        if v is not None and same[1] in byid:
+                            v.not_same.append(byid[same[1]])
+                        continue
                     byid = {v.id: v for v in tracker.all_vars}
                     if same in byid:
                         tracker._identify(tracker.var_at(con, loc, seq), byid[same])
@@ -887,6 +893,8 @@ class BeliefReplay:
                         fix = self._history_swap(a, b, cp)
                         if fix is not None:
                             break
+                if fix is None and hinted is got and got["hint_type"] == C.CHINT_DESC_REMOVE:
+                    fix = self._unhinted_fix(got)
             if fix is None and exp["type"] == got["type"] and isinstance(exp.get("cards"), list) \
                     and isinstance(got.get("cards"), list) and len(exp["cards"]) == len(got["cards"]):
                 # the same card in another place of a pile: another copy was chosen
@@ -1100,6 +1108,30 @@ class BeliefReplay:
                     # else before the prompt that chose the card
                     at = self.last_shuffle_cp.get((f["con"], f["loc"]), self.last_listed.get(cid, cp))
                     self.left_pile[cid] = (at, (f["con"], f["loc"]))
+
+    def _unhinted_fix(self, got: dict) -> tuple | None:
+        """The replay's card lost a hint as it moved from a hidden pile to a
+        public place, the real one did not: the real card is another copy than
+        the one the hypothesis has there (e.g. not the copy added to the hand this
+        turn, whose hint the viewer cannot see)."""
+        prev = self.items[self.pos - 1] if self.pos else None
+        if prev is None or prev[0] != "msg" or prev[1]["type"] != "MOVE":
+            return None
+        m = prev[1]
+        if (m["to"]["con"], m["to"]["loc"], m["to"]["seq"]) != (got["con"], got["loc"], got["seq"]) \
+                or m["from"]["loc"] not in HIDDEN_PILES:
+            return None
+        solved = getattr(self, "_solved", None)
+        v = self.lockstep.var_at(got["con"], got["loc"], got["seq"])
+        sv = next((x for x in solved.all_vars if x.id == v.id), None) if solved and v else None
+        member = sv.assigned if sv is not None and sv.kind == "claim" else None
+        if member is None:
+            return None
+        f = m["from"]
+        entry = (self.pos - 1, (f["con"], f["loc"], f["seq"]), ("not", member.id))
+        if entry in self.identities or entry in self.failed_identities:
+            return None
+        return ("identify", *entry)
 
     def _nomatch_card_fix(self, slot: dict) -> tuple | None:
         try:
