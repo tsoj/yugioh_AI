@@ -228,14 +228,15 @@ def _filter_message(msg: dict, viewer: int) -> dict | None:
         return msg
     if t == "MOVE":
         to = msg["to"]
-        if to["loc"] & (C.LOCATION_MZONE | C.LOCATION_SZONE) and (
-                not loc_visible(msg["from"], viewer) or msg["from"]["loc"] == C.LOCATION_HAND):
-            # Placing a card on the field (summon, set, activation) does not
-            # update its reason, so the message would carry the stale reason
-            # of how the card entered e.g. the hand (drawn by rule or by an
-            # effect, searched, ...). The viewer cannot know that for hidden
-            # cards, and for its own hand it tells apart copies of a card after
-            # a shuffle.
+        if to["loc"] & (C.LOCATION_MZONE | C.LOCATION_SZONE) and not msg["reason"] & C.REASON_SPSUMMON:
+            # Placing a card on the field (summon, set, activation, equipping,
+            # moving it to another zone) does not update its reason
+            # (move_to_field), so the message would carry the stale reason of
+            # how the card entered e.g. the hand (drawn by rule or by an effect,
+            # searched, ...), even much later when it moves on from the field.
+            # The viewer cannot know that for hidden cards, and for its own hand
+            # it tells apart copies of a card after a shuffle. (A special summon
+            # sets its own reason.)
             msg = {**msg, "reason": 0}
         frm = msg["from"]
         if (frm["con"], frm["loc"]) == (to["con"], to["loc"]) and not loc_visible(frm, viewer):

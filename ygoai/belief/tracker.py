@@ -394,7 +394,10 @@ class Tracker:
             self.turn_player = m["player"]
         if t == "MOVE" and m["from"]["loc"] and not m["from"]["loc"] & C.LOCATION_OVERLAY:
             frm, to = m["from"], m["to"]
-            bkey = (m.get("reason", 0), to["con"], to["loc"])
+            # (a card set to the spell/trap zone keeps the reason of its previous
+            # move: move_to_field does not set one)
+            stale = to["loc"] == C.LOCATION_SZONE and to["pos"] & C.POS_FACEDOWN
+            bkey = (0 if stale else m.get("reason", 0), to["con"], to["loc"])
             if self._batch is not None and self._batch["key"] != bkey:
                 self._flush_batch()
             if self._batch is None:

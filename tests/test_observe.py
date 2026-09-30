@@ -34,6 +34,16 @@ class FilterTest(unittest.TestCase):
         s = {"type": "SET", "code": X, **loc(1, C.LOCATION_SZONE, 2, C.POS_FACEDOWN)}
         self.assertEqual(filter_message(s, 0)["code"], 0)
 
+    def test_stale_reason_on_field_moves_is_hidden(self):
+        # equipping a monster (mzone -> szone) keeps the reason of how the card
+        # once entered the hand; a special summon sets its own reason
+        m = {"type": "MOVE", "code": X, "from": loc(1, C.LOCATION_MZONE, 3, C.POS_FACEUP_ATTACK),
+             "to": loc(1, C.LOCATION_SZONE, 3, C.POS_FACEUP), "reason": 0x2000400}
+        self.assertEqual(filter_message(m, 0)["reason"], 0)
+        ss = {**m, "from": loc(1, C.LOCATION_SZONE, 0, C.POS_FACEUP),
+              "to": loc(1, C.LOCATION_MZONE, 1, C.POS_FACEUP_ATTACK), "reason": C.REASON_SPSUMMON}
+        self.assertEqual(filter_message(ss, 0)["reason"], C.REASON_SPSUMMON)
+
     def test_pile_positions_are_canonical(self):
         # 8 (starting deck) vs 10 (returned to the deck) must not be distinguishable
         a = {"type": "MOVE", "code": X, "from": loc(1, C.LOCATION_DECK, 5, C.POS_FACEDOWN_DEFENSE),

@@ -116,8 +116,12 @@ class VanillaCompletion(DeckCompletion):
         self.settable_monsters_all = []
         for levels in (range(1, 5), range(5, 7), range(7, 13)):
             self.settable_monsters_all += [c for c in vanillas if self.db.get(c).level in levels][:6]
-        self.settable_spells = sorted(c.code for c in cards if c.type in (C.TYPE_SPELL, C.TYPE_TRAP)
-                                      and not c.alias and c.ot & 0x3)[:10]
+        normal_st = sorted(c.code for c in cards if c.type in (C.TYPE_SPELL, C.TYPE_TRAP)
+                           and not c.alias and c.ot & 0x3)
+        # the lowest codes, plus some spread over the whole range (the code
+        # decides the creation order, which is sometimes constrained)
+        spread = normal_st[10::max(1, (len(normal_st) - 10) // 30)]
+        self.settable_spells = normal_st[:10] + spread
         self.settable_spells += sorted(c.code for c in cards if c.type == C.TYPE_SPELL | C.TYPE_FIELD
                                        and not c.alias and c.ot & 0x3)[:5]
 

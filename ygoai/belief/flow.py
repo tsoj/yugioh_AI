@@ -411,6 +411,51 @@ class FlowSolver:
             v = v.assigned if v.kind == "claim" else None
         return False
 
+    def _rank_atoms(self) -> list[tuple[Var, Var]]:
+        """Hard creation order constraints as pairs of atoms (after claim matching)."""
+        def atom(v: Var) -> Var | None:
+            while v is not None and v.kind not in ("main", "extra", "created"):
+                v = v.assigned
+            return v if v is not None and v.kind != "created" else None
+        out = []
+        for va, vb in self.t.rank_constraints:
+            a, b = atom(va), atom(vb)
+            if a is not None and b is not None and a is not b and a.owner == b.owner and a.kind == b.kind:
+                out.append((a, b))
+        return out
+
+    def _order_bounds(self, typed: list[Var]) -> tuple[dict, dict]:
+        """atom id -> atoms that must sort no later / no earlier."""
+        lower: dict[int, list[Var]] = defaultdict(list)
+        upper: dict[int, list[Var]] = defaultdict(list)
+        for a, b in self._rank_atoms():
+            lower[b.id].append(a)
+            upper[a.id].append(b)
+        return lower, upper
+
+    def _order_first(self, typed: list[Var]) -> list[Var]:
+        """`typed` with every card after the ones that must sort before it."""
+        ids = {a.id for a in typed}
+        before: dict[int, set[int]] = defaultdict(set)
+        for a, b in self._rank_atoms():
+            if a.id in ids and b.id in ids:
+                before[b.id].add(a.id)
+        out, done = [], set()
+        pending = list(typed)
+        while pending:
+            rest = []
+            for a in pending:
+                if before[a.id] <= done:
+                    out.append(a)
+                    done.add(a.id)
+                else:
+                    rest.append(a)
+            if len(rest) == len(pending):  # (a cycle: keep the order)
+                out += rest
+                break
+            pending = rest
+        return out
+
     # -- from commodities to a hypothesis ----------------------------------------------
     def _realize(self, vcom: dict[int, int], commodities: list[tuple]) -> Hypothesis:
         t = self.t
@@ -456,15 +501,20 @@ class FlowSolver:
             unknown += len(wild)
             counts = Counter(self._base(a.resolved) for a in atoms if a.resolved is not None)
             typed = [a for a in wild if commodities[vcom[a.id]][1] not in (WILD_MAIN, WILD_EXTRA)]
-            for a in typed:
+            lower, upper = self._order_bounds(typed)
+            for a in self._order_first(typed):
                 need = _wild_need(commodities[vcom[a.id]][1])
-                for code in comp.stand_ins(need):
-                    if counts[self._base(code)] < 3:
-                        a.resolved = code
-                        counts[self._base(code)] += 1
-                        break
-                else:
+                cands = [c for c in comp.stand_ins(need) if counts[self._base(c)] < 3]
+                if not cands:
                     raise TrackerError(f"no stand-in for a hidden card of kind {need}")
+                # respect the creation order constraints where possible (cards are
+                # created sorted by code): the smallest code above the earlier ones
+                lo = max((b.resolved for b in lower.get(a.id, ()) if b.resolved is not None), default=0)
+                hi = min((b.resolved for b in upper.get(a.id, ()) if b.resolved is not None), default=1 << 40)
+                fitting = [c for c in cands if lo <= c <= hi]
+                code = min(fitting) if fitting else cands[0]
+                a.resolved = code
+                counts[self._base(code)] += 1
             plain = [a for a in wild if a.resolved is None]
             if plain:
                 known_main = [a.resolved for a in atoms if a.kind == "main" and a.resolved is not None]

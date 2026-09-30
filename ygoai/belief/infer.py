@@ -224,6 +224,13 @@ def infer_battle(prompt: dict, up: list[dict], up_ext: list[dict] | None = None)
 
 def infer_chain(prompt: dict, up: list[dict]) -> tuple[list[dict], bool]:
     n = len(prompt["chains"])
+    if up and up[0]["type"] == "CARD_HINT":
+        # an option that is no chain link (a continuous effect among the forced
+        # triggers) acts right away, e.g. updating a turn counter on its card
+        ch = next((m for m in up if m["type"] == "CHAINING"), None)
+        own = [j for j, o in enumerate(prompt["chains"]) if same_loc(o, up[0])]
+        if own and (ch is None or not same_loc(ch, up[0])):
+            return [{"index": j} for j in own], len(own) == 1
     for i, m in enumerate(up):
         t = m["type"]
         if t == "CHAINING":

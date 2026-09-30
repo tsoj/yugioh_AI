@@ -149,6 +149,9 @@ class BeliefReplay:
         self.probe_timeout = probe_timeout
         self.max_stall = max_stall  # opponent decisions without new observations
         self.min_progress = min_progress  # items a probe must reproduce before it defers
+        # a probe also checks the viewer's first state view if it comes within this
+        # many items (a decision may show only there)
+        self.probe_state_window = int(os.environ.get("YGOAI_PROBE_STATE_WINDOW", 8))
         self.stats = ReplayStats()
         self.trace: list[tuple] | None = None  # (pos, prompt, response, certain, n_candidates)
         self.log = None  # optional callable(str) for debugging
@@ -196,6 +199,9 @@ class BeliefReplay:
         self.snapshot_cps: set[int] = set()
         self.failed_assumptions: set[tuple] = set()
         self.failed_exclusions: set[tuple] = set()
+        self.failed_swaps: set[tuple] = set()  # (cp, a, b) swaps that made an earlier observation differ
+        self._state_bt: dict | None = None  # backtracking over the decisions before a state mismatch
+        self._last_swap: tuple | None = None  # (fix, position it was for)
         # one-decision backtracking: (stream position, index among the decisions
         # at that position) -> candidate to use instead of the inferred one
         self.overrides: dict[tuple[int, int], int] = {}
@@ -226,13 +232,16 @@ class BeliefReplay:
         self.prompt_cp = None  # the step that produced the most recent prompt
         self.depth = 0
         self.probe_start = 0
+        self.probe_state_at: int | None = None  # (probes) the state view a probe must check
         self.horizon = len(self.items)
         self.stall = 0
         self.last_shuffle_cp: dict[tuple[int, int], int] = {}
+        self.card_shuffled: dict[int, list] = {}  # card id -> cps of the shuffles of its pile
         self._shuffle_count = 0  # shuffles so far (index into the hypothesis' shuffles)
         self._event_hint = None  # (stream position, data) of the opponent's latest timing event
         self._decisions_at: dict[int, int] = {}  # stream position -> decisions made there
         self._recent: list[tuple] = []  # (key, candidates, chosen) of the decisions since the last item
+        self._since_state: list[tuple] = []  # the same, since the last state view that matched
         # where the previous attempt shuffled (for folding swaps into shuffles)
         self.prev_shuffle_cps = getattr(self, "shuffle_cps", {})
         self.shuffle_cps: dict[tuple[int, int], list[int]] = {}
@@ -367,12 +376,66 @@ class BeliefReplay:
             except Divergence as e:
                 duel.close()
                 last = e
+                bt = self._state_bt
+                if bt is not None and e.pos < bt["pos"]:
+                    # the decision changed for a state mismatch made an earlier
+                    # observation differ: its next alternative, else an earlier decision
+                    k = bt["key"]
+                    if self.overrides[k] + 1 < bt["n"][k]:
+                        self.overrides[k] += 1
+                    else:
+                        del self.overrides[k]
+                        bt["done"].add(k)
+                        alt = next(((kk, i + 1) for kk, n, i in reversed(bt["list"])
+                                    if kk not in bt["done"] and i + 1 < n), None)
+                        if alt is None:
+                            self._state_bt = None
+                            raise Divergence(bt["pos"], bt["reason"], None, None)
+                        bt["key"] = alt[0]
+                        self.overrides[alt[0]] = alt[1]
+                    if self.log:
+                        self.log(f"restart {self.stats.restarts}: {e.reason} -> decision {bt['key']} "
+                                 f"candidate {self.overrides[bt['key']]} (for the state at {bt['pos']})")
+                    self.stats.restarts += 1
+                    continue
+                if bt is not None and e.pos > bt["pos"]:
+                    self._state_bt = None
+                if self._last_swap is not None and e.pos < self._last_swap[1]:
+                    # the latest copy swap made things worse (an earlier observation
+                    # now differs): undo it, so another point is tried
+                    (_, at, a, b), _ = self._last_swap
+                    self._last_swap = None
+                    lst = self.swaps.get(at, [])
+                    if (a, b) in lst:
+                        del lst[len(lst) - 1 - lst[::-1].index((a, b))]
+                    self.failed_swaps.add((at, a, b))
+                    if self.log:
+                        self.log(f"restart {self.stats.restarts}: {e.reason} -> undo swap {(at, a, b)}")
+                    self.stats.restarts += 1
+                    continue
+                if e.fix is not None and e.fix[0] == "swap" and (tuple(e.fix[1:]) in self.failed_swaps
+                                                                 or (e.fix[1], e.fix[3], e.fix[2]) in self.failed_swaps):
+                    e.fix = None
+                self._last_swap = None
+                if e.fix is not None and e.fix[0] == "swap" and self._add_fix(e.fix):
+                    self._last_swap = (e.fix, e.pos)
+                    if self.log:
+                        self.log(f"restart {self.stats.restarts}: {e.reason} -> {e.fix}")
+                    self.stats.restarts += 1
+                    continue
                 if e.fix is None or not self._add_fix(e.fix):
                     # the decisions made since the last observed item are the ones
                     # whose consequence diverged: try the latest one differently
-                    alt = next(((k, i + 1) for k, n, i in reversed(self._recent) if i + 1 < n), None)
+                    # (a state view shows the result of every decision since the
+                    # previous one, e.g. an answer to "lower its Level?")
+                    state = e.reason.startswith("state mismatch")
+                    recent = self._since_state if state else self._recent
+                    alt = next(((k, i + 1) for k, n, i in reversed(recent) if i + 1 < n), None)
                     if alt is not None and self.overrides.get(alt[0], -1) < alt[1]:
                         self.overrides[alt[0]] = alt[1]
+                        if state and self._state_bt is None:
+                            self._state_bt = {"pos": e.pos, "reason": e.reason, "list": list(recent),
+                                              "key": alt[0], "n": {k: n for k, n, _ in recent}, "done": set()}
                         if self.log:
                             self.log(f"restart {self.stats.restarts}: {e.reason} -> decision {alt[0]} candidate {alt[1]}")
                         self.stats.restarts += 1
@@ -545,6 +608,9 @@ class BeliefReplay:
             for idx, m in enumerate(msgs):
                 if m["type"] in _SHUFFLE_LOCS:
                     self.last_shuffle_cp[(m["player"], _SHUFFLE_LOCS[m["type"]])] = cp
+                    if m["type"] in ("SHUFFLE_DECK", "SHUFFLE_HAND"):
+                        for _, cid in duel.location_cards(m["player"], _SHUFFLE_LOCS[m["type"]]):
+                            self.card_shuffled.setdefault(cid, []).append(cp)
                     self.shuffle_cps.setdefault(cp, []).append(self._shuffle_count)
                     self._shuffle_count += 1
                 if m["type"] == "RETRY":
@@ -599,11 +665,13 @@ class BeliefReplay:
                             or self._hidden_candidates_fix(item[1], fp)
                     what = item[1].get("type") if item[0] == "prompt" else item[1].get("type", item[0])
                     raise Divergence(self.pos, f"prompt mismatch [{what} vs {fp['type']}]", item, fp, fix)
-                if self.check_state and item[2] is not None:
+                if (self.check_state or self.pos == self.probe_state_at) and item[2] is not None:
                     got = view(capture(duel), self.viewer)
                     if got != item[2]:
                         raise Divergence(self.pos, "state mismatch: " + str(first_difference(item[2], got)),
                                          item[2], got, self._state_copy_fix(item[2], got, duel, cp))
+                    if self.depth == 0:
+                        self._since_state = []
                 self._advance()
                 if self.pos >= len(self.items):
                     self.final_prompt = prompt  # (the core's version: see to_core_response)
@@ -702,6 +770,12 @@ class BeliefReplay:
                         and le["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE)):
                     # copies on the field processed in the wrong order
                     fix = self._field_order_fix(cp, msgs, idx, le, lg)
+            if fix is None and exp["type"] == "MOVE" and got["type"] == "MOVE" and got.get("code") \
+                    and exp.get("code") != got["code"] and exp["from"]["loc"] == got["from"]["loc"] \
+                    and got["from"]["loc"] in HIDDEN_PILES:
+                # the replay moved a copy of a card that the real game moves later
+                # from elsewhere in the same operation: the copies are swapped
+                fix = self._later_copy_fix(cp, msgs, idx, got, duel)
             if fix is None and exp["type"] == "MOVE" and exp.get("code") and got["type"] != "MOVE" \
                     and exp["from"]["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE):
                 # the replay handles another copy on the field first (its move comes
@@ -730,6 +804,13 @@ class BeliefReplay:
             if fix is None and exp["type"] == "MOVE" and exp["from"]["con"] == self.opponent \
                     and exp["from"]["loc"] in HIDDEN_PILES and exp != got:
                 fix = self._kind_fix(cp, msgs, idx, exp) or self._match_fix(cp, msgs, idx, exp["from"])
+                if fix is None and not exp.get("code"):
+                    # several hidden cards must qualify together (e.g. differently
+                    # named cards set as a group): let all of them qualify (a card
+                    # whose code shows can be assumed instead)
+                    start = self._chain_start()
+                    if start is not None and (start, self.pos) not in self.match_piles:
+                        fix = ("matchpile", start, self.pos)
             elif fix is None and exp["type"] == "MOVE" and exp["from"]["con"] == self.opponent \
                     and exp["from"]["loc"] and not exp["from"]["loc"] & C.LOCATION_OVERLAY and exp != got:
                 # a public card of the opponent the replay did not take: whether it
@@ -809,6 +890,40 @@ class BeliefReplay:
             return None
         return self._field_copy_fix(a, b)
 
+    def _later_copy_fix(self, cp, msgs: list[dict], idx: int, got: dict, duel: Duel) -> tuple | None:
+        earlier = []
+        for item in self.items[self.pos:self.pos + 12]:
+            if item[0] != "msg" or item[1]["type"] not in ("MOVE", "CARD_HINT", "HINT"):
+                break
+            m = item[1]
+            if m["type"] != "MOVE":
+                continue
+            if m["code"] == got["code"] and m["from"]["con"] == got["from"]["con"] \
+                    and m["from"]["loc"] == got["from"]["loc"]:
+                # where that card was before the earlier moves of the operation
+                src = dict(m["from"])
+                for e in reversed(earlier):
+                    f = e["from"]
+                    if f["con"] == src["con"] and f["loc"] == src["loc"] and f["seq"] <= src["seq"]:
+                        src["seq"] += 1
+                return self._swap_fix(cp, msgs, idx, src, got["from"], duel)
+            earlier.append(m)
+        return None
+
+    def _history_swap(self, a: int, b: int, cp: tuple) -> tuple | None:
+        """Exchanges two copies whose positions or histories are visible: where
+        they were last shuffled together (a hand shuffle can still show the
+        difference through card hints, so earlier ones are tried next), else
+        from the start of the duel."""
+        shared = sorted(set(self.card_shuffled.get(a, ())) & set(self.card_shuffled.get(b, ())), reverse=True)
+        for at in shared:
+            if at <= cp and (a, b) not in self.swaps.get(at, ()) and (b, a) not in self.swaps.get(at, ()) \
+                    and (at, a, b) not in self.failed_swaps and (at, b, a) not in self.failed_swaps:
+                return ("swap", at, a, b)
+        if self._role_swap_is_new(a, b):
+            return ("swap", (0, 0), a, b)
+        return None
+
     def _field_copy_fix(self, a: int, b: int) -> tuple | None:
         """Two copies on the field are the wrong way round: swap them just before
         the first of them left the pile they shared."""
@@ -818,9 +933,8 @@ class BeliefReplay:
         if pile_a != pile_b:
             if pile_a[0] != pile_b[0] or {pile_a[1], pile_b[1]} & {C.LOCATION_EXTRA}:
                 return None
-            # (e.g. one was drawn first) both started in the deck: exchanging
-            # them there exchanges their whole histories
-            return ("swap", (0, 0), a, b)
+            # (e.g. one was drawn first) they were together in the deck before
+            return self._history_swap(a, b, max(cpa, cpb))
         return ("swap", min(cpa, cpb), a, b)
 
     @staticmethod
@@ -1009,6 +1123,11 @@ class BeliefReplay:
         codes = self.snapshots[cp].codes
         if not a or not b or a == b or codes.get(a) != codes.get(b):
             return None  # only copies of the same card may trade places
+        if loc_exp["loc"] in (C.LOCATION_GRAVE, C.LOCATION_REMOVED):
+            # (public history: see _prompt_copy_fix)
+            fix = self._history_swap(a, b, cp)
+            if fix is not None:
+                return fix
         at = self._copy_swap_cp((loc_exp["con"], loc_exp["loc"]), cp)
         if (a, b) in self.swaps.get(at, ()) or (b, a) in self.swaps.get(at, ()):
             at = cp
@@ -1307,18 +1426,21 @@ class BeliefReplay:
         if dkey is not None and dkey in self.overrides and self.overrides[dkey] < len(valid):
             i = self.overrides[dkey]
             self._recent.append((dkey, len(valid), i))
+            self._since_state.append((dkey, len(valid), i))
             self._trace(prompt, valid[i], False, len(valid))
             return valid[i]
         resp = self._choose(duel, prompt, valid, certain)
         if dkey is not None:
             self._recent.append((dkey, len(valid), valid.index(resp)))
+            self._since_state.append((dkey, len(valid), valid.index(resp)))
         return resp
 
     def _choose(self, duel: Duel, prompt: dict, valid: list[dict], certain: bool) -> dict:
         if certain or len(valid) == 1:
             self._trace(prompt, valid[0], True, len(valid))
             return valid[0]
-        if self.depth > 0 and self.pos - self.probe_start >= self.min_progress:
+        if self.depth > 0 and self.pos - self.probe_start >= self.min_progress \
+                and (self.probe_state_at is None or self.pos > self.probe_state_at):
             # the probed decision already reproduced enough new observations;
             # the next ambiguous decision is the parent's business
             raise _ProbeSuccess()
@@ -1374,6 +1496,13 @@ class BeliefReplay:
                 self.check_state = False  # the main line checks states; probes only choose
                 self.probe_start = self.pos
                 self.horizon = min(len(self.items), self.pos + self.probe_items)
+                # ... except the first one: a decision may show only there (e.g.
+                # "lower its Level?"), so the probe must get past it
+                # (only if it comes soon: farther on, unrelated problems would
+                # decide the probe)
+                self.probe_state_at = next(
+                    (j for j in range(self.pos, min(self.horizon, self.pos + self.probe_state_window + 1))
+                     if self.items[j][0] == "prompt" and self.items[j][2] is not None), None)
                 self._loop(duel, prompt, response)
                 code = 0
             except _ProbeSuccess:

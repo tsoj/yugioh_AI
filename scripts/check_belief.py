@@ -33,6 +33,9 @@ class Timeout(BaseException):  # not swallowed by check_prefix
 def _alarm(*_):
     if os.getpid() != _main_pid:
         os._exit(3)  # a forked probe inherited the alarm
+    # an exception raised inside e.g. an os.fork() callback is ignored: try again
+    # a second later (the task cancels the alarm when it ends)
+    signal.alarm(1)
     raise Timeout()
 
 

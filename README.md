@@ -171,10 +171,10 @@ message, every prompt of the viewer and the viewer's state view at every prompt)
 
 | cut      | consistent |
 |----------|------------|
-| ~1/3     | 98.6%      |
-| ~2/3     | 97.4%      |
-| full game| 96.5%      |
-| overall  | 97.5%      |
+| ~1/3     | 98.9%      |
+| ~2/3     | 97.9%      |
+| full game| 97.1%      |
+| overall  | 98.0%      |
 
 88% of all reconstructions need no repair restart at all. The remaining failures are mostly
 effects whose behaviour depends on hidden cards in ways no repair covers yet (e.g. an
@@ -223,7 +223,9 @@ field (they told physical copies apart; fixed in the core), and the physical cop
 slot (the arbiter now places copies of a card in random order, instead of in creation order),
 and the order of options in command and chain prompts (the core sorts them by effect id, which
 depends on card creation order and on when effects were last enabled; the arbiter shows them in
-a canonical order, by location, and maps the chosen index back, see `observe.to_core_response`).
+a canonical order, by location, and maps the chosen index back, see `observe.to_core_response`),
+and the stale reason on every move onto the field except special summons (equipping a monster
+or moving it to another zone showed how the card had once entered the hand).
 
 One known residual leak: when several *hidden* cards move in one operation (e.g. hand to
 deck), the order of the individual MOVE messages follows card creation order, which (because
