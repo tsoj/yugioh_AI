@@ -155,6 +155,13 @@ def infer_idle(prompt: dict, up: list[dict], up_ext: list[dict] | None = None) -
             if cands:
                 return [{"kind": key[0], "index": j} for j in cands], len(cands) == 1
             break
+        if t == "CARD_SELECTED" and all(x["type"] in ("HINT", "CARD_HINT") for x in before):
+            # a Pendulum Summon announces the Pendulum Scales first (the option is
+            # offered through a scale in the spell/trap zone)
+            cands = [j for j, e in enumerate(prompt["spsummonable"]) if e["loc"] == C.LOCATION_SZONE
+                     and any(same_loc(e, c) for c in m["cards"])]
+            if cands:
+                return [{"kind": "spsummon", "index": j} for j in cands], len(cands) == 1
         if t == "POS_CHANGE" and m["loc"] == C.LOCATION_MZONE:
             cands = [j for j, e in enumerate(prompt["repositionable"]) if same_loc(e, m)]
             if cands:

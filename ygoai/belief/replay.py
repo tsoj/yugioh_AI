@@ -1025,6 +1025,11 @@ class BeliefReplay:
                 if start is not None and (start, self.pos) not in self.match_piles \
                         and (start, self.pos) not in self.nomatch_piles:
                     fix = ("matchpile", start, self.pos)
+        if fix is None and item[0] == "prompt":
+            # the viewer's prompt comes next in the real game, but the replay
+            # activated a forced effect first (e.g. a mandatory trigger whose
+            # target check the forcing skipped)
+            fix = self._unforce_fix(got)
         what = item[1].get("type") if item[0] == "msg" else item[0]
         return Divergence(self.pos, f"message mismatch [{what} vs {got.get('type')}]", item, got, fix)
 
@@ -1698,11 +1703,22 @@ class BeliefReplay:
 
     def _next_state_phase(self) -> int | None:
         """The phase in the viewer's next state view while the upcoming chain is
-        built (the phase in which it was started)."""
+        built or resolved (the phase in which it was started), or at a trigger
+        right after it (its triggers are offered in the same phase)."""
+        ended = False
         for item in self.items[self.pos:self.pos + 400]:
-            if item[0] == "msg" and item[1]["type"] in ("NEW_PHASE", "NEW_TURN", "CHAIN_SOLVING", "CHAIN_END"):
-                return None
-            if item[0] == "prompt" and item[2] is not None:
+            if item[0] == "msg":
+                t = item[1]["type"]
+                if t in ("NEW_PHASE", "NEW_TURN"):
+                    return None
+                if t == "CHAIN_END":
+                    ended = True
+                elif ended and t not in ("HINT", "CARD_HINT", "PLAYER_HINT"):
+                    return None
+            elif item[0] == "prompt" and item[2] is not None:
+                p = item[1]
+                if ended and not (p["type"] == "SELECT_EFFECTYN" or (p["type"] == "SELECT_CHAIN" and p["forced"])):
+                    return None
                 return item[2]["phase"]
         return None
 
