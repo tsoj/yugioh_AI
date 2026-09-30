@@ -316,7 +316,7 @@ class BeliefReplay:
                 duel.close()
                 raise Divergence(0, f"cannot set deck order of player {p} by card id")
             if hyp.extra_orders[p]:
-                extra_ids = ids(p, hyp.extra_orders[p], hyp.extra_ranks[p] if hyp.extra_ranks else None)
+                extra_ids = swap_roles(ids(p, hyp.extra_orders[p], hyp.extra_ranks[p] if hyp.extra_ranks else None))
                 ok = (duel.set_location_order_by_id(p, C.LOCATION_EXTRA, extra_ids) if extra_ids is not None
                       else duel.set_location_order(p, C.LOCATION_EXTRA, hyp.extra_orders[p]))
                 if not ok:
@@ -1638,7 +1638,16 @@ class BeliefReplay:
             if c not in valid:
                 valid.append(c)
         if not valid:
-            raise Divergence(self.pos, f"no candidate response for opponent {prompt['type']}")
+            fix = None
+            if prompt["type"] in ("SELECT_PLACE", "SELECT_POSITION"):
+                # the replay's effect is about to put a card on the field that the
+                # real game did not (e.g. it found a fitting filler card): let the
+                # hidden cards match nothing
+                start = self._chain_start()
+                span = (start if start is not None else self.pos, self.pos)
+                if span not in self.nomatch_piles and span not in self.match_piles:
+                    fix = ("nomatchpile", *span)
+            raise Divergence(self.pos, f"no candidate response for opponent {prompt['type']}", fix=fix)
         dkey = self._dkey if self.depth == 0 else None
         if dkey is not None and dkey in self.overrides and self.overrides[dkey] < len(valid):
             i = self.overrides[dkey]

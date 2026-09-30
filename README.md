@@ -166,23 +166,24 @@ searched decision; making it incremental is an obvious next step.
 
 ## Current results
 
-Measured with `scripts/check_belief.py -n 1000 --start 1000` (random and greedy agents, random
-human deck pairs from the corpus, 20% mirror matches; both players; cut after ~1/3, ~2/3 and at
-the end of the game, 6000 reconstructions; the reconstruction must reproduce every filtered
-message, every prompt of the viewer and the viewer's state view at every prompt):
+Measured with `scripts/check_belief.py -n 1000` (random and greedy agents, random human deck
+pairs from the corpus, 20% mirror matches; both players; cut after ~1/3, ~2/3 and at the end of
+the game, 6000 reconstructions per run; the reconstruction must reproduce every filtered
+message, every prompt of the viewer and the viewer's state view at every prompt). Seeds
+1000-1999 were used while developing; seeds 2000-2999 are the check for generalization:
 
-| cut      | consistent |
-|----------|------------|
-| ~1/3     | 99.2%      |
-| ~2/3     | 98.5%      |
-| full game| 97.8%      |
-| overall  | 98.5%      |
+| cut      | seeds 1000-1999 | seeds 2000-2999 |
+|----------|-----------------|-----------------|
+| ~1/3     | 99.3%           | 98.5%           |
+| ~2/3     | 98.7%           | 97.6%           |
+| full game| 98.0%           | 97.4%           |
+| overall  | 98.7%           | 97.8%           |
 
-90.7% of all reconstructions need no repair restart at all. The remaining failures are mostly
+90.7% (seeds 1000-1999) of all reconstructions need no repair restart at all. The remaining failures are mostly
 effects whose behaviour depends on hidden cards in ways no repair covers yet (e.g. an
 excavation whose result decides what the opponent can pick), and copy identity puzzles.
 
-Median reconstruction time is about 0.3s (a few long games take up to the 90s limit because
+Median reconstruction time is about 0.45s (a few long games take up to the 90s limit because
 of repeated repair restarts). Plain self-play is fast: about 0.2s CPU per game, ~650 decisions per game.
 
 First match of the example search agent (`belief_mc`: belief replay + flat Monte Carlo with
