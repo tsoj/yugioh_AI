@@ -44,9 +44,9 @@ def prelude_fits(before: list[dict], ch: dict) -> bool:
         if t == "POS_CHANGE" and same_loc(m, ch) and m["prev_pos"] & C.POS_FACEDOWN \
                 and m["pos"] & C.POS_FACEUP:
             continue  # (a change between face-up positions is a separate command)
-        if t == "MOVE" and (same_loc(m["to"], ch) or (m["from"]["loc"] == C.LOCATION_SZONE
-                                                      and m["from"]["seq"] == 5)):
-            continue
+        if t == "MOVE" and ((same_loc(m["to"], ch) and m["to"]["loc"] == C.LOCATION_SZONE)
+                            or (m["from"]["loc"] == C.LOCATION_SZONE and m["from"]["seq"] == 5)):
+            continue  # (a card is placed to be activated only in the spell/trap zone)
         return False
     return True
 
@@ -732,8 +732,12 @@ def infer_cards(prompt: dict, up: list[dict], duel, ids: list | None = None) -> 
             # later reference could be part of the selection too
             certain = kn == len(near) and (kn == hi or len(chosen) == len(near))
         k = min(len(chosen), hi)
-        if k >= lo and {"indices": sorted(chosen[:k])} not in cands:
-            cands.append({"indices": sorted(chosen[:k])})
+        # (the selected cards are used in order: every longer prefix of the
+        # references is a candidate too, e.g. "up to 2" summoned one by one)
+        for j in range(max(lo, 1), k + 1):
+            c = {"indices": sorted(chosen[:j])}
+            if c not in cands:
+                cands.append(c)
         if k < len(chosen):
             import itertools
             # (only the first few candidates are ever probed: the number of
