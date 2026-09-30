@@ -97,6 +97,19 @@ class FlowSolver:
             c = v.fixed_code if v.fixed_code is not None else v.code
             if c:
                 known.add(c)
+        # cards named by hints that no card of that player is known to be: its
+        # deck contains a copy (not for cards of the viewer's own deck list: the
+        # hint can come from the viewer's effect)
+        own_list = {a.fixed_code for a in t.atoms[viewer]}
+        owned = {(v.owner, v.fixed_code if v.fixed_code is not None else v.code) for v in t.all_vars}
+        contains = []
+        for p, code in sorted(t.contains):
+            card = self.db.get(code) if self.db is not None else None
+            if p == viewer or card is None or card.type & C.TYPE_TOKEN or code in own_list \
+                    or (p, code) in owned:
+                continue
+            contains.append((p, code))
+            known.add(code)
         commodities: list[tuple] = []
         cindex: dict[tuple, int] = {}
 
@@ -292,6 +305,10 @@ class FlowSolver:
                 per[code_of(cols[j][1])].append(j)
             for code, n in codes.items():
                 add_row([(j, 1.0) for j in per.get(code, [])], n, n)
+        # the deck of the player a hint named a card for contains it
+        for p, code in contains:
+            add_row([(j, 1.0) for j, (ei, k) in enumerate(cols)
+                     if edge_keys[ei][0][:2] == ("atoms", p) and code_of(k) == code], 1, 3)
         # at most 3 copies of a card per opponent deck (by base code, tags included)
         limit: dict[int, list[int]] = defaultdict(list)
         for j, (ei, k) in enumerate(cols):

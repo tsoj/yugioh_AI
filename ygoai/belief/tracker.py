@@ -118,6 +118,7 @@ class Tracker:
         self.searched: list[tuple[Var, int | None]] = []
         self.exclusions: list[Var] = []
         self.needs: list[Var] = []  # hidden cards whose kind shows (e.g. Set as a spell/trap)
+        self.contains: set[tuple[int, int]] = set()  # (player, code) named by hints
         # (a, b): a is an earlier created copy than b (only meaningful for copies of
         # the same card; the core lists and processes such copies in creation order)
         self._resolving = False  # between CHAIN_SOLVING and CHAIN_SOLVED
@@ -381,6 +382,12 @@ class Tracker:
         if t not in ("CONFIRM_CARDS", "CONFIRM_DECKTOP", "CONFIRM_EXTRATOP", "SHUFFLE_DECK", "SHUFFLE_HAND",
                      "SHUFFLE_EXTRA", "HINT", "CARD_HINT", "RANDOM_SELECTED"):
             self._confirmed = []  # only "reveal, shuffle back, pick one at random" counts
+        if t in ("CARD_HINT", "PLAYER_HINT") and m.get("value", 0) >> 20 \
+                and m["hint_type"] in (C.CHINT_DESC_ADD, C.CHINT_DESC_REMOVE):  # (= PHINT_DESC_*)
+            # a hint text names the card whose script it comes from (e.g. a global
+            # check of Marincess Battle Ocean, which exists only if a copy is in the
+            # deck): that player's deck contains the card (see flow: "contains")
+            self.contains.add((m["con"] if t == "CARD_HINT" else m["player"], m["value"] >> 20))
         if t == "CARD_HINT":
             self._card_hint(m)
         elif t == "SHUFFLE_HAND":
