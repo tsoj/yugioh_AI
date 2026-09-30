@@ -221,9 +221,11 @@ ATTACK_CANCELED status bit (choosing an attacker clears it even if the attack is
 so it revealed hidden attack attempts), status bits that a card kept from an earlier stint on the
 field (they told physical copies apart; fixed in the core), and the physical copy in each deck
 slot (the arbiter now places copies of a card in random order, instead of in creation order),
-and the order of options in command and chain prompts (the core sorts them by effect id, which
-depends on card creation order and on when effects were last enabled; the arbiter shows them in
-a canonical order, by location, and maps the chosen index back, see `observe.to_core_response`),
+and the order of options in command, chain and card selection prompts (the core sorts them by
+effect id, which depends on card creation order and on when effects were last enabled, or lists
+cards in creation order, which tells physical copies apart; the arbiter shows them in a
+canonical order, by location, and maps the chosen indices back, see
+`observe.to_core_response`),
 and the stale reason on every move onto the field except special summons (equipping a monster
 or moving it to another zone showed how the card had once entered the hand).
 

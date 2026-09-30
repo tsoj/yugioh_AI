@@ -646,6 +646,17 @@ class Tracker:
 
     def prompt(self, p: dict) -> None:
         self._last_prompt = p
+        if p["type"] == "SELECT_CARD" and self._confirmed and len(p["cards"]) == len(self._confirmed) \
+                and all(not c.get("code") and not c["loc"] & C.LOCATION_OVERLAY for c in p["cards"]):
+            # right after revealing cards and shuffling them back into their pile,
+            # the viewer is offered exactly that many hidden cards of the pile: the
+            # revealed ones (e.g. "your opponent picks 1 of them")
+            for c in p["cards"]:
+                v = self._plain_var(c["con"], c["loc"], c["seq"])
+                if v is not None and v.kind == "claim" and v.pool is not None:
+                    ids = frozenset(x.id for x in v.pool.members if any(x is y for y in self._confirmed))
+                    if ids:
+                        v.allowed = ids if v.allowed is None else (v.allowed & ids) or v.allowed
         if p["type"] in ("SELECT_IDLECMD", "SELECT_BATTLECMD"):
             self._chosen = None
         self._flush_batch()

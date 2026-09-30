@@ -117,7 +117,12 @@ AUTO_RESPONSE = {"index": -1}
 _ORDERED = {"SELECT_IDLECMD": ("summonable", "spsummonable", "repositionable", "msetable", "ssetable",
                                "activatable"),
             "SELECT_BATTLECMD": ("activatable", "attackable"),
-            "SELECT_CHAIN": ("chains",)}
+            "SELECT_CHAIN": ("chains",),
+            # card selections list their cards in card creation order (group order),
+            # which tells physical copies apart
+            "SELECT_CARD": ("cards",),
+            "SELECT_TRIBUTE": ("cards",),
+            "SELECT_UNSELECT_CARD": ("select_cards", "unselect_cards")}
 
 
 def _option_key(c: dict) -> tuple:
@@ -138,6 +143,18 @@ def to_core_response(msg: dict, viewer: int, resp: dict) -> dict:
     into the core's option order."""
     from .actions import BATTLE_LISTS, IDLE_LISTS
     t = msg["type"]
+    if t in ("SELECT_CARD", "SELECT_TRIBUTE"):
+        if "indices" not in resp:
+            return resp
+        order = option_order(msg, viewer)["cards"]
+        return {**resp, "indices": [order[i] for i in resp["indices"]]}
+    if t == "SELECT_UNSELECT_CARD":
+        if "index" not in resp:
+            return resp
+        order = option_order(msg, viewer)
+        n = len(order["select_cards"])
+        i = resp["index"]
+        return {**resp, "index": order["select_cards"][i] if i < n else n + order["unselect_cards"][i - n]}
     if t not in _ORDERED or "index" not in resp:
         return resp
     if t == "SELECT_CHAIN":

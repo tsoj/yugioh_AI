@@ -574,6 +574,7 @@ class BeliefReplay:
                     cid for loc in HIDDEN_PILES for _, cid in duel.location_cards(self.opponent, loc)]
             if forced_match:
                 duel.set_forced_match(forced_match)
+            answered, answered_resp = pending, pending_resp  # (the response this step processes)
             status = duel.process()
             if forced_match:
                 duel.set_forced_match([])
@@ -614,6 +615,14 @@ class BeliefReplay:
                     self.shuffle_cps.setdefault(cp, []).append(self._shuffle_count)
                     self._shuffle_count += 1
                 if m["type"] == "RETRY":
+                    if answered is not None and answered["type"] == "ANNOUNCE_CARD" \
+                            and answered["player"] == self.opponent and answered_resp:
+                        # the announcement must name a card in the deck (e.g. Crossout
+                        # Designator): the deck holds a copy somewhere
+                        n = len(duel.location_cards(self.opponent, C.LOCATION_DECK))
+                        for seq in range(n):
+                            self._assume({"con": self.opponent, "loc": C.LOCATION_DECK, "seq": seq},
+                                         [answered_resp["code"]], "the opponent announced a card of its deck")
                     raise Divergence(self.pos, "core rejected a response")
                 o = filter_message(m, self.viewer)
                 if o is None:
@@ -796,6 +805,15 @@ class BeliefReplay:
                     fix = ("matchpile", start, self.pos)
                     if fix[1:] in self.match_piles:
                         fix = None
+            if fix is None and exp["type"] == "CONFIRM_CARDS" and got["type"] != "CONFIRM_CARDS" \
+                    and exp["cards"] and exp["cards"][0]["con"] == self.opponent:
+                # the opponent revealed a card that the replay's filter rejects (the
+                # filter depends on hidden cards, e.g. a matching card in the deck)
+                fix = self._match_fix(cp, msgs, idx, exp["cards"][0])
+                if fix is None:
+                    start = self._chain_start()
+                    if start is not None and (start, self.pos) not in self.match_piles:
+                        fix = ("matchpile", start, self.pos)
             if fix is None and exp["type"] == "BECOME_TARGET" and got["type"] != "BECOME_TARGET" \
                     and exp["cards"]:
                 # the opponent targeted a card that the replay's filter rejects

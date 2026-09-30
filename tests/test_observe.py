@@ -98,7 +98,9 @@ class FilterTest(unittest.TestCase):
                        {"code": X + 1, **loc(1, C.LOCATION_MZONE, 0, C.POS_FACEUP_ATTACK)},
                        {"code": X + 2, **loc(0, C.LOCATION_DECK, 3, C.POS_FACEDOWN)}]}
         f = filter_prompt(p, 0)
-        self.assertEqual([c["code"] for c in f["cards"]], [0, X + 1, X + 2])
+        codes = {(c["con"], c["loc"]): c["code"] for c in f["cards"]}
+        self.assertEqual(codes, {(1, C.LOCATION_HAND): 0, (1, C.LOCATION_MZONE): X + 1,
+                                 (0, C.LOCATION_DECK): X + 2})
 
     def test_empty_chain_prompt_is_hidden(self):
         # empty chain windows exist because of the opponent's hidden pending triggers
@@ -118,6 +120,20 @@ class FilterTest(unittest.TestCase):
         # choosing the first option as seen (hand1) is core option 1
         self.assertEqual(to_core_response(p, 0, {"index": 0}), {"index": 1})
         self.assertEqual(to_core_response(p, 0, {"index": -1}), {"index": -1})
+
+    def test_card_selection_order_is_canonical(self):
+        a = {"code": X, **loc(0, C.LOCATION_EXTRA, 15, C.POS_FACEUP)}
+        b = {"code": X, **loc(0, C.LOCATION_HAND, 1, C.POS_FACEUP)}
+        h = {"code": X + 1, **loc(0, C.LOCATION_HAND, 0, C.POS_FACEUP)}
+        p = {"type": "SELECT_UNSELECT_CARD", "player": 0, "finishable": 0, "cancelable": 0, "min": 1, "max": 1,
+             "select_cards": [h], "unselect_cards": [a, b]}
+        f = filter_prompt(p, 0)
+        self.assertEqual([c["loc"] for c in f["unselect_cards"]], [C.LOCATION_HAND, C.LOCATION_EXTRA])
+        self.assertEqual(to_core_response(p, 0, {"index": 1}), {"index": 2})
+        self.assertEqual(to_core_response(p, 0, {"index": 0}), {"index": 0})
+        s = {"type": "SELECT_CARD", "player": 0, "cancelable": 0, "min": 1, "max": 2, "cards": [a, h, b]}
+        self.assertEqual([c["seq"] for c in filter_prompt(s, 0)["cards"]], [0, 1, 15])
+        self.assertEqual(to_core_response(s, 0, {"indices": [0, 2]}), {"indices": [1, 0]})
 
     def test_unknown_message_raises(self):
         with self.assertRaises(KeyError):
