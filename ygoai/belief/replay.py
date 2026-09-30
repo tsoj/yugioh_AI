@@ -1836,6 +1836,12 @@ class BeliefReplay:
         if self.depth >= self.max_depth:
             return valid[0]
         self.stats.probed_decisions += 1
+        # a choice among face-up cards on the field shows in the next state view
+        # (e.g. which Pendulum Scale an effect raised), even a later one
+        cards = prompt.get("cards") or prompt.get("select_cards") or []
+        self._probe_wide = prompt["type"] in CARD_PROMPTS and bool(cards) and all(
+            c["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE) and c.get("pos", C.POS_FACEUP) & C.POS_FACEUP
+            for c in cards)
         repairable = None
         unrefuted = None
         progressed = None  # failed only after reproducing enough of the stream
@@ -1912,7 +1918,8 @@ class BeliefReplay:
                 # (only if it comes soon: farther on, unrelated problems would
                 # decide the probe)
                 self.probe_state_at = next(
-                    (j for j in range(self.pos, min(self.horizon, self.pos + self.probe_state_window + 1))
+                    (j for j in range(self.pos, min(self.horizon, self.pos + (
+                        self.probe_items if getattr(self, "_probe_wide", False) else self.probe_state_window) + 1))
                      if self.items[j][0] == "prompt" and self.items[j][2] is not None), None)
                 self._loop(duel, prompt, response)
                 code = 0
