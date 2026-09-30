@@ -1607,14 +1607,25 @@ class BeliefReplay:
             if m["type"] != "SPSUMMONING":
                 return
             src = infer.source_of(m, up[:i])
-            if src is None or src["con"] != self.opponent or src["loc"] != C.LOCATION_HAND:
+            if src is None or src["con"] != self.opponent or src["loc"] not in (C.LOCATION_HAND, C.LOCATION_EXTRA):
                 return
-            if any(infer.same_loc(e, src) or e["loc"] == C.LOCATION_SZONE for e in prompt["spsummonable"]):
-                return  # (a Pendulum Summon is offered through the scale)
-            lm = infer.LocMap(duel)
-            cid = lm.at(src)
-            if not cid or lm.codes.get(cid) != m["code"]:
-                return
+            if src["loc"] == C.LOCATION_EXTRA:
+                # (e.g. a Synchro Summon whose check involves hidden cards; by code:
+                # positions in a hidden Extra Deck say nothing; a face-up card comes
+                # by Pendulum Summon, offered through the scale)
+                if src.get("pos", 0) & C.POS_FACEUP or any(
+                        e["loc"] == C.LOCATION_SZONE or (e["loc"] == C.LOCATION_EXTRA and e["code"] == m["code"])
+                        for e in prompt["spsummonable"]):
+                    return
+                if m["code"] not in {code for code, _ in duel.location_cards(self.opponent, C.LOCATION_EXTRA)}:
+                    return
+            else:
+                if any(infer.same_loc(e, src) or e["loc"] == C.LOCATION_SZONE for e in prompt["spsummonable"]):
+                    return  # (a Pendulum Summon is offered through the scale)
+                lm = infer.LocMap(duel)
+                cid = lm.at(src)
+                if not cid or lm.codes.get(cid) != m["code"]:
+                    return
             span = (self.prompt_cp[0], self.pos + i)
             if span not in self.match_piles:
                 raise Divergence(self.pos, "opponent summoned a card whose condition the replay does not meet",

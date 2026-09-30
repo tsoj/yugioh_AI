@@ -178,7 +178,7 @@ message, every prompt of the viewer and the viewer's state view at every prompt)
 | cut      | seeds 1000-1999 | seeds 2000-2999 |
 |----------|-----------------|-----------------|
 | ~1/3     | 99.8%           | 100.0%           |
-| ~2/3     | 99.8%           | 99.9%           |
+| ~2/3     | 99.8%           | 100.0%           |
 | full game| 99.8%           | 99.8%           |
 | overall  | 99.8%           | 99.9%           |
 
