@@ -1000,6 +1000,11 @@ class BeliefReplay:
                 span = (min(self._link_start(), start if start is not None else self.pos), self.pos)
                 if span not in self.nomatch_piles and span not in self.match_piles:
                     fix = ("nomatchpile", *span)
+            if fix is None and exp["type"] == got["type"] == "HINT" and exp["hint_type"] == got["hint_type"] \
+                    == C.HINT_SELECTMSG and exp["player"] == got["player"] == self.viewer and exp["data"] != got["data"]:
+                # the viewer's own selection hint names the card it handles (e.g. "select
+                # the zone for <card>"): the replay's card of that name is that card
+                fix = self._hint_code_fix(exp["data"], got["data"], duel)
             if fix is None and got["type"] == "HINT" and got["hint_type"] == C.HINT_OPSELECTED \
                     and got["player"] == self.opponent and exp != got \
                     and not (exp["type"] == "HINT" and exp["hint_type"] == C.HINT_OPSELECTED):
@@ -1112,6 +1117,38 @@ class BeliefReplay:
                     # else before the prompt that chose the card
                     at = self.last_shuffle_cp.get((f["con"], f["loc"]), self.last_listed.get(cid, cp))
                     self.left_pile[cid] = (at, (f["con"], f["loc"]))
+
+    def _hint_code_fix(self, code: int, replay_code: int, duel: Duel) -> tuple | None:
+        """The opponent's hidden card the replay handles (the only one with the
+        code the replay's hint named) has the code of the real hint."""
+        if self.db.get(code) is None or self.db.get(replay_code) is None:
+            return None
+        from ..state import parse_location_query
+        found = []
+        for loc in (*HIDDEN_PILES, C.LOCATION_MZONE, C.LOCATION_SZONE):
+            cards = duel.location_cards(self.opponent, loc)
+            pos = parse_location_query(duel.query_location_raw(self.opponent, loc, C.QUERY_POSITION)) \
+                if loc in (C.LOCATION_MZONE, C.LOCATION_SZONE) else None
+            for seq, (c, cid) in enumerate(cards):
+                hidden = pos is None or (pos[seq] is not None and not pos[seq].get("position", 0) & C.POS_FACEUP)
+                if cid and c == replay_code and hidden:
+                    found.append({"con": self.opponent, "loc": loc, "seq": seq})
+        field = [f for f in found if f["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE)]
+        if len(field) == 1:
+            found = field  # (a face-down card on the field, e.g. the target, before filler copies)
+        if len(found) != 1:
+            return None
+        li = found[0]
+        key = (li["con"], li["loc"], li["seq"])
+        try:
+            var = self.lockstep.var_at(*key)
+        except TrackerError:
+            return None
+        tried = {a[4] for a in self.assumptions if a[1:4] == key} | {
+            a[4] for a in self.failed_assumptions if a[1:4] == key}
+        if var is None or code in tried:
+            return None
+        return ("assume", self.pos, *key, code)
 
     def _unhinted_fix(self, got: dict) -> tuple | None:
         """The replay's card lost a hint as it moved from a hidden pile to a
