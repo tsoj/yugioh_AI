@@ -177,12 +177,12 @@ message, every prompt of the viewer and the viewer's state view at every prompt)
 
 | cut      | seeds 1000-1999 | seeds 2000-2999 |
 |----------|-----------------|-----------------|
-| ~1/3     | 99.8%           | 99.9%           |
-| ~2/3     | 99.8%           | 99.7%           |
-| full game| 99.8%           | 99.6%           |
-| overall  | 99.8%           | 99.7%           |
+| ~1/3     | 99.8%           | 100.0%           |
+| ~2/3     | 99.8%           | 99.9%           |
+| full game| 99.8%           | 99.8%           |
+| overall  | 99.8%           | 99.9%           |
 
-About 96% of all reconstructions need no repair restart at all. The remaining failures are mostly
+About 96.5% of all reconstructions need no repair restart at all. The remaining failures are mostly
 effects whose behaviour depends on hidden cards in ways no repair covers yet (e.g. an
 excavation whose result decides what the opponent can pick), and copy identity puzzles.
 

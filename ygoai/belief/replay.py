@@ -634,6 +634,10 @@ class BeliefReplay:
         it = self.items[self.pos]
         if self.depth > 0 and (it[0] == "prompt" or it[1].get("type") in _BOUNDARIES):
             self.probe_boundary = True
+            self.probe_after_boundary = 0
+        elif self.depth > 0 and self.probe_boundary and it[0] == "msg" \
+                and it[1].get("type") not in ("HINT", "CARD_HINT", "PLAYER_HINT"):
+            self.probe_after_boundary += 1
         self.lockstep.process(it)
         self.pos += 1
         self.stall = 0
@@ -1829,7 +1833,11 @@ class BeliefReplay:
             self._trace(prompt, valid[0], True, len(valid))
             return valid[0]
         if self.depth > 0 and self.pos - self.probe_start >= self.min_progress and self.probe_boundary \
+                and self.probe_after_boundary > 0 \
                 and (self.probe_state_at is None or self.pos > self.probe_state_at):
+            # (and something substantive after the latest boundary: a consequence
+            # of the decision can show only once its effect is over, e.g. "then you
+            # can Normal Summon" right after the chain ends)
             # the probed decision already reproduced enough new observations;
             # the next ambiguous decision is the parent's business
             raise _ProbeSuccess()
@@ -1911,6 +1919,7 @@ class BeliefReplay:
                 self.max_stall = min(self.max_stall, 50)
                 self.probe_start = self.pos
                 self.probe_boundary = False  # (the probed action's effect is over)
+                self.probe_after_boundary = 0  # (non-hint messages reproduced since the latest one)
                 self.probe_sig = (self.pos, repr(sorted(prompt.items())))
                 self.horizon = min(len(self.items), self.pos + self.probe_items)
                 # ... except the first one: a decision may show only there (e.g.
