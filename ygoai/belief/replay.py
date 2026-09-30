@@ -175,6 +175,7 @@ class BeliefReplay:
             (self.opponent, it[1]["code"], it[1]["desc"]) for it in self.items
             if it[0] == "msg" and it[1]["type"] == "CHAINING" and it[1]["trigger_con"] == self.opponent}
         self.unforced: set[tuple[int, int, int]] = set()
+        self.unforced_windows: set[tuple] = set()  # force windows switched off by "unforce"
         # the forcing applies only around the activation: from the start of its
         # phase until just after it (elsewhere a forced mandatory effect could
         # activate where the real one could not)
@@ -540,11 +541,13 @@ class BeliefReplay:
             self.stats.forces += 1
             return True
         if kind == "unforce":
+            # (only the windows around the problem: another effect of the card with
+            # the same description, e.g. desc 0, can need the forcing elsewhere)
             key = fix[1:]
-            if key not in self.forces or key in self.unforced:
+            windows = {w for w in self.force_windows if w[2] == key and w[0] <= self.pos <= w[1]}
+            if key not in self.forces or not windows - self.unforced_windows:
                 return False
-            self.forces.discard(key)
-            self.unforced.add(key)
+            self.unforced_windows |= windows
             self.stats.forces += 1
             return True
         if kind == "assume":
@@ -825,7 +828,8 @@ class BeliefReplay:
 
     def _apply_forces(self, duel: Duel) -> None:
         active = frozenset(k for start, end, k in self.force_windows
-                           if start <= self.pos <= end and k in self.forces)
+                           if start <= self.pos <= end and k in self.forces
+                           and (start, end, k) not in self.unforced_windows)
         if active != self._active_forces:
             duel.clear_force_activatable()
             for key in active:
