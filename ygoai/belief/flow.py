@@ -527,6 +527,14 @@ class FlowSolver:
                 it_main, it_extra = iter(fill_main), iter(fill_extra)
                 for a in plain:
                     a.resolved = next(it_main) if a.kind == "main" else next(it_extra)
+                # the filler codes are interchangeable: hand them out along the
+                # creation order constraints (cards are created sorted by code)
+                ranked = {x.id for pair in self._rank_atoms() for x in pair}
+                for kind in ("main", "extra"):
+                    group = [a for a in plain if a.kind == kind and a.id in ranked]
+                    codes = sorted(a.resolved for a in group)
+                    for a, code in zip(self._order_first(group), codes):
+                        a.resolved = code
         for v in t.all_vars:
             if v.kind == "created" and v.resolved is None:
                 key = commodities[vcom[v.id]][1] if v.id in vcom else None

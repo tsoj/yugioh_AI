@@ -368,6 +368,9 @@ class LocMap:
         self.unknown: set[tuple[int, int]] = set()
         self.codes: dict[int, int] = {}  # card id -> code (of the locations read so far)
         self._loaded: set[tuple[int, int]] = set()
+        # the results of the upcoming forced shuffles, (player, location, card ids
+        # bottom first) in stream order, if the caller knows them (the replay does)
+        self.plan: list[tuple] = list(getattr(duel, "shuffle_plan", None) or ())
         if not lazy:
             for p in (0, 1):
                 for loc in (*LIST_LOCS, C.LOCATION_MZONE, C.LOCATION_SZONE):
@@ -378,8 +381,8 @@ class LocMap:
         import copy as _copy
         dup = LocMap.__new__(LocMap)
         dup.duel = self.duel  # shared: only snapshots (fully read, no duel) are copied
-        for name in ("lists", "zones", "overlays", "unknown", "codes", "_loaded"):
-            setattr(dup, name, _copy.deepcopy(getattr(self, name), memo))
+        for name in ("lists", "zones", "overlays", "unknown", "codes", "_loaded", "plan"):
+            setattr(dup, name, _copy.deepcopy(getattr(self, name, []), memo))
         return dup
 
     def _load(self, p: int, loc: int) -> None:
@@ -490,7 +493,16 @@ class LocMap:
             elif t in ("SHUFFLE_HAND", "SHUFFLE_DECK", "SHUFFLE_EXTRA"):
                 loc = {"SHUFFLE_HAND": C.LOCATION_HAND, "SHUFFLE_DECK": C.LOCATION_DECK,
                        "SHUFFLE_EXTRA": C.LOCATION_EXTRA}[t]
-                self.unknown.add((m["player"], loc))
+                key = (m["player"], loc)
+                forced = self.plan.pop(0) if self.plan else None
+                if forced is not None and forced[:2] == key and forced[2] is not None \
+                        and key not in self.unknown:
+                    self._load(*key)
+                    cur = self.lists[key]
+                    if None not in cur and None not in forced[2] and sorted(cur) == sorted(forced[2]):
+                        self.lists[key] = list(forced[2])  # the replay decides the result
+                        continue
+                self.unknown.add(key)
             elif t == "SWAP":
                 a, b = self.at(m["loc1"]), self.at(m["loc2"])  # (loads both zones)
                 self.zones[(m["loc1"]["con"], m["loc1"]["loc"])][m["loc1"]["seq"]] = b or 0
