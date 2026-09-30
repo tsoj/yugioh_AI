@@ -46,7 +46,7 @@ def _leaves_field(m: dict) -> bool:
 class Var:
     __slots__ = ("id", "owner", "code", "pool", "assigned", "kind", "faceup", "overlays",
                  "fixed_code", "resolved", "excluded", "need", "marks", "allowed", "same_as",
-                 "not_same", "prefer")
+                 "not_same", "prefer", "seen_owner")
 
     def __init__(self, vid: int, owner: int, kind: str, fixed_code: int | None = None):
         self.id = vid
@@ -68,6 +68,7 @@ class Var:
         # claim: earlier slots whose physical card this preferably is (copies that
         # nothing tells apart are interchangeable; see Tracker._referenced)
         self.prefer: list = []
+        self.seen_owner: int | None = None  # the owner a state view showed for this slot
 
     def __repr__(self) -> str:
         return f"Var({self.id},{self.kind},code={self.code},fixed={self.fixed_code})"
@@ -308,7 +309,9 @@ class Tracker:
         todo, seen = [v], set()
         while todo and len(out) < 2:
             x = todo.pop()
-            if x.kind != "claim" or x.pool is None:
+            if x.seen_owner is not None:
+                out.add(x.seen_owner)  # (shown by a state view: no need to look further)
+            elif x.kind != "claim" or x.pool is None:
                 out.add(x.owner)
             elif x.pool.index not in seen:
                 seen.add(x.pool.index)
@@ -319,7 +322,10 @@ class Tracker:
         """A card's owner shows even when it is hidden (a card given to the other
         player's hand keeps its sleeve): after a shuffle, the slot holds one of
         the shuffled cards that owner could own."""
-        if v is None or v.kind != "claim" or v.pool is None:
+        if v is None:
+            return
+        v.seen_owner = owner
+        if v.kind != "claim" or v.pool is None:
             return
         members = v.pool.members
         owners = [self._possible_owners(m) for m in members]
@@ -688,7 +694,12 @@ class Tracker:
                         if "owner" in card and loc == C.LOCATION_HAND:
                             self._owned(v, card["owner"])
                     if loc == C.LOCATION_HAND:
-                        self._public_hand(lst, cards)
+                        # (a card being activated from the hand is public too, but
+                        # only while it is on the chain: not kept revealed)
+                        on_chain = {h["seq"] for h in (link.get("handler") for link in s.get("chain", ()))
+                                    if h and h.get("con") == pl_idx and h.get("loc") == C.LOCATION_HAND}
+                        self._public_hand(lst, [{**c, "is_public": 0} if i in on_chain else c
+                                                for i, c in enumerate(cards)])
 
     # -- solving -------------------------------------------------------------
     def solve(self, completion=None, card_db=None) -> Hypothesis:
