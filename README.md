@@ -54,6 +54,9 @@ python3 scripts/check_belief.py --index runs/index.jsonl --tags shuffle_set_card
 # look at one reconstruction in detail (--max-restarts N stops after N repairs)
 python3 scripts/debug_belief.py SEED VIEWER [--cut 0.5]
 
+# leak check: does the (secret) card creation order show in the observations?
+python3 scripts/diff_creation.py -n 1000 --start 5000
+
 # unit and integration tests
 python3 -m unittest discover tests
 ```
@@ -96,10 +99,6 @@ minimal example.
       card is still there (`SolveChain`), or right before it if the card moved (the
       `proc_workaround.lua` handler), so the viewer can tell whether a card that left the hand was
       the activated one;
-    * groups are processed in card creation order (a script's loop over a group, a group
-      SSet, target announcements), which orders copies of the same card; since cards are
-      created sorted by code (`game.setup_duel`), it also orders the codes of different
-      hidden cards (a reorder within one pile is the player's choice and says nothing);
     * the hand card the viewer's own command summons or Sets is the card that moves to the
       field next, even if the hand is shuffled in between (e.g. after a reveal as a cost);
     * cards kept revealed in a hand stay revealed through a shuffle.
@@ -111,9 +110,8 @@ minimal example.
   `CorpusCompletion` which uses the most similar human decks). Identity constraints enter the
   model where they imply something about codes (a slot has the code of the card it is known to
   be, or its code comes from a card other than the one it is known not to be); copy identity is
-  then fixed by matching claims to members per shuffle and ordering same-code copies by the
-  creation order constraints, and the duel is built by card id (deck order and every shuffle
-  result).
+  then fixed by matching claims to members per shuffle (copies nothing tells apart are
+  interchangeable), and the duel is built by card id (deck order and every shuffle result).
 * `replay.py` creates a duel from that hypothesis and replays it in lockstep with the stream,
   using a small core extension (`core_ext/`) to force shuffle results, coin/dice results and
   random selections. The viewer's prompts are answered with the recorded responses; the
@@ -136,9 +134,14 @@ minimal example.
     option or used a summon procedure whose availability depends on its hidden cards, every
     card of its hidden piles from the activation until the choice; conversely, when the real
     game did nothing more where the replay found a fitting card among its filler cards, let
-    the hidden cards match no filter for that span;
+    the hidden cards match no filter for that span (or, when the replay's operation took one
+    card more, e.g. "send all monsters from the hand", let just that card match nothing);
   * exchange two copies of a card, at the step where they last shared a shuffled pile or, for
     copies whose history is public (graveyard, banished), from the start of the duel;
+  * identify physical cards: the card a script moves out of a shuffled pile is the one it
+    revealed before the shuffle (it keeps them in a group). Where the codes show, the matching
+    of copies prefers these cards anyway; where they do not, the moved cards are constrained to
+    be among the revealed ones;
   * retry a different candidate for one recent opponent decision.
 
 ### Using the belief replay in an AI
@@ -174,16 +177,16 @@ message, every prompt of the viewer and the viewer's state view at every prompt)
 
 | cut      | seeds 1000-1999 | seeds 2000-2999 |
 |----------|-----------------|-----------------|
-| ~1/3     | 99.3%           | 98.8%           |
-| ~2/3     | 98.7%           | 97.9%           |
-| full game| 98.1%           | 97.7%           |
-| overall  | 98.7%           | 98.2%           |
+| ~1/3     | 99.5%           | 99.7%           |
+| ~2/3     | 99.1%           | 99.2%           |
+| full game| 98.5%           | 99.2%           |
+| overall  | 99.0%           | 99.3%           |
 
-About 90.5% of all reconstructions need no repair restart at all. The remaining failures are mostly
+About 93% of all reconstructions need no repair restart at all. The remaining failures are mostly
 effects whose behaviour depends on hidden cards in ways no repair covers yet (e.g. an
 excavation whose result decides what the opponent can pick), and copy identity puzzles.
 
-Median reconstruction time is about 0.45s (a few long games take up to the 90s limit because
+Median reconstruction time is about 0.3s (a few long games take up to the 90s limit because
 of repeated repair restarts). Plain self-play is fast: about 0.2s CPU per game, ~650 decisions per game.
 
 First match of the example search agent (`belief_mc`: belief replay + flat Monte Carlo with
@@ -234,12 +237,19 @@ or moving it to another zone showed how the card had once entered the hand), and
 value in DECK_TOP (it showed whether the card had been returned to the deck). Conversely, a
 player now sees its own cards when it reveals them from its deck.
 
-One known residual leak: when several *hidden* cards move in one operation (e.g. hand to
-deck), the order of the individual MOVE messages follows card creation order, which (because
-cards are created sorted by code) reveals the relative code order of those hidden cards. It
-cannot be reordered without breaking the positions in the messages; randomizing the creation
-order would remove it but would make that order hidden information the belief replay has to
-infer.
+Card creation order: the core gives every card an id in creation order and processes groups
+(a script's loop over a group, the moves of one operation, target announcements, counters
+placed on several cards, ...) in id order. With cards created in a fixed order (sorted by code),
+the order of the messages of several hidden cards revealed their relative codes, and the order
+of copies of one card told them apart across shuffles. Now the arbiter creates the cards in a
+secret random order, and the patched core processes groups in location order (controller, then
+location, then sequence) wherever the order can show, so the creation order has no observable
+effect at all. `scripts/diff_creation.py` checks exactly that: it replays recorded games with
+other creation orders and compares both players' observation streams (no difference in 2,000
+games). Location order adds nothing the messages do not show anyway, except where a script
+turns the iteration order into something without locations: a card-name declaration built by
+iterating over the deck lists the names in deck order, so the arbiter shows ANNOUNCE_CARD
+filters in a canonical form (and ANNOUNCE_NUMBER options sorted).
 
 ## Changes to ygopro-core
 
@@ -256,6 +266,24 @@ infer.
 * A card entering the hand, deck or Extra Deck forgets its position and activation history
   (JUST_POS, CONTINUOUS_POS, ATTACK_CANCELED, ACT_FROM_HAND status bits): it is a new object by
   the rules, and the stale bits made physical copies distinguishable.
+* Groups are processed in location order instead of card creation order (card id): iterating a
+  group from Lua (`GetFirst`/`GetNext`, `Filter`, `RandomSelect`, ...), the loops of the
+  operations (moves, summons, sets, effect enabling, control changes), target and counter
+  announcements, and effects expiring together (sorted by effect id). See the information leaks
+  above.
+* A hand card that becomes public (`EFFECT_PUBLIC`, e.g. a card revealed when drawn) or private
+  again is announced as a position change. The core only changed its position silently, so
+  players saw revealed cards only in their next state view, and a revealed card that was hidden
+  again before that was never seen at all.
+* Queries do not change the duel. Evaluating an effect's condition gives the effect a new
+  timestamp when the condition has become true (`effect::is_available`), and the timestamps
+  order continuous effects; a state query (e.g. of a card's level) evaluated conditions at other
+  moments than the game itself, so observing the state could change what happened next (about
+  1 in 25 games with the upstream core diverged when every prompt queried levels).
+* A step that runs more than 10^9 Lua instructions raises a script error instead of never
+  returning: some scripts take exponential time in rare situations (e.g.
+  `aux.SelectUnselectGroup` over 24 cards whose condition no subset can meet any more), which
+  would hang a match. The count is deterministic, so replays stop at the same point.
 * A fix for an upstream crash: `field::reset_phase`/`reset_chain` iterated a pointer-keyed hash
   set while removing effects, which could invalidate the iterator (roughly 1 in 20,000
   random games segfaulted) and made the order of the resulting messages depend on memory

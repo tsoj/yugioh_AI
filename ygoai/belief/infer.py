@@ -258,7 +258,9 @@ def infer_effectyn(prompt: dict, up: list[dict], descs: list[int] | None = None)
                 if descs and m["desc"] not in descs:
                     # another effect of the same card is activated next
                     return [{"yes": False}, {"yes": True}], True
-                return [{"yes": True}, {"yes": False}], True
+                # (effects without a description all show desc 0: then it may as
+                # well be another effect of the card, activated right after)
+                return [{"yes": True}, {"yes": False}], bool(m["desc"])
             break
         if t in _ACTIVATION_PRELUDE:
             continue

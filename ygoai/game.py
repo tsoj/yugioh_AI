@@ -29,32 +29,46 @@ class GameError(RuntimeError):
 
 def setup_duel(decks: list[Deck], core_seed: list[int], config: DuelConfig,
                deck_orders: list[list[int]], db: CardDB | None = None,
-               copy_seed: int | None = None) -> Duel:
-    """Creates a duel with canonical card ids.
+               copy_seed: int | None = None, creation: list[tuple[int, int, int]] | None = None,
+               creation_seed: int | None = None) -> Duel:
+    """Creates a duel.
 
-    Cards are created in sorted code order (player 0 main, player 0 extra,
-    player 1 main, player 1 extra) so that the relative card-id order of two
-    different cards only depends on their codes. The core processes groups of
-    cards in card-id order, which is visible (e.g. graveyard order), so this
-    makes that order reproducible without knowing the hidden deck order.
+    Card ids follow creation order, and the core processes groups of cards in
+    card id order wherever that is not visible to the players (our core patch
+    iterates groups in location order wherever the order is visible). The
+    creation order itself carries no information:
+
+    * with `copy_seed` (the arbiter's games) the cards are created in a random
+      order (from `creation_seed`, derived from `copy_seed` if not given);
+      the Extra Decks are put in a random order and copies of a card into
+      random slots, all hidden information;
+    * with `creation` (a belief hypothesis) in the given order of (player,
+      location, code);
+    * otherwise sorted by code (player 0 main, player 0 extra, player 1 ...).
+
     `deck_orders[p]` is the initial main deck order, bottom card first.
-
-    With `copy_seed` (the arbiter's games), copies of the same card are put
-    into their slots in random order: which physical copy (card id) is where is
-    hidden information like the deck order itself, rather than following from
-    the slot order.
     """
+    import random
     duel = Duel(tuple(core_seed), config, db)
+    if creation is None:
+        creation = [(p, loc, code) for p in (0, 1)
+                    for loc, cards in ((C.LOCATION_DECK, decks[p].main), (C.LOCATION_EXTRA, decks[p].extra))
+                    for code in sorted(cards)]
+        if copy_seed is not None:
+            random.Random(copy_seed if creation_seed is None else creation_seed).shuffle(creation)
+    for p, loc, code in creation:
+        duel.new_card(p, code, loc)
     for p in (0, 1):
-        for code in sorted(decks[p].main):
-            duel.new_card(p, code, C.LOCATION_DECK)
-        for code in sorted(decks[p].extra):
-            duel.new_card(p, code, C.LOCATION_EXTRA)
         if not duel.set_location_order(p, C.LOCATION_DECK, deck_orders[p]):
             raise GameError(f"deck order for player {p} does not match the deck list")
     if copy_seed is not None:
-        import random
-        rng = random.Random(copy_seed)
+        rng = random.Random(copy_seed + 1)
+        for p in (0, 1):
+            extra = sorted(decks[p].extra)
+            rng.shuffle(extra)
+            if extra and not duel.set_location_order(p, C.LOCATION_EXTRA, extra):
+                raise GameError(f"cannot order the extra deck of player {p}")
+        # which physical copy is in which slot: random as well
         for p in (0, 1):
             for loc in (C.LOCATION_DECK, C.LOCATION_EXTRA):
                 cards = duel.location_cards(p, loc)
@@ -140,11 +154,22 @@ def new_record(decks: list[Deck], seed: int, config: DuelConfig | None = None) -
                               "draw_per_turn": config.draw_per_turn})
 
 
+def initial_extra_order(record: GameRecord, player: int) -> list[int]:
+    """The player's Extra Deck as the duel starts (in creation order, which is
+    random: the owner sees it, the opponent does not)."""
+    duel = setup_duel(record.decks, record.core_seed, record.duel_config(), record.deck_orders,
+                      default_db(), copy_seed=record.core_seed[0])
+    try:
+        return [code for code, _ in duel.location_cards(player, C.LOCATION_EXTRA)]
+    finally:
+        duel.close()
+
+
 def init_info(record: GameRecord, player: int) -> dict:
     """What a player knows before the duel starts."""
     own = record.decks[player]
     opp = record.decks[1 - player]
-    return {"player": player, "deck": own.to_json(), "extra_order": sorted(own.extra),
+    return {"player": player, "deck": own.to_json(), "extra_order": initial_extra_order(record, player),
             "opponent_deck_size": len(opp.main), "opponent_extra_size": len(opp.extra),
             "config": dict(record.config)}
 
@@ -314,14 +339,16 @@ def play(record: GameRecord, agents: list, max_decisions: int = 20000, max_turns
 
 
 def replay(record: GameRecord, observers: list[Observer], upto: int | None = None,
-           db: CardDB | None = None) -> Duel:
+           db: CardDB | None = None, creation_seed: int | None = None) -> Duel:
     """Replays a recorded game, feeding observers; stops before response `upto`.
 
     Returns the live duel positioned at that prompt (the caller must close it).
+    `creation_seed` replaces the game's (hidden) random card creation order:
+    what the players observe must not depend on it (scripts/diff_creation.py).
     """
     db = db or default_db()
     duel = setup_duel(record.decks, record.core_seed, record.duel_config(), record.deck_orders, db,
-                      copy_seed=record.core_seed[0])
+                      copy_seed=record.core_seed[0], creation_seed=creation_seed)
     duel.start()
     responses = record.responses if upto is None else record.responses[:upto]
     prompt = None

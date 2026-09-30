@@ -118,8 +118,7 @@ _ORDERED = {"SELECT_IDLECMD": ("summonable", "spsummonable", "repositionable", "
                                "activatable"),
             "SELECT_BATTLECMD": ("activatable", "attackable"),
             "SELECT_CHAIN": ("chains",),
-            # card selections list their cards in card creation order (group order),
-            # which tells physical copies apart
+            # card selections list their cards in group order (a script may sort them)
             "SELECT_CARD": ("cards",),
             "SELECT_TRIBUTE": ("cards",),
             "SELECT_UNSELECT_CARD": ("select_cards", "unselect_cards")}
@@ -133,6 +132,9 @@ def _option_key(c: dict) -> tuple:
 def option_order(msg: dict, viewer: int) -> dict[str, list[int]]:
     """For each ordered option list of a prompt: the core indices in the order
     the player sees them."""
+    if msg["type"] == "ANNOUNCE_NUMBER":
+        # (scripts may collect the numbers from cards, in their order)
+        return {"values": sorted(range(len(msg["values"])), key=lambda i: (msg["values"][i], i))}
     stripped = _strip_prompt(msg, viewer)
     return {key: sorted(range(len(stripped[key])), key=lambda i: (_option_key(stripped[key][i]), i))
             for key in _ORDERED.get(msg["type"], ()) if key in stripped}
@@ -155,6 +157,8 @@ def to_core_response(msg: dict, viewer: int, resp: dict) -> dict:
         n = len(order["select_cards"])
         i = resp["index"]
         return {**resp, "index": order["select_cards"][i] if i < n else n + order["unselect_cards"][i - n]}
+    if t == "ANNOUNCE_NUMBER" and "index" in resp:
+        return {**resp, "index": option_order(msg, viewer)["values"][resp["index"]]}
     if t not in _ORDERED or "index" not in resp:
         return resp
     if t == "SELECT_CHAIN":
@@ -201,12 +205,71 @@ def _strip_prompt(msg: dict, viewer: int) -> dict:
         _strip_prompt_cards(m["cards"], viewer)
     elif t in ("SELECT_TRIBUTE", "SELECT_COUNTER", "SORT_CARD", "SORT_CHAIN"):
         _strip_prompt_cards(m["cards"], viewer, has_pos=False)
+    elif t == "ANNOUNCE_CARD":
+        m["values"] = canonical_opcodes(m["values"])
     return m
 
 
-# Multi-card listings come out of the core in card creation order. Cards are
-# created in a canonical order (sorted by code), so that order would reveal
-# information about hidden cards; the viewer gets them sorted by location.
+# ANNOUNCE_CARD filters are RPN programs (see actions.is_declarable) that scripts
+# often assemble by iterating over cards (e.g. one "code ISCODE OR" term per
+# card name in the deck, by way of a Lua table whose iteration order follows
+# insertion order). Which names can be declared is what the player sees; the
+# order of the terms would tell the order of the cards. Chains of the
+# commutative boolean operators are flattened and their operands sorted.
+_UNARY_OPS = {C.OPCODE_NEG, C.OPCODE_NOT, C.OPCODE_BNOT, C.OPCODE_ISCODE, C.OPCODE_ISTYPE,
+              C.OPCODE_ISRACE, C.OPCODE_ISATTRIBUTE, C.OPCODE_ISSETCARD}
+_BINARY_OPS = {C.OPCODE_ADD, C.OPCODE_SUB, C.OPCODE_MUL, C.OPCODE_DIV, C.OPCODE_AND, C.OPCODE_OR,
+               C.OPCODE_BAND, C.OPCODE_BOR, C.OPCODE_BXOR, C.OPCODE_LSHIFT, C.OPCODE_RSHIFT}
+_FLAG_OPS = {C.OPCODE_ALLOW_ALIASES, C.OPCODE_ALLOW_TOKENS}
+_COMMUTATIVE = {C.OPCODE_AND, C.OPCODE_OR}
+
+
+def canonical_opcodes(values: list[int]) -> list[int]:
+    """An equivalent ANNOUNCE_CARD filter in canonical form (unchanged if it is
+    not a well formed program)."""
+    stack: list[tuple] = []  # expression trees: (op, operands...) or (value,)
+    flags = []
+    for op in values:
+        if op in _FLAG_OPS:
+            flags.append(op)
+        elif op in _BINARY_OPS:
+            if len(stack) < 2:
+                return values
+            b, a = stack.pop(), stack.pop()
+            if op in _COMMUTATIVE:
+                operands = [x for e in (a, b) for x in (e[1:] if e[0] == op and len(e) > 2 else (e,))]
+                stack.append((op, *sorted(operands)))
+            else:
+                stack.append((op, a, b))
+        elif op in _UNARY_OPS:
+            if not stack:
+                return values
+            stack.append((op, stack.pop()))
+        else:  # (a constant or a GET operator)
+            stack.append((op,))
+    if len(stack) != 1:
+        return values
+    out: list[int] = []
+
+    def emit(e: tuple) -> None:
+        op, *operands = e
+        if not operands:
+            out.append(op)
+        elif op in _COMMUTATIVE:
+            emit(operands[0])
+            for x in operands[1:]:
+                emit(x)
+                out.append(op)
+        else:
+            for x in operands:
+                emit(x)
+            out.append(op)
+    emit(stack[0])
+    return out + sorted(set(flags))
+
+
+# Multi-card listings: the viewer gets them sorted by location (the patched core
+# lists them in location order too; this keeps the order independent of it).
 _LISTINGS = {"CONFIRM_CARDS", "RANDOM_SELECTED", "CARD_SELECTED", "BECOME_TARGET", "REMOVE_CARDS"}
 
 

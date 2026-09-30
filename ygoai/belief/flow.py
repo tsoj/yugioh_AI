@@ -23,8 +23,8 @@ model has a few thousand integer variables, which HiGHS
 
 The solution is turned into concrete assignments: codes per slot, a matching of
 claims to members per pool (respecting which physical copy a card hint showed),
-wildcards filled by the deck completion, and copy ranks from the creation order
-constraints (see Solver._relabel).
+wildcards filled by the deck completion, and copy ranks (which physical card
+each atom is).
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ class FlowSolver:
         self.t = tracker
         self.completion = completion
         self.db = card_db
-        self._legacy = Solver(tracker, completion, card_db)  # helpers (_relabel, _known)
+        self._legacy = Solver(tracker, completion, card_db)  # helpers (_known, finish)
 
     # -- helpers ------------------------------------------------------------------
     def _base(self, code: int) -> int:
@@ -213,23 +213,6 @@ class FlowSolver:
                 linked.add(v.id)
             if v.allowed is not None and len(v.allowed) <= _MAX_UNTAGGED_ALLOWED:
                 linked.update(a for a in v.allowed if a in byid)
-        # creation order constraints between cards of one player: cards are
-        # created sorted by code (game.setup_duel), so a card created earlier
-        # has a code that sorts no later (the order among copies is left to
-        # Solver._relabel)
-        ordered: list[tuple[Var, Var]] = []
-        for va, vb in t.rank_constraints:
-            if va.kind == "created" or vb.kind == "created" or va is vb:
-                continue
-            if known_code(va) is not None and known_code(vb) is not None:
-                continue  # nothing to decide
-            oa, ob = owners.get(va.id), owners.get(vb.id)
-            if oa is None or len(oa) != 1 or oa != ob:
-                continue
-            if (va.kind == "claim" and va.pool is None) or (vb.kind == "claim" and vb.pool is None):
-                continue
-            ordered.append((va, vb))
-            linked.update((va.id, vb.id))
         edges: dict[tuple, list[Var]] = defaultdict(list)
         for v in t.all_vars:
             if v.kind == "claim" and v.pool is None:
@@ -372,19 +355,6 @@ class FlowSolver:
                             terms.append((mine[k], 1.0))
                         add_row(terms, -np.inf, 0)
                     add_row([(mine[k], 1.0) for k in ts if k in mine], 1, 1)
-        def sort_key(k: int):
-            code = code_of(k)
-            return None if isinstance(code, str) else (self._is_extra(code), code)
-        for va, vb in ordered:
-            ca, cb = var_cols(va), var_cols(vb)
-            kb = sorted(((sort_key(k), j) for k, j in cb.items() if sort_key(k) is not None))
-            for k, j in ca.items():
-                key = sort_key(k)
-                if key is None:
-                    continue
-                below = [(jj, 1.0) for kk, jj in kb if kk < key]
-                if below:
-                    add_row([(j, 1.0)] + below, -np.inf, 1)
         a = coo_matrix((vals, (rows, colsi)), shape=(r, ncol)).tocsr()
         res = milp(c=np.array(cost), constraints=LinearConstraint(a, np.array(rlo), np.array(rhi)),
                    integrality=np.ones(ncol), bounds=Bounds(np.array(lo), np.array(hi)),
@@ -426,51 +396,6 @@ class FlowSolver:
             v = v.assigned if v.kind == "claim" else None
         return False
 
-    def _rank_atoms(self) -> list[tuple[Var, Var]]:
-        """Hard creation order constraints as pairs of atoms (after claim matching)."""
-        def atom(v: Var) -> Var | None:
-            while v is not None and v.kind not in ("main", "extra", "created"):
-                v = v.assigned
-            return v if v is not None and v.kind != "created" else None
-        out = []
-        for va, vb in self.t.rank_constraints:
-            a, b = atom(va), atom(vb)
-            if a is not None and b is not None and a is not b and a.owner == b.owner and a.kind == b.kind:
-                out.append((a, b))
-        return out
-
-    def _order_bounds(self, typed: list[Var]) -> tuple[dict, dict]:
-        """atom id -> atoms that must sort no later / no earlier."""
-        lower: dict[int, list[Var]] = defaultdict(list)
-        upper: dict[int, list[Var]] = defaultdict(list)
-        for a, b in self._rank_atoms():
-            lower[b.id].append(a)
-            upper[a.id].append(b)
-        return lower, upper
-
-    def _order_first(self, typed: list[Var]) -> list[Var]:
-        """`typed` with every card after the ones that must sort before it."""
-        ids = {a.id for a in typed}
-        before: dict[int, set[int]] = defaultdict(set)
-        for a, b in self._rank_atoms():
-            if a.id in ids and b.id in ids:
-                before[b.id].add(a.id)
-        out, done = [], set()
-        pending = list(typed)
-        while pending:
-            rest = []
-            for a in pending:
-                if before[a.id] <= done:
-                    out.append(a)
-                    done.add(a.id)
-                else:
-                    rest.append(a)
-            if len(rest) == len(pending):  # (a cycle: keep the order)
-                out += rest
-                break
-            pending = rest
-        return out
-
     # -- from commodities to a hypothesis ----------------------------------------------
     def _realize(self, vcom: dict[int, int], commodities: list[tuple]) -> Hypothesis:
         t = self.t
@@ -479,10 +404,15 @@ class FlowSolver:
             free: dict[int, list[Var]] = defaultdict(list)
             for m in pool.members:
                 free[vcom[m.id]].append(m)
-            claims = sorted(pool.claims, key=lambda c: (c.same_as is None, c.allowed is None, not c.not_same))
+            claims = sorted(pool.claims, key=lambda c: (c.same_as is None, c.allowed is None, not c.not_same,
+                                                        not c.prefer))
             for c in claims:
                 available = free[vcom[c.id]]
                 cands = available
+                if c.prefer:
+                    # prefer members that are one of these physical cards
+                    ok = [m for m in available if any(self._descends(m, x) for x in c.prefer)]
+                    cands = ok + [m for m in available if m not in ok]
                 if c.not_same:
                     # prefer members that are none of these physical cards
                     ok = [m for m in available if not any(self._descends(m, x) for x in c.not_same)]
@@ -516,20 +446,13 @@ class FlowSolver:
             unknown += len(wild)
             counts = Counter(self._base(a.resolved) for a in atoms if a.resolved is not None)
             typed = [a for a in wild if commodities[vcom[a.id]][1] not in (WILD_MAIN, WILD_EXTRA)]
-            lower, upper = self._order_bounds(typed)
-            for a in self._order_first(typed):
+            for a in typed:
                 need = _wild_need(commodities[vcom[a.id]][1])
                 cands = [c for c in comp.stand_ins(need) if counts[self._base(c)] < 3]
                 if not cands:
                     raise TrackerError(f"no stand-in for a hidden card of kind {need}")
-                # respect the creation order constraints where possible (cards are
-                # created sorted by code): the smallest code above the earlier ones
-                lo = max((b.resolved for b in lower.get(a.id, ()) if b.resolved is not None), default=0)
-                hi = min((b.resolved for b in upper.get(a.id, ()) if b.resolved is not None), default=1 << 40)
-                fitting = [c for c in cands if lo <= c <= hi]
-                code = min(fitting) if fitting else cands[0]
-                a.resolved = code
-                counts[self._base(code)] += 1
+                a.resolved = cands[0]
+                counts[self._base(cands[0])] += 1
             plain = [a for a in wild if a.resolved is None]
             if plain:
                 known_main = [a.resolved for a in atoms if a.kind == "main" and a.resolved is not None]
@@ -542,14 +465,6 @@ class FlowSolver:
                 it_main, it_extra = iter(fill_main), iter(fill_extra)
                 for a in plain:
                     a.resolved = next(it_main) if a.kind == "main" else next(it_extra)
-                # the filler codes are interchangeable: hand them out along the
-                # creation order constraints (cards are created sorted by code)
-                ranked = {x.id for pair in self._rank_atoms() for x in pair}
-                for kind in ("main", "extra"):
-                    group = [a for a in plain if a.kind == kind and a.id in ranked]
-                    codes = sorted(a.resolved for a in group)
-                    for a, code in zip(self._order_first(group), codes):
-                        a.resolved = code
         for v in t.all_vars:
             if v.kind == "created" and v.resolved is None:
                 key = commodities[vcom[v.id]][1] if v.id in vcom else None

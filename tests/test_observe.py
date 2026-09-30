@@ -3,7 +3,7 @@
 import unittest
 
 from ygoai import constants as C
-from ygoai.observe import filter_message, filter_prompt, is_hidden_prompt, to_core_response
+from ygoai.observe import canonical_opcodes, filter_message, filter_prompt, is_hidden_prompt, to_core_response
 
 X = 12345678
 
@@ -143,6 +143,18 @@ class FilterTest(unittest.TestCase):
         s = {"type": "SELECT_CARD", "player": 0, "cancelable": 0, "min": 1, "max": 2, "cards": [a, h, b]}
         self.assertEqual([c["seq"] for c in filter_prompt(s, 0)["cards"]], [0, 1, 15])
         self.assertEqual(to_core_response(s, 0, {"indices": [0, 2]}), {"indices": [1, 0]})
+
+    def test_announce_order_is_canonical(self):
+        # (terms of a declarable-name filter in two orders, e.g. from a deck)
+        iscode, or_, and_ = C.OPCODE_ISCODE, C.OPCODE_OR, C.OPCODE_AND
+        a = [5, iscode, 3, iscode, or_, 9, iscode, or_, C.TYPE_MONSTER, C.OPCODE_ISTYPE, and_]
+        b = [C.TYPE_MONSTER, C.OPCODE_ISTYPE, 9, iscode, 3, iscode, 5, iscode, or_, or_, and_]
+        pa, pb = ({"type": "ANNOUNCE_CARD", "player": 0, "values": v} for v in (a, b))
+        self.assertEqual(filter_prompt(pa, 0), filter_prompt(pb, 0))
+        self.assertEqual(canonical_opcodes([1, or_]), [1, or_])  # (malformed: unchanged)
+        n = {"type": "ANNOUNCE_NUMBER", "player": 0, "values": [4, 2, 8]}
+        self.assertEqual(filter_prompt(n, 0)["values"], [2, 4, 8])
+        self.assertEqual(to_core_response(n, 0, {"index": 0}), {"index": 1})
 
     def test_unknown_message_raises(self):
         with self.assertRaises(KeyError):

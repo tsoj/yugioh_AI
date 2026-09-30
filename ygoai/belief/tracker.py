@@ -36,8 +36,8 @@ class TrackerError(RuntimeError):
 
 class Var:
     __slots__ = ("id", "owner", "code", "pool", "assigned", "kind", "faceup", "overlays",
-                 "fixed_code", "resolved", "excluded", "need", "arrival", "marks", "allowed", "same_as",
-                 "not_same")
+                 "fixed_code", "resolved", "excluded", "need", "marks", "allowed", "same_as",
+                 "not_same", "prefer")
 
     def __init__(self, vid: int, owner: int, kind: str, fixed_code: int | None = None):
         self.id = vid
@@ -52,14 +52,13 @@ class Var:
         self.resolved: int | None = None  # final code after solve()
         self.excluded: frozenset = frozenset()  # codes this card is known not to have
         self.need: tuple | None = None  # the kind it must have (see completion.fits_need)
-        # when the card last arrived somewhere (a batch number; 0 = since the duel
-        # was created, None = unknown): the core renumbers a card's effects when it
-        # arrives, and cards arriving together in creation order
-        self.arrival: int | None = 0 if kind in ("main", "extra") else None
         self.marks: frozenset = frozenset()  # card hints on this physical card
         self.allowed: frozenset | None = None  # claim: ids of the members it can be
         self.same_as: Var | None = None  # claim: an earlier slot that held the same physical card
         self.not_same: list = []  # claim: earlier slots whose physical card this is not
+        # claim: earlier slots whose physical card this preferably is (copies that
+        # nothing tells apart are interchangeable; see Tracker._referenced)
+        self.prefer: list = []
 
     def __repr__(self) -> str:
         return f"Var({self.id},{self.kind},code={self.code},fixed={self.fixed_code})"
@@ -112,17 +111,15 @@ class Tracker:
         self.needs: list[Var] = []  # hidden cards whose kind shows (e.g. Set as a spell/trap)
         # (a, b): a is an earlier created copy than b (only meaningful for copies of
         # the same card; the core lists and processes such copies in creation order)
-        self.rank_constraints: list[tuple[Var, Var]] = []
-        self.soft_rank_constraints: list[tuple[Var, Var]] = []
-        self._target_run: list[Var] = []  # cards of consecutive BECOME_TARGET messages
-        self._counter_run: list = []  # [counter type, vars, positions] of consecutive ADD_COUNTERs
-        self._batch: dict | None = None  # consecutive moves of one kind (see _flush_batch)
         self._resolving = False  # between CHAIN_SOLVING and CHAIN_SOLVED
         self._last_prompt: dict | None = None
         self._chosen: tuple | None = None  # (var, con, code): the viewer's command's hand card
         self._resent_hints = False  # right after a shuffle (see _card_hint)
-        self._stamp = 0  # arrival batch counter (see Var.arrival)
         self._confirmed: list[Var] = []  # the cards of the latest CONFIRM_* message
+        # cards revealed in the current resolution: a script that reveals cards,
+        # shuffles them back and then moves cards of the same names moves the same
+        # physical cards as far as anything shows (it keeps them in a group)
+        self._referenced: list[Var] = []
         self._chain: list[Var | None] = []  # the card of each chain link, by the time it chained
         self._chain_from_hand: list[bool] = []
         self._left_hand: list[Var] = []  # cards that left a hand while the current link resolves
@@ -135,7 +132,8 @@ class Tracker:
         for p in (0, 1):
             if p == viewer:
                 main_atoms = [self._new(p, "main", code) for code in sorted(own["main"])]
-                extra_atoms = [self._new(p, "extra", code) for code in sorted(own["extra"])]
+                extra_atoms = [self._new(p, "extra", code)
+                               for code in init.get("extra_order") or sorted(own["extra"])]
             else:
                 main_atoms = [self._new(p, "main") for _ in range(opp_main)]
                 extra_atoms = [self._new(p, "extra") for _ in range(opp_extra)]
@@ -165,11 +163,8 @@ class Tracker:
             c.faceup = m.faceup
             claims.append(c)
         pool = Pool(len(self.pools), player, location, list(members), list(claims))
-        stamps = {m.arrival for m in members}
-        arrival = stamps.pop() if len(stamps) == 1 else None
         for c in claims:
             c.pool = pool
-            c.arrival = arrival
         self.pools.append(pool)
         return pool
 
@@ -236,14 +231,11 @@ class Tracker:
             if v is None:
                 raise TrackerError(f"empty zone at {li}")
             self.zones[con][loc][seq] = None
-            v.arrival = self._stamp
             return v
         lst = self.lists[con][loc]
         if seq >= len(lst):
             raise TrackerError(f"no card to take at {li} (size {len(lst)})")
-        v = lst.pop(seq)
-        v.arrival = self._stamp
-        return v
+        return lst.pop(seq)
 
     def _put(self, v: Var, li: dict) -> None:
         con, loc, seq = li["con"], li["loc"], li["seq"]
@@ -343,72 +335,6 @@ class Tracker:
                 v.allowed = carriers if v.allowed is None else v.allowed & carriers
         v.marks = v.marks | {mark}
 
-    def _origins(self, v: Var, seen: set | None = None) -> list[Var]:
-        """The earlier slots (with a known arrival) whose card `v` can be."""
-        if v.arrival is not None:
-            return [v]
-        if v.kind != "claim" or v.pool is None:
-            return []
-        seen = set() if seen is None else seen
-        if v.pool.index in seen:
-            return []
-        seen.add(v.pool.index)
-        out: list[Var] = []
-        for m in v.pool.members:
-            for o in self._origins(m, seen):
-                if o not in out:
-                    out.append(o)
-        return out
-
-    def _rank_run(self, vars_: list[Var | None], soft: bool = False) -> None:
-        """Cards listed in creation order: every earlier one was created first.
-        Soft: probably in creation order (used where it does not contradict)."""
-        vs = [v for v in vars_ if v is not None]
-        target = self.soft_rank_constraints if soft else self.rank_constraints
-        for i in range(len(vs)):
-            for j in range(i + 1, len(vs)):
-                if vs[i] is not vs[j]:
-                    target.append((vs[i], vs[j]))
-
-    def _start_pos(self, con: int, loc: int, v: Var) -> tuple | None:
-        """Where `v` was when the current move batch started."""
-        key = (con, loc)
-        snap = self._batch["snap"]
-        if key not in snap:
-            snap[key] = list(self.zones[con][loc]) if loc in ZONE_LOCS else list(self.lists[con][loc])
-        try:
-            return (con, loc, snap[key].index(v))
-        except ValueError:
-            return None
-
-    def _flush_counters(self) -> None:
-        run, self._counter_run = self._counter_run, []
-        if run and len(run[1]) > 1:
-            self._rank_run(run[1], soft=run[2] == sorted(run[2]))
-
-    def _flush_batch(self) -> None:
-        """Several cards moved one after another in the same way. The core moves
-        the cards of one operation sorted by location (card_operation_sort); if
-        the order is anything else, a script moved them one by one while
-        iterating a group, and groups go by creation order."""
-        b, self._batch = self._batch, None
-        if b is None or len(b["vars"]) < 2 or None in b["pos"]:
-            return
-        _, to_con, to_loc = b["key"]
-        if all(p[0] == to_con and p[1] == to_loc for p in b["pos"]):
-            return  # cards reordered within their pile: in the order the player chose
-        tp = self.turn_player
-
-        def key(pos):
-            con, loc, seq = pos
-            ctl = con if tp == 0 else -con
-            return (ctl, loc, -seq if loc in (C.LOCATION_DECK, C.LOCATION_EXTRA, C.LOCATION_GRAVE,
-                                             C.LOCATION_REMOVED) else seq)
-        keys = [key(p) for p in b["pos"]]
-        # in location order it may be either (e.g. Duel.Overlay(c, g, true) does
-        # not sort): then only a soft constraint
-        self._rank_run(b["vars"], soft=keys == sorted(keys))
-
     def message(self, m: dict) -> None:
         t = m["type"]
         if t not in ("HINT", "CARD_HINT", "CHAIN_SOLVED"):
@@ -425,19 +351,10 @@ class Tracker:
                         v.not_same.append(var)
         if t == "NEW_TURN":
             self.turn_player = m["player"]
+        if t in ("CHAIN_SOLVED", "CHAIN_END", "NEW_PHASE", "NEW_TURN"):
+            self._referenced = []
         if t == "MOVE" and m["from"]["loc"] and not m["from"]["loc"] & C.LOCATION_OVERLAY:
             frm, to = m["from"], m["to"]
-            # (a card set to the spell/trap zone keeps the reason of its previous
-            # move: move_to_field does not set one)
-            stale = to["loc"] == C.LOCATION_SZONE and to["pos"] & C.POS_FACEDOWN
-            bkey = (0 if stale else m.get("reason", 0), to["con"], to["loc"])
-            if self._batch is not None and self._batch["key"] != bkey:
-                self._flush_batch()
-            if self._batch is None:
-                self._batch = {"key": bkey, "vars": [], "pos": [], "snap": {}}
-                # cards moved by one operation have their effects enabled together, in
-            # creation order (SendTo iterates its target set after all moves)
-            self._stamp += 1
             v = self._plain_var(frm["con"], frm["loc"], frm["seq"])
             if frm["loc"] == C.LOCATION_HAND and v is not None:
                 self._left_hand.append(v)
@@ -445,12 +362,6 @@ class Tracker:
                         and to["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE):
                     self._identify(v, self._chosen[0])
                     self._chosen = None
-            self._batch["vars"].append(v)
-            self._batch["pos"].append(self._start_pos(frm["con"], frm["loc"], v) if v is not None else None)
-        elif self._batch is not None and not (t == "SET" and self._resolving):
-            # (a group SSet announces each card right after its move; Sets by
-            # separate commands look alike, but happen outside chain links)
-            self._flush_batch()
         if t not in ("CONFIRM_CARDS", "CONFIRM_DECKTOP", "CONFIRM_EXTRATOP", "SHUFFLE_DECK", "SHUFFLE_HAND",
                      "SHUFFLE_EXTRA", "HINT", "CARD_HINT", "RANDOM_SELECTED"):
             self._confirmed = []  # only "reveal, shuffle back, pick one at random" counts
@@ -461,27 +372,6 @@ class Tracker:
             self._resent_hints = True
         else:
             self._resent_hints = False
-        if t == "BECOME_TARGET":
-            # targets are announced group by group, and groups go by creation order
-            new = [self.var_at(c["con"], c["loc"], c["seq"], c.get("pos", 0)) for c in m["cards"]]
-            self._rank_run(self._target_run + new)
-            self._target_run = self._target_run + [v for v in new if v is not None]
-        else:
-            self._target_run = []
-        if t in ("ADD_COUNTER", "REMOVE_COUNTER") and m["loc"] in ZONE_LOCS:
-            # a script adding counters to a group goes by creation order (in
-            # location order it may as well be one card after the other: soft)
-            v = self.var_at(m["con"], m["loc"], m["seq"])
-            run = self._counter_run
-            if run and run[0] == (t, m["counter_type"]):
-                run[1].append(v)
-                run[2].append((m["con"] if self.turn_player == 0 else -m["con"], m["loc"], m["seq"]))
-            else:
-                self._flush_counters()
-                self._counter_run = [(t, m["counter_type"]), [v], [(m["con"] if self.turn_player == 0 else -m["con"],
-                                                               m["loc"], m["seq"])]]
-        elif self._counter_run and t not in ("HINT", "CARD_HINT"):
-            self._flush_counters()
         if t == "MOVE" and m.get("reason", 0) & C.REASON_RELEASE:
             self._releases += 1
         elif t not in ("MOVE", "HINT", "CARD_HINT", "SET", "SPSUMMONING"):
@@ -500,15 +390,10 @@ class Tracker:
             if frm["loc"] == 0:
                 v = self._new(to["con"], "created")
             else:
-                before = self._plain_var(frm["con"], frm["loc"], frm["seq"]) if not frm["loc"] & C.LOCATION_OVERLAY else None
-                prev = before.arrival if before is not None else None
                 v = self._take(frm)
-                if to["loc"] == C.LOCATION_SZONE and not to["pos"] & C.POS_FACEUP:
-                    # a card Set face-down in the spell/trap zone does not have its
-                    # effects enabled (the ids stay those from before)
-                    v.arrival = prev
-                elif to["loc"] == C.LOCATION_MZONE and not to["pos"] & C.POS_FACEUP:
-                    v.arrival = None  # (not verified: unknown)
+                if v.kind == "claim" and v.pool is not None and self._referenced and not v.prefer:
+                    # (the first move out of the shuffled pile)
+                    v.prefer = [x for x in self._referenced if x is not v]
             if to["loc"]:
                 self._put(v, to)
             self.observe(v, m["code"])
@@ -519,9 +404,6 @@ class Tracker:
                 if not deck:
                     raise TrackerError("draw from empty deck")
                 v = deck.pop()
-                # a drawn card's effects are enabled right away, in draw order
-                self._stamp += 1
-                v.arrival = self._stamp
                 v.faceup = bool(c["pos"] & C.POS_FACEUP)
                 self.lists[p][C.LOCATION_HAND].append(v)
                 self.observe(v, c["code"])
@@ -556,9 +438,6 @@ class Tracker:
         elif t in ("SUMMONING", "SPSUMMONING", "FLIPSUMMONING", "SET"):
             v = self.var_at(m["con"], m["loc"], m["seq"], m["pos"])
             self.observe(v, m["code"])
-            if t == "FLIPSUMMONING" and v is not None:
-                self._stamp += 1  # FlipSummon enables the effects right away
-                v.arrival = self._stamp
         elif t == "CHAINING":
             v = self.var_at(m["con"], m["loc"], m["seq"], m["pos"])
             self.observe(v, m["code"])
@@ -590,10 +469,6 @@ class Tracker:
             v = self.var_at(m["con"], m["loc"], m["seq"])
             if v is not None:
                 v.faceup = bool(m["pos"] & C.POS_FACEUP)
-                if not m["prev_pos"] & C.POS_FACEUP and m["pos"] & C.POS_FACEUP:
-                    # flipped face-up: the effects are enabled now or at the end of
-                    # the chain link (ChangePos / delayed_enable_set): unknown order
-                    v.arrival = None
             self.observe(v, m["code"])
         elif t in ("CONFIRM_CARDS", "CONFIRM_DECKTOP", "CONFIRM_EXTRATOP"):
             self._confirmed = []
@@ -601,6 +476,7 @@ class Tracker:
                 v = self.var_at(c["con"], c["loc"], c["seq"])
                 if v is not None:
                     self._confirmed.append(v)
+                    self._referenced.append(v)
                 if c["code"]:
                     self.observe(v, c["code"])
         elif t == "RANDOM_SELECTED":
@@ -664,13 +540,10 @@ class Tracker:
                 to_extra.append(v)
             else:
                 new_deck.append(v)
-        self._stamp += 1
         for v in deck:
             v.faceup = True
-            v.arrival = self._stamp
         for v in new_deck + to_extra:
             v.faceup = False
-            v.arrival = self._stamp
         self.lists[p][C.LOCATION_GRAVE] = deck
         self.lists[p][C.LOCATION_DECK] = new_deck
         extra = self.lists[p][C.LOCATION_EXTRA]
@@ -710,9 +583,7 @@ class Tracker:
                         v.allowed = ids if v.allowed is None else (v.allowed & ids) or v.allowed
         if p["type"] in ("SELECT_IDLECMD", "SELECT_BATTLECMD"):
             self._chosen = None
-        self._flush_batch()
         self._releases = 0
-        self._target_run = []
         # (option lists are shown in a canonical order: their order carries no
         # information, see observe.option_order)
         for key in ("summonable", "spsummonable", "repositionable", "msetable", "ssetable",
@@ -786,7 +657,6 @@ class Tracker:
 
     # -- solving -------------------------------------------------------------
     def solve(self, completion=None, card_db=None) -> Hypothesis:
-        self._flush_counters()
         from .flow import FlowSolver
         return FlowSolver(self, completion, card_db).solve()
 
@@ -1078,14 +948,12 @@ class Solver:
                 raise TrackerError(f"unresolved {v}")
             return k
 
-        perm = self._relabel()
-
         def atom(v: Var) -> Var | None:
             while v is not None and v.kind not in ("main", "extra", "created"):
                 v = v.assigned
             if v is None or v.kind == "created":
                 return None
-            return perm.get(v.id, v)
+            return v
 
         ranks: dict[int, int] = {}
         for p in (0, 1):
@@ -1119,7 +987,7 @@ class Solver:
             deck_orders.append([final(c) for c in t.initial_pools[self._initial_index(p, C.LOCATION_DECK)].claims])
             ei = self._initial_index(p, C.LOCATION_EXTRA)
             if ei is None:
-                extra_orders.append(sorted(extra))
+                extra_orders.append(extra)  # (the viewer's own extra deck, in its order)
             else:
                 extra_orders.append([final(c) for c in t.initial_pools[ei].claims])
         shuffles = [{"player": pool.player, "location": pool.location,
@@ -1135,73 +1003,6 @@ class Solver:
                           var_codes=var_codes, pinned=set(self.pinned),
                           observed={v.id for v, _ in t.observations},
                           deck_ranks=deck_ranks, extra_ranks=extra_ranks)
-
-    def _relabel(self) -> dict[int, Var]:
-        """Which physical copy follows which path: copies of a card are
-        interchangeable for every code-level observation, so their roles can be
-        permuted freely to satisfy the creation order constraints. Returns
-        atom id -> the atom (copy) that takes over its path."""
-        def atom(v: Var) -> Var | None:
-            while v is not None and v.kind not in ("main", "extra", "created"):
-                v = v.assigned
-            return v if v is not None and v.kind != "created" else None
-
-        edges: dict[tuple, set] = {}
-        soft: dict[tuple, list] = {}
-        for pairs, into in ((self.t.rank_constraints, None), (self.t.soft_rank_constraints, soft)):
-            for va, vb in pairs:
-                a, b = atom(va), atom(vb)
-                if a is None or b is None or a is b or a.owner != b.owner or a.kind != b.kind:
-                    continue
-                if self._known(a) != self._known(b):
-                    continue
-                group = (a.owner, a.kind, self._known(a))
-                if into is None:
-                    edges.setdefault(group, set()).add((a.id, b.id))
-                else:
-                    into.setdefault(group, []).append((a.id, b.id))
-
-        def reaches(es: set, x: int, y: int) -> bool:
-            todo, seen = [x], set()
-            while todo:
-                z = todo.pop()
-                if z == y:
-                    return True
-                if z in seen:
-                    continue
-                seen.add(z)
-                todo.extend(b for a, b in es if a == z)
-            return False
-        for group, pairs in soft.items():
-            es = edges.setdefault(group, set())
-            for a, b in pairs:
-                if (a, b) not in es and not reaches(es, b, a):
-                    es.add((a, b))
-        perm: dict[int, Var] = {}
-        for (owner, kind, code), es in edges.items():
-            group = [a for a in self.t.atoms[owner] if a.kind == kind and self._known(a) == code]
-            index = {a.id: i for i, a in enumerate(group)}
-            succ: dict[int, list[int]] = {a.id: [] for a in group}
-            indeg = {a.id: 0 for a in group}
-            for x, y in es:
-                if x in index and y in index:
-                    succ[x].append(y)
-                    indeg[y] += 1
-            order = []
-            ready = sorted((a.id for a in group if indeg[a.id] == 0), key=index.get)
-            while ready:
-                x = ready.pop(0)
-                order.append(x)
-                for y in succ[x]:
-                    indeg[y] -= 1
-                    if indeg[y] == 0:
-                        ready.append(y)
-                        ready.sort(key=index.get)
-            if len(order) != len(group):
-                continue  # contradictory: keep the solver's labels
-            for i, x in enumerate(order):
-                perm[x] = group[i]
-        return perm
 
     def _match_claims(self, claims: list[Var], members: list[Var]) -> list[Var]:
         """Members for the claims in order, respecting excluded codes and allowed

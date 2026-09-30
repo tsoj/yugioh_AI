@@ -75,6 +75,7 @@ _NOTHING_MORE = frozenset(("CHAIN_SOLVED", "CHAIN_END", "PLAYER_HINT", "NEW_PHAS
 UNORDERED_HINTS = ("PLAYER_HINT", "CARD_HINT")
 _SHUFFLE_LOCS = {"SHUFFLE_HAND": C.LOCATION_HAND, "SHUFFLE_DECK": C.LOCATION_DECK,
                  "SHUFFLE_EXTRA": C.LOCATION_EXTRA}
+REVEALED = "revealed"  # identity: one of the cards revealed before the shuffle (see _revealed_fix)
 CARD_PROMPTS = ("SELECT_CARD", "SELECT_UNSELECT_CARD", "SELECT_TRIBUTE", "SELECT_SUM")
 
 
@@ -139,8 +140,11 @@ class BeliefReplay:
                  completion: DeckCompletion | None = None, check_state: bool = True,
                  max_probes: int = 24, probe_items: int = 60, max_depth: int = 4,
                  max_restarts: int = 40, probe_timeout: int = 20, max_stall: int = 300,
-                 min_progress: int = 4):
+                 min_progress: int = 4, stopped: bool = False):
         self.viewer = viewer
+        # the stream is a whole game that the arbiter stopped (turn or decision
+        # limit) at the prompt after its last item
+        self.stopped = stopped
         self.opponent = 1 - viewer
         self.init = init
         self.items = list(items)
@@ -200,10 +204,13 @@ class BeliefReplay:
         # (pos, slot, var id): the card in that slot is the physical card of that
         # (earlier) var, as the replay's scripts showed
         self.identities: list[tuple] = []
+        self.failed_identities: set[tuple] = set()  # identities that made the model infeasible
         self._folded_swaps: set = set()
         self.swaps: dict[int, list[tuple[int, int]]] = {}
         self.matches: dict[int, list[int]] = {}  # control point -> card ids matching all filters
         self.match_piles: set[tuple[int, int]] = set()  # stream positions (from, to): hidden piles match
+        # (start, end, slot): the opponent's hidden card in that slot matches no filter
+        self.nomatch_cards: set[tuple] = set()
         self.nomatch_piles: set[tuple[int, int]] = set()  # ... hidden piles match nothing
         self.snapshot_cps: set[int] = set()
         self.failed_assumptions: set[tuple] = set()
@@ -275,12 +282,23 @@ class BeliefReplay:
                 for seq in seqs:
                     tracker.exclude(tracker.var_at(con, loc, seq), code)
                 j += 1
+            revealed = []
             for pos, (con, loc, seq), same in self.identities:
                 if pos == i:
+                    if same == REVEALED:
+                        revealed.append(tracker.var_at(con, loc, seq))
+                        continue
                     byid = {v.id: v for v in tracker.all_vars}
                     if same in byid:
                         tracker._identify(tracker.var_at(con, loc, seq), byid[same])
             tracker.process(item)
+            for v in revealed:
+                # the card moved from that slot is one of the cards revealed before
+                # the shuffle (the tracker's preference, made a constraint)
+                if v is not None and v.kind == "claim" and v.pool is not None and v.prefer:
+                    ids = frozenset(m.id for m in v.pool.members if any(m is x for x in v.prefer))
+                    if ids:
+                        v.allowed = ids if v.allowed is None else (v.allowed & ids) or v.allowed
         self.hypothesis = tracker.solve(self.completion, self.db)
         self._solved = tracker
         return self.hypothesis
@@ -381,8 +399,10 @@ class BeliefReplay:
                 try:
                     self.build_hypothesis()
                 except TrackerError as te:
-                    if self.identities and self._last_hyp_fix == "identify":
-                        self.identities.pop()
+                    if self.identities and self._last_hyp_fix in ("identify", "identify_all"):
+                        n = self._last_identify_count if self._last_hyp_fix == "identify_all" else 1
+                        for _ in range(n):
+                            self.failed_identities.add(self.identities.pop())
                         self._last_hyp_fix = None
                         if self.log:
                             self.log(f"restart {self.stats.restarts}: hypothesis failed ({te}) -> drop identity")
@@ -555,6 +575,13 @@ class BeliefReplay:
                                      for x, y in self.swaps[later]]
             self.stats.swaps += 1
             return True
+        if kind == "identify_all":
+            self.identities.extend(fix[1:])
+            self.hypothesis = None
+            self._last_hyp_fix = "identify_all"
+            self._last_identify_count = len(fix) - 1
+            self.stats.assumptions += 1
+            return True
         if kind == "identify":
             entry = fix[1:]
             if entry in self.identities:
@@ -562,6 +589,13 @@ class BeliefReplay:
             self.identities.append(entry)
             self.hypothesis = None  # (rebuilt with the new constraint)
             self._last_hyp_fix = "identify"
+            self.stats.assumptions += 1
+            return True
+        if kind == "nomatchcard":
+            entry = fix[1:]
+            if entry in self.nomatch_cards:
+                return False
+            self.nomatch_cards.add(entry)
             self.stats.assumptions += 1
             return True
         if kind == "nomatchpile":
@@ -637,9 +671,17 @@ class BeliefReplay:
                 forced_match = list(forced_match or ()) + self._hidden_ids(duel)
             if forced_match:
                 duel.set_forced_match(forced_match)
-            nomatch = any(a <= cp[0] <= b for a, b in self.nomatch_piles)
+            nomatch = self._hidden_ids(duel) if any(a <= cp[0] <= b for a, b in self.nomatch_piles) else []
+            if self.nomatch_cards:
+                lm = None
+                for a, b, slot in self.nomatch_cards:
+                    if a <= cp[0] <= b:
+                        lm = lm or infer.LocMap(duel)
+                        cid = lm.at({"con": slot[0], "loc": slot[1], "seq": slot[2]})
+                        if cid:
+                            nomatch.append(cid)
             if nomatch:
-                duel.set_forced_nomatch(self._hidden_ids(duel))
+                duel.set_forced_nomatch(nomatch)
             answered, answered_resp = pending, pending_resp  # (the response this step processes)
             status = duel.process()
             if nomatch:
@@ -728,6 +770,8 @@ class BeliefReplay:
                 duel.set_response(encode(prompt, AUTO_RESPONSE))
                 pending, pending_resp = prompt, AUTO_RESPONSE
                 continue
+            if self.stopped and self.depth == 0 and self.pos >= len(self.items):
+                return
             if prompt["player"] == self.viewer:
                 if self.pos >= len(self.items):
                     if self.depth > 0:
@@ -845,6 +889,14 @@ class BeliefReplay:
                         elif e["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE):
                             fix = self._field_order_fix(cp, msgs, idx, e, g)
                     break
+            if fix is None and exp["type"] == got["type"] == "MOVE" and not exp.get("code") \
+                    and exp["from"]["con"] == got["from"]["con"] and exp["from"]["loc"] == got["from"]["loc"] \
+                    and exp["from"]["seq"] != got["from"]["seq"] and exp["from"]["loc"] in HIDDEN_PILES \
+                    and exp["to"] == got["to"]:
+                # a hidden card moved from elsewhere in the pile: the replay's script
+                # moved specific physical cards (e.g. ones it revealed and shuffled
+                # back), and in the real game the card at that slot is one of them
+                fix = self._revealed_fix(exp["from"])
             if fix is None and exp["type"] == got["type"] and exp.get("code") == got.get("code"):
                 le, lg = _loc_of(exp), _loc_of(got)
                 if (le is not None and lg is not None and le["con"] == lg["con"]
@@ -863,6 +915,14 @@ class BeliefReplay:
                         and le["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE)):
                     # copies on the field processed in the wrong order
                     fix = self._field_order_fix(cp, msgs, idx, le, lg)
+            if fix is None and exp["type"] == got["type"] == "MOVE" and got["from"]["con"] == self.opponent \
+                    and exp["from"]["con"] == got["from"]["con"] and exp["from"]["loc"] == got["from"]["loc"] \
+                    and exp["from"]["seq"] != got["from"]["seq"] and got["from"]["loc"] in HIDDEN_PILES \
+                    and exp.get("code") and got.get("code") and exp["code"] != got["code"]:
+                # the replay's operation took one more card, a hidden one the viewer
+                # knows nothing about (e.g. "send all monsters from the hand"): in the
+                # real game it does not fit (a filler card of the wrong kind)
+                fix = self._nomatch_card_fix(got["from"])
             if fix is None and exp["type"] == got["type"] == "MOVE" and exp["from"]["con"] == got["from"]["con"] \
                     and exp["from"]["loc"] == got["from"]["loc"] and exp["from"]["seq"] != got["from"]["seq"] \
                     and exp["from"]["loc"] == C.LOCATION_HAND and exp["to"] == got["to"]:
@@ -937,7 +997,7 @@ class BeliefReplay:
                 # effect found a fitting card among the hidden filler cards that
                 # the real deck does not have): let the hidden cards match nothing
                 start = self._chain_start()
-                span = (start if start is not None else self.pos, self.pos)
+                span = (min(self._link_start(), start if start is not None else self.pos), self.pos)
                 if span not in self.nomatch_piles and span not in self.match_piles:
                     fix = ("nomatchpile", *span)
             if fix is None and exp["type"] == "BECOME_TARGET" and got["type"] != "BECOME_TARGET" \
@@ -1043,6 +1103,40 @@ class BeliefReplay:
             return None
         return self._field_copy_fix(a, b)
 
+    def _nomatch_card_fix(self, slot: dict) -> tuple | None:
+        try:
+            v = self.lockstep.var_at(slot["con"], slot["loc"], slot["seq"])
+        except TrackerError:
+            return None
+        if v is None or v.code is not None or v.fixed_code is not None:
+            return None
+        start = self._chain_start()
+        entry = (start if start is not None else self.pos, self.pos, (slot["con"], slot["loc"], slot["seq"]))
+        return None if entry in self.nomatch_cards else ("nomatchcard", *entry)
+
+    def _revealed_fix(self, le: dict) -> tuple | None:
+        """Every card this operation moves from the pile (the MOVEs from there to
+        the same place that follow) is one of the cards revealed before it was
+        shuffled."""
+        try:
+            v = self.lockstep.var_at(le["con"], le["loc"], le["seq"])
+        except TrackerError:
+            return None
+        if v is None or v.kind != "claim" or not self.lockstep._referenced:
+            return None
+        first = self.items[self.pos][1]
+        entries = []
+        for k, item in enumerate(self.items[self.pos:self.pos + len(self.lockstep._referenced)]):
+            m = item[1]
+            if item[0] != "msg" or m["type"] != "MOVE" or m["to"] != first["to"] \
+                    or (m["from"]["con"], m["from"]["loc"]) != (le["con"], le["loc"]):
+                break
+            entries.append((self.pos + k, (le["con"], le["loc"], m["from"]["seq"]), REVEALED))
+        entries = [e for e in entries if e not in self.identities]
+        if not entries or entries[0] in self.failed_identities:
+            return None
+        return ("identify_all", *entries)
+
     def _identify_fix(self, le: dict, lg: dict) -> tuple | None:
         solved = getattr(self, "_solved", None)
         if solved is None:
@@ -1059,7 +1153,9 @@ class BeliefReplay:
         if member is None:
             return None
         entry = (self.pos, (le["con"], le["loc"], le["seq"]), member.id)
-        return None if entry in self.identities else ("identify", *entry)
+        if entry in self.identities or entry in self.failed_identities:
+            return None
+        return ("identify", *entry)
 
     def _later_copy_fix(self, cp, msgs: list[dict], idx: int, got: dict, duel: Duel) -> tuple | None:
         earlier = []
@@ -1332,6 +1428,17 @@ class BeliefReplay:
         """Upcoming messages, skipping over the viewer's prompts and responses."""
         return [item[1] for item in self.items[self.pos:self.pos + limit] if item[0] == "msg"]
 
+    def _selection_window(self, up: list[dict]) -> list[dict]:
+        """The messages that show what the opponent selected: when the viewer
+        selects cards of its own right after it (e.g. "each player sends 3 cards"),
+        the operation on the selected cards comes after both selections."""
+        if any(m["type"] not in ("HINT", "CARD_HINT") for m in up):
+            return up
+        i = self.pos + len(up)
+        if i >= len(self.items) or self.items[i][0] != "prompt" or self.items[i][1]["type"] not in CARD_PROMPTS:
+            return up
+        return self._upcoming_ext()
+
     @staticmethod
     def _next_activation(up: list[dict]) -> dict | None:
         for i, m in enumerate(up):
@@ -1376,7 +1483,7 @@ class BeliefReplay:
         lm = infer.LocMap(duel)
         lm.plan = []  # (past a shuffle, the moves belong to other selections)
         earlier: list[dict] = []
-        for m in up:
+        for mi, m in enumerate(up):
             if m["type"] in _SELECTION_END:
                 return  # later moves belong to other decisions
             if m["type"] == "CARD_SELECTED":
@@ -1405,7 +1512,11 @@ class BeliefReplay:
                 continue
             if f["con"] != self.opponent or f["loc"] not in HIDDEN_PILES:
                 continue
-            codes = []
+            # (a card revealed in the destination right after, e.g. a searched card
+            # shown after the hand was shuffled, most likely is this one)
+            codes = [c["code"] for x in up[mi + 1:mi + 8] if x["type"] == "CONFIRM_CARDS"
+                     for c in x["cards"] if c["code"] and (c["con"], c["loc"]) == (m["to"]["con"], m["to"]["loc"])]
+            codes = list(dict.fromkeys(codes))
             for c in cards:
                 if c["con"] == f["con"] and c["loc"] == f["loc"] and c["code"] and c["code"] not in codes \
                         and self._fits_destination(c["code"], m["to"]):
@@ -1537,6 +1648,8 @@ class BeliefReplay:
             return [{"yes": True}, {"yes": False}], False
         if t == "SELECT_OPTION":
             return infer.infer_option(prompt, up, self.opponent)
+        if t in CARD_PROMPTS:
+            up = self._selection_window(up)
         if t in ("SELECT_CARD", "SELECT_TRIBUTE", "SELECT_SUM"):
             return infer.infer_cards(prompt, up, duel, ids)
         if t == "SELECT_UNSELECT_CARD":
@@ -1580,6 +1693,17 @@ class BeliefReplay:
             if it[0] == "msg" and it[1]["type"] == "CHAINING":
                 return j if it[1]["trigger_con"] == self.opponent else None
         return None
+
+    def _link_start(self) -> int:
+        """Stream position where the chain link being built or resolved began
+        (either player's; the current position outside of chains)."""
+        for j in range(self.pos - 1, max(-1, self.pos - 30), -1):
+            it = self.items[j]
+            if it[0] == "msg" and it[1]["type"] in ("CHAIN_END", "NEW_PHASE", "NEW_TURN", "CHAIN_SOLVED"):
+                return self.pos
+            if it[0] == "msg" and it[1]["type"] in ("CHAINING", "CHAIN_SOLVING"):
+                return j
+        return self.pos
 
     def _next_state_phase(self) -> int | None:
         """The phase in the viewer's next state view while the upcoming chain is
@@ -1674,7 +1798,7 @@ class BeliefReplay:
                 # real game did not (e.g. it found a fitting filler card): let the
                 # hidden cards match nothing
                 start = self._chain_start()
-                span = (start if start is not None else self.pos, self.pos)
+                span = (min(self._link_start(), start if start is not None else self.pos), self.pos)
                 if span not in self.nomatch_piles and span not in self.match_piles:
                     fix = ("nomatchpile", *span)
             raise Divergence(self.pos, f"no candidate response for opponent {prompt['type']}", fix=fix)
