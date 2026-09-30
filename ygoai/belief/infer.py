@@ -299,6 +299,15 @@ def infer_place(prompt: dict, up: list[dict], up_ext: list[dict] | None = None) 
             if m["player"] != prompt["player"]:
                 zone = ((zone & 0xffff) << 16) | ((zone >> 16) & 0xffff)  # (relative to the hinted player)
             return _zone_places(prompt, zone), True
+        if prompt["type"] == "SELECT_DISFIELD" and not places and m["type"] == "FIELD_DISABLED":
+            # the zones disabled now (absolute: player 0 in the low half), among
+            # those the prompt offered (the others were disabled before)
+            zone = m["flag"]
+            if prompt["player"] == 1:
+                zone = ((zone & 0xffff) << 16) | ((zone >> 16) & 0xffff)
+            chosen = [p for p in _zone_places({**prompt, "count": 32}, zone)[0]["places"] if tuple(p) in avail]
+            if len(chosen) == prompt["count"]:
+                return [{"places": chosen}], True
         if m["type"] == "MOVE":
             to = m["to"]
             key = (to["con"], to["loc"], to["seq"])
@@ -485,7 +494,11 @@ class LocMap:
             t = m["type"]
             if t == "MOVE":
                 cid = self.at(m["from"])
-                add(cid)
+                if not m.get("reason", 0) & C.REASON_LOST_TARGET:
+                    # (an equip card that lost its target was chosen by nobody; a
+                    # move by the rules in general can be chosen, e.g. the cards
+                    # banished for Evenly Matched)
+                    add(cid)
                 if cid and m.get("reason", 0) & C.REASON_RELEASE and cid not in self.released:
                     self.released.append(cid)
                 self.move(m)

@@ -26,9 +26,8 @@ Some divergences can be repaired, after which the replay restarts:
   from the deck face-down) but the hypothesis has a card there that the
   effect cannot select. A valid choice is assumed to have been there, which
   becomes an extra observation for the hypothesis.
-* "swap": two copies of the same card have to swap places. The core
-  processes groups of cards in creation order, which becomes visible when
-  e.g. two copies are sent to the grave together.
+* "swap": two copies of the same card have to swap places (e.g. a script
+  took the copy at another position of a pile than the hypothesis has).
 * "match"/"matchpile": a filter (of a selection, or of a check that decides
   which options exist) accepted a hidden card in the real game that the
   replay's card does not satisfy: during that step, the card (or every card of
@@ -856,6 +855,13 @@ class BeliefReplay:
         if item[0] == "msg":
             exp = item[1]
             fix = self._force_fix(exp)
+            if fix is None and exp["type"] in infer._ACTIVATION_PRELUDE:
+                # the start of an activation (the card placed or flipped face-up):
+                # the replay did not activate it (the core may not even have offered
+                # a chain window when nothing was activatable)
+                ch = self._next_activation(self._upcoming())
+                if ch is not None:
+                    fix = self._force_fix(ch)
             if fix is None and not (exp["type"] == "CHAINING" and exp.get("code") == got.get("code")
                                     and exp.get("desc") == got.get("desc")):
                 fix = self._unforce_fix(got)
@@ -878,16 +884,14 @@ class BeliefReplay:
                             break
             if fix is None and exp["type"] == got["type"] and isinstance(exp.get("cards"), list) \
                     and isinstance(got.get("cards"), list) and len(exp["cards"]) == len(got["cards"]):
-                # multi-card messages list cards in creation order: copies swapped?
+                # the same card in another place of a pile: another copy was chosen
                 for e, g in zip(exp["cards"], got["cards"]):
                     if e == g:
                         continue
                     if e.get("code") == g.get("code") and e["con"] == g["con"] and e["loc"] == g["loc"] \
-                            and e["seq"] != g["seq"]:
-                        if e["loc"] in (*HIDDEN_PILES, C.LOCATION_GRAVE, C.LOCATION_REMOVED):
-                            fix = self._swap_fix(cp, msgs, idx, e, g, duel)
-                        elif e["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE):
-                            fix = self._field_order_fix(cp, msgs, idx, e, g)
+                            and e["seq"] != g["seq"] \
+                            and e["loc"] in (*HIDDEN_PILES, C.LOCATION_GRAVE, C.LOCATION_REMOVED):
+                        fix = self._swap_fix(cp, msgs, idx, e, g, duel)
                     break
             if fix is None and exp["type"] == got["type"] == "MOVE" and not exp.get("code") \
                     and exp["from"]["con"] == got["from"]["con"] and exp["from"]["loc"] == got["from"]["loc"] \
@@ -910,11 +914,6 @@ class BeliefReplay:
                     elif exp.get("code"):
                         # right card, wrong copy (the copies differ in hidden history)
                         fix = self._other_copy_fix(cp, msgs, idx, le)
-                elif (le is not None and lg is not None and exp.get("code") and le["con"] == lg["con"]
-                        and le["loc"] == lg["loc"] and le["seq"] != lg["seq"]
-                        and le["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE)):
-                    # copies on the field processed in the wrong order
-                    fix = self._field_order_fix(cp, msgs, idx, le, lg)
             if fix is None and exp["type"] == got["type"] == "MOVE" and got["from"]["con"] == self.opponent \
                     and exp["from"]["con"] == got["from"]["con"] and exp["from"]["loc"] == got["from"]["loc"] \
                     and exp["from"]["seq"] != got["from"]["seq"] and got["from"]["loc"] in HIDDEN_PILES \
@@ -949,16 +948,6 @@ class BeliefReplay:
                 # the replay moved a copy of a card that the real game moves later
                 # from elsewhere in the same operation: the copies are swapped
                 fix = self._later_copy_fix(cp, msgs, idx, got, duel)
-            if fix is None and exp["type"] == "MOVE" and exp.get("code") and got["type"] != "MOVE" \
-                    and exp["from"]["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE):
-                # the replay handles another copy on the field first (its move comes
-                # later in this step, after messages that belong to it)
-                le = exp["from"]
-                for m in msgs[idx + 1:]:
-                    if m["type"] == "MOVE" and m["code"] == exp["code"] and m["from"]["con"] == le["con"] \
-                            and m["from"]["loc"] == le["loc"] and m["from"]["seq"] != le["seq"]:
-                        fix = self._field_order_fix(cp, msgs, idx, le, m["from"])
-                        break
             if fix is None and exp["type"] == "HINT" and exp["hint_type"] == C.HINT_OPSELECTED \
                     and exp["player"] == self.opponent and exp != got:
                 # the opponent chose an option the replay did not offer or take:
@@ -978,15 +967,9 @@ class BeliefReplay:
                     start = self._chain_start()
                     if start is not None and (start, self.pos) not in self.match_piles:
                         fix = ("matchpile", start, self.pos)
-            if fix is None and exp["type"] == got["type"] and exp["type"] in ("ADD_COUNTER", "REMOVE_COUNTER") \
-                    and exp["con"] == got["con"] \
-                    and exp["loc"] == got["loc"] and exp["seq"] != got["seq"] \
-                    and exp["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE):
-                # counters added card by card in creation order: copies on the field
-                fix = self._field_order_fix(cp, msgs, idx, exp, got)
             if fix is None and exp["type"] == got["type"] == "BECOME_TARGET" \
                     and len(exp["cards"]) == len(got["cards"]) == 1:
-                # one announcement per card, in creation order: copies swapped?
+                # the same card in another place of a pile: another copy was chosen
                 e, g = exp["cards"][0], got["cards"][0]
                 if e["con"] == g["con"] and e["loc"] == g["loc"] and e["seq"] != g["seq"] \
                         and e["loc"] in (C.LOCATION_GRAVE, C.LOCATION_REMOVED, *HIDDEN_PILES):
@@ -1000,11 +983,22 @@ class BeliefReplay:
                 span = (min(self._link_start(), start if start is not None else self.pos), self.pos)
                 if span not in self.nomatch_piles and span not in self.match_piles:
                     fix = ("nomatchpile", *span)
-            if fix is None and exp["type"] == "BECOME_TARGET" and got["type"] != "BECOME_TARGET" \
-                    and exp["cards"]:
+            if fix is None and got["type"] == "HINT" and got["hint_type"] == C.HINT_OPSELECTED \
+                    and got["player"] == self.opponent and exp != got \
+                    and not (exp["type"] == "HINT" and exp["hint_type"] == C.HINT_OPSELECTED):
+                # the replay offered the opponent a choice of options that the real
+                # game did not (it had only one option): hidden (filler) cards
+                # satisfy a condition of the others, so let them match nothing
+                start = self._chain_start()
+                span = (min(self._link_start(), start if start is not None else self.pos), self.pos)
+                if span not in self.nomatch_piles and span not in self.match_piles:
+                    fix = ("nomatchpile", *span)
+            if fix is None and exp["type"] == "BECOME_TARGET" and exp["cards"] \
+                    and (got["type"] != "BECOME_TARGET" or got["cards"] != exp["cards"]):
                 # the opponent targeted a card that the replay's filter rejects
-                # (the filter depends on hidden cards): let it match
-                fix = self._match_fix(cp, msgs, idx, exp["cards"][0])
+                # (the filter depends on hidden cards, e.g. a fitting card in the
+                # deck): let it match
+                fix = self._match_fix(cp, msgs, idx, exp["cards"][0], duel)
             if fix is None and exp["type"] == "MOVE" and exp["from"]["con"] == self.opponent \
                     and exp["from"]["loc"] in HIDDEN_PILES and exp != got:
                 fix = self._kind_fix(cp, msgs, idx, exp) or self._match_fix(cp, msgs, idx, exp["from"])
@@ -1059,11 +1053,18 @@ class BeliefReplay:
             return d.fix
         return None
 
-    def _match_fix(self, cp: int, msgs: list[dict], idx: int, loc: dict) -> tuple | None:
+    def _match_fix(self, cp: int, msgs: list[dict], idx: int, loc: dict, duel: Duel | None = None) -> tuple | None:
         """The opponent took a hidden card for an effect, but in the replay no card
         at that position satisfies the effect's filter (the hypothesis could not
         know what the effect needed): let that card match every filter during
         the step."""
+        if duel is not None and loc["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE) \
+                and not any(m["type"] == "MOVE" for m in msgs[:idx]):
+            # (a card on the field that nothing moved in this step: no snapshot needed)
+            cid = infer.LocMap(duel).at(loc)
+            if not cid or cid in self.matches.get(cp[0], ()):
+                return None
+            return ("match", cp, cid)
         if cp not in self.snapshots:
             return None if cp in self.snapshot_cps else ("snapshot", cp)
         lm = copy.deepcopy(self.snapshots[cp])
@@ -1089,19 +1090,6 @@ class BeliefReplay:
                     # else before the prompt that chose the card
                     at = self.last_shuffle_cp.get((f["con"], f["loc"]), self.last_listed.get(cid, cp))
                     self.left_pile[cid] = (at, (f["con"], f["loc"]))
-
-    def _field_order_fix(self, cp, msgs: list[dict], idx: int, le: dict, lg: dict) -> tuple | None:
-        """Copies of a card on the field were processed in the wrong order (the
-        core goes by card creation order): identify them in a snapshot taken
-        before the step and swap them."""
-        if cp not in self.snapshots:
-            return None if cp in self.snapshot_cps else ("snapshot", cp)
-        lm = copy.deepcopy(self.snapshots[cp])
-        lm.references(msgs[:idx])
-        a, b = lm.at(lg), lm.at(le)
-        if not a or not b or a == b or lm.codes.get(a) != lm.codes.get(b):
-            return None
-        return self._field_copy_fix(a, b)
 
     def _nomatch_card_fix(self, slot: dict) -> tuple | None:
         try:
@@ -1859,8 +1847,19 @@ class BeliefReplay:
             # have to trade places), so it is probably the right choice.
             self._trace(prompt, repairable, False, len(valid))
             return repairable
+        fix = None
+        if prompt["type"] == "SELECT_OPTION" and not any(
+                m["type"] == "HINT" and m["hint_type"] == C.HINT_OPSELECTED and m["player"] == self.opponent
+                for m in self._upcoming()[:12]):
+            # the real game shows no option choice here: it had only one option (a
+            # script offers just the available ones), the replay has more because
+            # hidden (filler) cards satisfy a condition: let them match nothing
+            start = self._chain_start()
+            span = (min(self._link_start(), start if start is not None else self.pos), self.pos)
+            if span not in self.nomatch_piles and span not in self.match_piles:
+                fix = ("nomatchpile", *span)
         raise Divergence(self.pos, f"no candidate for opponent {prompt['type']} survived probing",
-                         None, prompt)
+                         None, prompt, fix)
 
     def _trace(self, prompt: dict, response: dict, certain: bool, n: int) -> None:
         if self.trace is not None and self.depth == 0:
