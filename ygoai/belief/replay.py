@@ -1583,6 +1583,10 @@ class BeliefReplay:
         cands, certain = self._candidates(duel, prompt, up, ids)
         valid = []
         sig = (self.pos, repr(sorted(prompt.items())))
+        if self.depth > 0 and sig == getattr(self, "probe_sig", None):
+            # back at the probed prompt without any new observation: a cycle
+            # (e.g. a summon procedure that was cancelled)
+            raise Divergence(self.pos, "probe returned to its prompt")
         for c in cands:
             try:
                 encode(prompt, c)
@@ -1678,6 +1682,7 @@ class BeliefReplay:
                 # (a probe making many decisions without reproducing anything loops)
                 self.max_stall = min(self.max_stall, 50)
                 self.probe_start = self.pos
+                self.probe_sig = (self.pos, repr(sorted(prompt.items())))
                 self.horizon = min(len(self.items), self.pos + self.probe_items)
                 # ... except the first one: a decision may show only there (e.g.
                 # "lower its Level?"), so the probe must get past it
