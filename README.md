@@ -172,7 +172,7 @@ message, every prompt of the viewer and the viewer's state view at every prompt)
 | cut      | consistent |
 |----------|------------|
 | ~1/3     | 98.9%      |
-| ~2/3     | 97.9%      |
+| ~2/3     | 97.8%      |
 | full game| 97.1%      |
 | overall  | 98.0%      |
 
