@@ -67,6 +67,9 @@ PROBE_OK, PROBE_FAILED, PROBE_TIMEOUT, PROBE_REPAIRABLE, PROBE_PROGRESSED = 0, 1
 _SELECTION_END = frozenset(("CHAINING", "CHAINED", "CHAIN_SOLVING", "CHAIN_SOLVED", "CHAIN_END", "NEW_PHASE",
                             "NEW_TURN", "WIN", "SUMMONING", "SPSUMMONING", "FLIPSUMMONING"))
 HIDDEN_PILES = (C.LOCATION_DECK, C.LOCATION_HAND, C.LOCATION_EXTRA)
+# where an action's consequences are over (a probe decides only after one)
+_BOUNDARIES = frozenset(("CHAIN_SOLVED", "CHAIN_END", "NEW_PHASE", "NEW_TURN", "SUMMONED", "SPSUMMONED",
+                         "FLIPSUMMONED", "CHAINED"))
 # messages by which the real game goes on after an effect did (nothing) more
 _NOTHING_MORE = frozenset(("CHAIN_SOLVED", "CHAIN_END", "PLAYER_HINT", "NEW_PHASE", "NEW_TURN"))
 UNORDERED_HINTS = ("PLAYER_HINT", "CARD_HINT")
@@ -323,8 +326,11 @@ class BeliefReplay:
         # a copy swap scheduled for the step that shuffles the pile exchanges the
         # two cards in that shuffle's result
         self._folded_swaps = {((0, 0), a, b) for a, b in self.swaps.get((0, 0), ())}
-        for cp, pairs in self.swaps.items():
-            for k in self.prev_shuffle_cps.get(cp, ()):
+        shuffle_cp = {k: c for c, ks in self.prev_shuffle_cps.items() for k in ks}
+        for cp in sorted(c for c in self.swaps if c != (0, 0)):
+            pairs = self.swaps[cp]
+            here = set(self.prev_shuffle_cps.get(cp, ()))
+            for k in here:
                 lst = shuffle_ids[k] if k < len(shuffle_ids) else None
                 if lst is None:
                     continue
@@ -333,6 +339,14 @@ class BeliefReplay:
                         i, j = lst.index(a), lst.index(b)
                         lst[i], lst[j] = lst[j], lst[i]
                         self._folded_swaps.add((cp, a, b))
+            # from then on each of the two copies continues the other's path: the
+            # later shuffles place them the other way round
+            for k, lst in enumerate(shuffle_ids):
+                # (shuffles the previous attempt did not reach come later)
+                if lst is None or k in here or (k in shuffle_cp and shuffle_cp[k] <= cp):
+                    continue
+                for a, b in pairs:
+                    shuffle_ids[k] = lst = [b if x == a else a if x == b else x for x in lst]
         self._shuffle_ids = shuffle_ids
         for sh, sh_ids in zip(hyp.shuffles, shuffle_ids):
             if sh_ids is not None:
@@ -429,6 +443,10 @@ class BeliefReplay:
                     lst = self.swaps.get(at, [])
                     if (a, b) in lst:
                         del lst[len(lst) - 1 - lst[::-1].index((a, b))]
+                        for later in [c for c in self.swaps if c > at and c != (0, 0)]:
+                            self.swaps[later] = [(b if x == a else a if x == b else x,
+                                                  b if y == a else a if y == b else y)
+                                                 for x, y in self.swaps[later]]
                     self.failed_swaps.add((at, a, b))
                     if self.log:
                         self.log(f"restart {self.stats.restarts}: {e.reason} -> undo swap {(at, a, b)}")
@@ -529,6 +547,11 @@ class BeliefReplay:
             if cp != (0, 0) and ((a, b) in lst or (b, a) in lst):
                 return False
             lst.append((a, b))
+            # swaps recorded later in the duel named the cards as they were
+            # without this one: from here on each continues the other's path
+            for later in [c for c in self.swaps if c > cp and c != (0, 0)]:
+                self.swaps[later] = [(b if x == a else a if x == b else x, b if y == a else a if y == b else y)
+                                     for x, y in self.swaps[later]]
             self.stats.swaps += 1
             return True
         if kind == "identify":
@@ -573,7 +596,10 @@ class BeliefReplay:
         return self.pos >= self.horizon
 
     def _advance(self) -> None:
-        self.lockstep.process(self.items[self.pos])
+        it = self.items[self.pos]
+        if self.depth > 0 and (it[0] == "prompt" or it[1].get("type") in _BOUNDARIES):
+            self.probe_boundary = True
+        self.lockstep.process(it)
         self.pos += 1
         self.stall = 0
         self._recent = []
@@ -877,7 +903,8 @@ class BeliefReplay:
                     start = self._chain_start()
                     if start is not None and (start, self.pos) not in self.match_piles:
                         fix = ("matchpile", start, self.pos)
-            if fix is None and exp["type"] == got["type"] == "ADD_COUNTER" and exp["con"] == got["con"] \
+            if fix is None and exp["type"] == got["type"] and exp["type"] in ("ADD_COUNTER", "REMOVE_COUNTER") \
+                    and exp["con"] == got["con"] \
                     and exp["loc"] == got["loc"] and exp["seq"] != got["seq"] \
                     and exp["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE):
                 # counters added card by card in creation order: copies on the field
@@ -1137,10 +1164,24 @@ class BeliefReplay:
                             return None
                         if loc in (C.LOCATION_MZONE, C.LOCATION_SZONE):
                             return self._field_copy_fix(a, b)
+                        if loc in (C.LOCATION_GRAVE, C.LOCATION_REMOVED):
+                            return self._history_swap(a, b, cp)
                         at = self._copy_swap_cp((p, loc), cp)
                         if (a, b) in self.swaps.get(at, ()) or (b, a) in self.swaps.get(at, ()):
                             at = cp
                         return ("swap", at, a, b)
+                    if loc in (C.LOCATION_GRAVE, C.LOCATION_REMOVED):
+                        # no copy looks exactly like it (e.g. the copies are being
+                        # processed one by one in creation order): try the copies
+                        # of the same pile the other way round
+                        a = live.at({"con": p, "loc": loc, "seq": i})
+                        for j, g2 in enumerate(g_cards):
+                            if j != i and g2 and g2.get("code") == e.get("code"):
+                                b = live.at({"con": p, "loc": loc, "seq": j})
+                                if a and b:
+                                    fix = self._history_swap(a, b, cp)
+                                    if fix is not None:
+                                        return fix
                     return None
         return None
 
@@ -1473,7 +1514,7 @@ class BeliefReplay:
         if t == "SELECT_UNSELECT_CARD":
             return infer.infer_unselect(prompt, up, duel, ids)
         if t in ("SELECT_PLACE", "SELECT_DISFIELD"):
-            return infer.infer_place(prompt, up)
+            return infer.infer_place(prompt, up, self._upcoming_ext())
         if t == "SELECT_POSITION":
             return infer.infer_position(prompt, up)
         if t in ("ANNOUNCE_CARD", "ANNOUNCE_NUMBER", "ANNOUNCE_RACE", "ANNOUNCE_ATTRIB"):
@@ -1617,7 +1658,7 @@ class BeliefReplay:
         if certain or len(valid) == 1:
             self._trace(prompt, valid[0], True, len(valid))
             return valid[0]
-        if self.depth > 0 and self.pos - self.probe_start >= self.min_progress \
+        if self.depth > 0 and self.pos - self.probe_start >= self.min_progress and self.probe_boundary \
                 and (self.probe_state_at is None or self.pos > self.probe_state_at):
             # the probed decision already reproduced enough new observations;
             # the next ambiguous decision is the parent's business
@@ -1682,6 +1723,7 @@ class BeliefReplay:
                 # (a probe making many decisions without reproducing anything loops)
                 self.max_stall = min(self.max_stall, 50)
                 self.probe_start = self.pos
+                self.probe_boundary = False  # (the probed action's effect is over)
                 self.probe_sig = (self.pos, repr(sorted(prompt.items())))
                 self.horizon = min(len(self.items), self.pos + self.probe_items)
                 # ... except the first one: a decision may show only there (e.g.

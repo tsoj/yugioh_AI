@@ -51,6 +51,11 @@ class FilterTest(unittest.TestCase):
         b = {**a, "from": loc(1, C.LOCATION_DECK, 5, C.POS_FACEDOWN)}
         self.assertEqual(filter_message(a, 0), filter_message(b, 0))
 
+    def test_deck_top_position_is_canonical(self):
+        a = {"type": "DECK_TOP", "player": 1, "seq": 2, "code": X, "pos": C.POS_FACEDOWN_DEFENSE}
+        b = {**a, "pos": C.POS_FACEDOWN}
+        self.assertEqual(filter_message(a, 0), filter_message(b, 0))
+
     def test_opponent_draw_hidden(self):
         m = {"type": "DRAW", "player": 1, "cards": [{"code": X, "pos": C.POS_FACEDOWN}]}
         self.assertEqual(filter_message(m, 0)["cards"][0]["code"], 0)
@@ -70,6 +75,10 @@ class FilterTest(unittest.TestCase):
         m = {"type": "CONFIRM_CARDS", "player": 0,
              "cards": [{"code": X, "con": 1, "loc": C.LOCATION_HAND, "seq": 1}]}
         self.assertEqual(filter_message(m, 0)["cards"][0]["code"], X)
+        # player 1 reveals cards of its deck to player 0: it sees them too
+        m = {"type": "CONFIRM_CARDS", "player": 0,
+             "cards": [{"code": X, "con": 1, "loc": C.LOCATION_DECK, "seq": 4}]}
+        self.assertEqual(filter_message(m, 1)["cards"][0]["code"], X)
 
     def test_card_hint_of_hidden_card_dropped(self):
         m = {"type": "CARD_HINT", **loc(1, C.LOCATION_HAND, 0, C.POS_FACEDOWN),

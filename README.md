@@ -228,8 +228,10 @@ effect id, which depends on card creation order and on when effects were last en
 cards in creation order, which tells physical copies apart; the arbiter shows them in a
 canonical order, by location, and maps the chosen indices back, see
 `observe.to_core_response`),
-and the stale reason on every move onto the field except special summons (equipping a monster
-or moving it to another zone showed how the card had once entered the hand).
+the stale reason on every move onto the field except special summons (equipping a monster
+or moving it to another zone showed how the card had once entered the hand), and the position
+value in DECK_TOP (it showed whether the card had been returned to the deck). Conversely, a
+player now sees its own cards when it reveals them from its deck.
 
 One known residual leak: when several *hidden* cards move in one operation (e.g. hand to
 deck), the order of the individual MOVE messages follows card creation order, which (because

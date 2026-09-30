@@ -231,6 +231,9 @@ def filter_message(msg: dict, viewer: int) -> dict | None:
 
 def _filter_message(msg: dict, viewer: int) -> dict | None:
     t = msg["type"]
+    if t == "DECK_TOP":
+        # (the position of a face-down deck card tells how it got there, see canon_pos)
+        return {**msg, "pos": canon_pos(C.LOCATION_DECK, msg["pos"])}
     if t in _PUBLIC:
         return msg
     if t in _PROMPTS:
@@ -297,7 +300,9 @@ def _filter_message(msg: dict, viewer: int) -> dict | None:
             return msg
         cards = []
         for c in msg["cards"]:
-            known = c["con"] == viewer and not c["loc"] & C.LOCATION_DECK
+            # a player sees its own cards it reveals (even from the deck: it takes
+            # them out to show them)
+            known = c["con"] == viewer
             cards.append(c if known else {**c, "code": 0})
         return {**msg, "cards": cards}
     if t == "CARD_HINT":

@@ -282,9 +282,13 @@ def infer_hint_value(prompt: dict, up: list[dict], hint_type: int) -> int | None
     return None
 
 
-def infer_place(prompt: dict, up: list[dict]) -> tuple[list[dict], bool]:
+def infer_place(prompt: dict, up: list[dict], up_ext: list[dict] | None = None) -> tuple[list[dict], bool]:
     avail = set(available_places(prompt))
     places = []
+    if prompt["type"] == "SELECT_PLACE" and not _field_move_follows(up_ext if up_ext is not None else up):
+        # a card is put there before the action is over (visibly, even face-down):
+        # no such move, no such prompt
+        return [], False
     for i, m in enumerate(up):
         if prompt["type"] == "SELECT_DISFIELD" and not places and i < 12 \
                 and m["type"] == "HINT" and m["hint_type"] == C.HINT_ZONE:
@@ -302,6 +306,17 @@ def infer_place(prompt: dict, up: list[dict]) -> tuple[list[dict], bool]:
                     return [{"places": [list(p) for p in places]}], True
     # fallback: every single place (only sensible for count == 1)
     return [{"places": [list(p)]} for p in sorted(avail)][:40], False
+
+
+def _field_move_follows(msgs: list[dict]) -> bool:
+    for m in msgs:
+        t = m["type"]
+        if t in ("CHAIN_SOLVED", "CHAIN_END", "NEW_PHASE", "NEW_TURN") \
+                or (t == "HINT" and m["hint_type"] == C.HINT_EVENT):
+            return False
+        if (t == "MOVE" and m["to"]["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE)) or t == "SWAP":
+            return True  # (a control swap places both cards by SWAP)
+    return True  # (the known stream ends first: no evidence either way)
 
 
 def _zone_places(prompt: dict, zone: int) -> list[dict]:
@@ -322,6 +337,10 @@ def infer_position(prompt: dict, up: list[dict]) -> tuple[list[dict], bool]:
                            C.POS_FACEDOWN_DEFENSE) if prompt["positions"] & p]
     for m in up:
         pos = None
+        if m["type"] == "MOVE" and m["to"]["loc"] == C.LOCATION_MZONE and m["code"] and prompt["code"] \
+                and m["code"] != prompt["code"] and m["from"]["loc"] != C.LOCATION_MZONE:
+            # another card is put onto the field next: this card is not being placed
+            return [], False
         if m["type"] == "MOVE" and m["to"]["loc"] == C.LOCATION_MZONE and (
                 not m["code"] or not prompt["code"] or m["code"] == prompt["code"]):
             pos = m["to"]["pos"]
@@ -711,10 +730,15 @@ def infer_unselect(prompt: dict, up: list[dict], duel, ids: list | None = None) 
 def infer_counter(prompt: dict, up: list[dict]) -> tuple[list[dict], bool]:
     counts = [0] * len(prompt["cards"])
     for m in up:
-        if m["type"] == "REMOVE_COUNTER" and m["counter_type"] == prompt["counter_type"]:
-            for i, c in enumerate(prompt["cards"]):
-                if c["con"] == m["con"] and c["loc"] == m["loc"] and c["seq"] == m["seq"]:
-                    counts[i] += m["count"]
+        if m["type"] in ("HINT", "CARD_HINT"):
+            continue
+        # the removal follows right away (later ones belong to other actions); the
+        # messages carry the counter's flags, e.g. 0x1000, the prompt may not
+        if m["type"] != "REMOVE_COUNTER" or (m["counter_type"] & 0xfff) != (prompt["counter_type"] & 0xfff):
+            break
+        for i, c in enumerate(prompt["cards"]):
+            if c["con"] == m["con"] and c["loc"] == m["loc"] and c["seq"] == m["seq"]:
+                counts[i] += m["count"]
     if sum(counts) == prompt["count"]:
         return [{"counts": counts}], True
     from ..actions import random_response

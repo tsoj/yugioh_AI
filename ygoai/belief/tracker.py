@@ -468,17 +468,17 @@ class Tracker:
             self._target_run = self._target_run + [v for v in new if v is not None]
         else:
             self._target_run = []
-        if t == "ADD_COUNTER" and m["loc"] in ZONE_LOCS:
+        if t in ("ADD_COUNTER", "REMOVE_COUNTER") and m["loc"] in ZONE_LOCS:
             # a script adding counters to a group goes by creation order (in
             # location order it may as well be one card after the other: soft)
             v = self.var_at(m["con"], m["loc"], m["seq"])
             run = self._counter_run
-            if run and run[0] == m["counter_type"]:
+            if run and run[0] == (t, m["counter_type"]):
                 run[1].append(v)
                 run[2].append((m["con"] if self.turn_player == 0 else -m["con"], m["loc"], m["seq"]))
             else:
                 self._flush_counters()
-                self._counter_run = [m["counter_type"], [v], [(m["con"] if self.turn_player == 0 else -m["con"],
+                self._counter_run = [(t, m["counter_type"]), [v], [(m["con"] if self.turn_player == 0 else -m["con"],
                                                                m["loc"], m["seq"])]]
         elif self._counter_run and t not in ("HINT", "CARD_HINT"):
             self._flush_counters()
@@ -614,10 +614,14 @@ class Tracker:
                     ids = frozenset(x.id for x in v.pool.members if any(x is y for y in self._confirmed))
                     if ids:
                         v.allowed = ids if v.allowed is None else (v.allowed & ids) or v.allowed
+        elif t == "REVERSE_DECK":
+            # both decks are turned over (field::reverse_deck)
+            for p in (0, 1):
+                self.lists[p][C.LOCATION_DECK].reverse()
         elif t == "DECK_TOP":
             deck = self.lists[m["player"]][C.LOCATION_DECK]
             idx = len(deck) - 1 - m["seq"]
-            if 0 <= idx < len(deck) and m["pos"] & C.POS_FACEUP:
+            if 0 <= idx < len(deck) and m["code"]:  # (shown whatever the position says)
                 self.observe(deck[idx], m["code"])
         elif t == "SWAP":
             l1, l2 = m["loc1"], m["loc2"]
