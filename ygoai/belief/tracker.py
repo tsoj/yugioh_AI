@@ -115,6 +115,7 @@ class Tracker:
         self.rank_constraints: list[tuple[Var, Var]] = []
         self.soft_rank_constraints: list[tuple[Var, Var]] = []
         self._target_run: list[Var] = []  # cards of consecutive BECOME_TARGET messages
+        self._counter_run: list = []  # [counter type, vars, positions] of consecutive ADD_COUNTERs
         self._batch: dict | None = None  # consecutive moves of one kind (see _flush_batch)
         self._resolving = False  # between CHAIN_SOLVING and CHAIN_SOLVED
         self._last_prompt: dict | None = None
@@ -297,6 +298,33 @@ class Tracker:
         for v, code in public:
             v.marks = v.marks | {("public", code)}
 
+    def _possible_owners(self, v: Var) -> set[int]:
+        """Who can own the card in slot `v` (through the shuffles back to the decks)."""
+        out: set[int] = set()
+        todo, seen = [v], set()
+        while todo and len(out) < 2:
+            x = todo.pop()
+            if x.kind != "claim" or x.pool is None:
+                out.add(x.owner)
+            elif x.pool.index not in seen:
+                seen.add(x.pool.index)
+                todo.extend(x.pool.members)
+        return out
+
+    def _owned(self, v: Var | None, owner: int) -> None:
+        """A card's owner shows even when it is hidden (a card given to the other
+        player's hand keeps its sleeve): after a shuffle, the slot holds one of
+        the shuffled cards that owner could own."""
+        if v is None or v.kind != "claim" or v.pool is None:
+            return
+        members = v.pool.members
+        owners = [self._possible_owners(m) for m in members]
+        if all(os == owners[0] for os in owners):
+            return  # (tells nothing)
+        ids = frozenset(m.id for m, os in zip(members, owners) if owner in os)
+        if ids:
+            v.allowed = ids if v.allowed is None else (v.allowed & ids) or v.allowed
+
     def _card_hint(self, m: dict) -> None:
         """Card hints stick to a physical card; after a shuffle the core shows them
         again at the card's new position, which tells which copy went where."""
@@ -352,6 +380,11 @@ class Tracker:
             return (con, loc, snap[key].index(v))
         except ValueError:
             return None
+
+    def _flush_counters(self) -> None:
+        run, self._counter_run = self._counter_run, []
+        if run and len(run[1]) > 1:
+            self._rank_run(run[1], soft=run[2] == sorted(run[2]))
 
     def _flush_batch(self) -> None:
         """Several cards moved one after another in the same way. The core moves
@@ -435,6 +468,20 @@ class Tracker:
             self._target_run = self._target_run + [v for v in new if v is not None]
         else:
             self._target_run = []
+        if t == "ADD_COUNTER" and m["loc"] in ZONE_LOCS:
+            # a script adding counters to a group goes by creation order (in
+            # location order it may as well be one card after the other: soft)
+            v = self.var_at(m["con"], m["loc"], m["seq"])
+            run = self._counter_run
+            if run and run[0] == m["counter_type"]:
+                run[1].append(v)
+                run[2].append((m["con"] if self.turn_player == 0 else -m["con"], m["loc"], m["seq"]))
+            else:
+                self._flush_counters()
+                self._counter_run = [m["counter_type"], [v], [(m["con"] if self.turn_player == 0 else -m["con"],
+                                                               m["loc"], m["seq"])]]
+        elif self._counter_run and t not in ("HINT", "CARD_HINT"):
+            self._flush_counters()
         if t == "MOVE" and m.get("reason", 0) & C.REASON_RELEASE:
             self._releases += 1
         elif t not in ("MOVE", "HINT", "CARD_HINT", "SET", "SPSUMMONING"):
@@ -728,11 +775,14 @@ class Tracker:
                     for v, card in zip(lst, cards):
                         self.observe(v, card.get("code", 0))
                         v.faceup = bool(card.get("position", 0) & C.POS_FACEUP)
+                        if "owner" in card and loc == C.LOCATION_HAND:
+                            self._owned(v, card["owner"])
                     if loc == C.LOCATION_HAND:
                         self._public_hand(lst, cards)
 
     # -- solving -------------------------------------------------------------
     def solve(self, completion=None, card_db=None) -> Hypothesis:
+        self._flush_counters()
         from .flow import FlowSolver
         return FlowSolver(self, completion, card_db).solve()
 

@@ -606,6 +606,14 @@ def infer_cards(prompt: dict, up: list[dict], duel, ids: list | None = None) -> 
     n = len(cards)
     cands: list[dict] = []
     certain = False
+    first = next((m for m in up if m["type"] not in ("HINT", "CARD_HINT")), None)
+    if t == "SELECT_CARD" and first is not None and first["type"] == "CARD_SELECTED":
+        # the core announces exactly the selected cards
+        sel = [i for i, c in enumerate(cards) if any(same_loc(c, x) for x in first["cards"])]
+        if len(sel) == len(first["cards"]) and lo <= len(sel) <= hi:
+            # (not certain: the same cards can be announced by another path of
+            # the script, so the other candidates stay available)
+            cands.append({"indices": sel})
     if t == "SELECT_TRIBUTE":
         # valid: at most max cards whose release params sum to at least min
         def valid(sel):

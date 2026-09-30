@@ -43,6 +43,11 @@ WILD_MAIN, WILD_EXTRA = "main", "extra"
 _NEED_WILDS = {("st",): "st", ("field",): "field", ("monster",): "monster"}
 
 
+# identity sets without known codes are modelled only while small (every member
+# needs variables of its own)
+_MAX_UNTAGGED_ALLOWED = 8
+
+
 def _need_wilds(need: tuple) -> list[str]:
     if need[0] == "mset":
         return [f"mset{min(need[1], 2)}"]
@@ -206,6 +211,8 @@ class FlowSolver:
         for v in t.all_vars:
             if v.allowed is not None or v.same_as is not None or v.not_same:
                 linked.add(v.id)
+            if v.allowed is not None and len(v.allowed) <= _MAX_UNTAGGED_ALLOWED:
+                linked.update(a for a in v.allowed if a in byid)
         # creation order constraints between cards of one player: cards are
         # created sorted by code (game.setup_duel), so a card created earlier
         # has a code that sorts no later (the order among copies is left to
@@ -347,6 +354,14 @@ class FlowSolver:
                 for k in ref_tags[x.id]:
                     if k in mine and k in other:
                         add_row([(mine[k], 1.0), (other[k], 1.0)], -np.inf, 1)
+            if v.allowed is not None and not all(a in ref_tags for a in v.allowed) \
+                    and len(v.allowed) <= _MAX_UNTAGGED_ALLOWED:
+                # (members without a known code) the slot's card is one of them:
+                # whatever it carries, one of them carries too
+                ms = [byid[a] for a in v.allowed if a in byid]
+                for k, j in mine.items():
+                    terms = [(var_cols(m)[k], -1.0) for m in ms if k in var_cols(m)]
+                    add_row([(j, 1.0)] + terms, -np.inf, 0)
             if v.allowed is not None:
                 ms = [byid[a] for a in v.allowed if a in ref_tags]
                 if ms and len(ms) == len(v.allowed):

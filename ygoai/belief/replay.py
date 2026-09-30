@@ -248,6 +248,7 @@ class BeliefReplay:
         self._decisions_at: dict[int, int] = {}  # stream position -> decisions made there
         self._recent: list[tuple] = []  # (key, candidates, chosen) of the decisions since the last item
         self._since_state: list[tuple] = []  # the same, since the last state view that matched
+        self._cancelled: set[tuple] = set()  # (stream position, prompt) answered by cancelling
         # where the previous attempt shuffled (for folding swaps into shuffles)
         self.prev_shuffle_cps = getattr(self, "shuffle_cps", {})
         self.shuffle_cps: dict[tuple[int, int], list[int]] = {}
@@ -606,14 +607,12 @@ class BeliefReplay:
             # happen in a step that shows the viewer nothing
             forced_match = self.matches.get(cp[0])
             if any(a <= cp[0] <= b for a, b in self.match_piles):
-                forced_match = list(forced_match or ()) + [
-                    cid for loc in HIDDEN_PILES for _, cid in duel.location_cards(self.opponent, loc)]
+                forced_match = list(forced_match or ()) + self._hidden_ids(duel)
             if forced_match:
                 duel.set_forced_match(forced_match)
             nomatch = any(a <= cp[0] <= b for a, b in self.nomatch_piles)
             if nomatch:
-                duel.set_forced_nomatch([cid for loc in HIDDEN_PILES
-                                         for _, cid in duel.location_cards(self.opponent, loc)])
+                duel.set_forced_nomatch(self._hidden_ids(duel))
             answered, answered_resp = pending, pending_resp  # (the response this step processes)
             status = duel.process()
             if nomatch:
@@ -790,13 +789,16 @@ class BeliefReplay:
                 fix = self._unforce_fix(got)
             if fix is None and got["type"] == "CARD_HINT" and exp["type"] == "CARD_HINT":
                 fix = self._hint_swap_fix(cp, got, duel)
-            if fix is None and exp["type"] == "CARD_HINT" and got["type"] != "CARD_HINT":
-                # the hint belongs to a card the replay has as another copy (e.g.
-                # the copy added to the hand this turn was the one discarded)
+            hinted = exp if exp["type"] == "CARD_HINT" and got["type"] != "CARD_HINT" else \
+                got if got["type"] == "CARD_HINT" and exp["type"] != "CARD_HINT" else None
+            if fix is None and hinted is not None:
+                # the hint belongs to another copy than the one it is on in the
+                # replay (e.g. which copy, the one added to the hand this turn or an
+                # older one, was discarded)
                 live = infer.LocMap(duel)
-                a = live.at(exp)
+                a = live.at(hinted)
                 if a:
-                    others = [cid for code, cid in duel.location_cards(exp["con"], C.LOCATION_HAND)
+                    others = [cid for code, cid in duel.location_cards(hinted["con"], C.LOCATION_HAND)
                               if cid != a and code == live.codes.get(a)]
                     for b in others:
                         fix = self._history_swap(a, b, cp)
@@ -875,6 +877,11 @@ class BeliefReplay:
                     start = self._chain_start()
                     if start is not None and (start, self.pos) not in self.match_piles:
                         fix = ("matchpile", start, self.pos)
+            if fix is None and exp["type"] == got["type"] == "ADD_COUNTER" and exp["con"] == got["con"] \
+                    and exp["loc"] == got["loc"] and exp["seq"] != got["seq"] \
+                    and exp["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE):
+                # counters added card by card in creation order: copies on the field
+                fix = self._field_order_fix(cp, msgs, idx, exp, got)
             if fix is None and exp["type"] == got["type"] == "BECOME_TARGET" \
                     and len(exp["cards"]) == len(got["cards"]) == 1:
                 # one announcement per card, in creation order: copies swapped?
@@ -912,6 +919,15 @@ class BeliefReplay:
                 # qualified can depend on hidden cards (e.g. a cost that needs a
                 # matching card in the deck), so let it match the filters
                 fix = self._match_fix(cp, msgs, idx, exp["from"])
+            if fix is None and got["type"] in _NOTHING_MORE | {"CHAINED"} \
+                    and exp["type"] not in _NOTHING_MORE | {"CHAINED"}:
+                # (last resort) the real game did more before going on (e.g. a cost
+                # whose size depends on fitting cards in the deck): let the hidden
+                # cards qualify
+                start = self._chain_start()
+                if start is not None and (start, self.pos) not in self.match_piles \
+                        and (start, self.pos) not in self.nomatch_piles:
+                    fix = ("matchpile", start, self.pos)
         what = item[1].get("type") if item[0] == "msg" else item[0]
         return Divergence(self.pos, f"message mismatch [{what} vs {got.get('type')}]", item, got, fix)
 
@@ -1306,6 +1322,21 @@ class BeliefReplay:
         for m in up:
             if m["type"] in _SELECTION_END:
                 return  # later moves belong to other decisions
+            if m["type"] == "CARD_SELECTED":
+                # the announced selection: a hidden card in it must be a valid option
+                for li in m["cards"]:
+                    cid = lm.at(li)
+                    if cid is None or cid in ids or li["con"] != self.opponent or li["loc"] not in HIDDEN_PILES:
+                        continue
+                    # (first codes not among the other selected cards: selections of
+                    # differently named cards are common)
+                    others = {lm.codes.get(lm.at(x)) for x in m["cards"] if x is not li}
+                    codes = []
+                    for c in sorted(cards, key=lambda c: (c["code"] in others, c["loc"] != li["loc"])):
+                        if c["code"] and c["code"] not in codes:
+                            codes.append(c["code"])
+                    self._assume(li, codes, "opponent selected a card the hypothesis does not provide")
+                return
             if m["type"] != "MOVE":
                 lm.references([m])
                 continue
@@ -1459,6 +1490,18 @@ class BeliefReplay:
     # the core resolves it and gives the turn player the command again
     # (IdleCommand steps 9-10, BattleCommand steps 39-40)
 
+    def _hidden_ids(self, duel: Duel) -> list[int]:
+        """Card ids of the opponent's cards the viewer cannot see (hidden piles
+        and face-down cards on the field)."""
+        from ..state import parse_location_query
+        out = [cid for loc in HIDDEN_PILES for _, cid in duel.location_cards(self.opponent, loc)]
+        for loc in (C.LOCATION_MZONE, C.LOCATION_SZONE):
+            cards = parse_location_query(duel.query_location_raw(self.opponent, loc, C.QUERY_POSITION))
+            for (_, cid), card in zip(duel.location_cards(self.opponent, loc), cards):
+                if cid and card is not None and not card.get("position", 0) & C.POS_FACEUP:
+                    out.append(cid)
+        return out
+
     def _chain_start(self) -> int | None:
         """Stream position of the opponent's latest CHAINING (shortly before)."""
         for j in range(self.pos - 1, max(-1, self.pos - 30), -1):
@@ -1539,11 +1582,14 @@ class BeliefReplay:
             self._check_assumption(duel, prompt, up, ids)
         cands, certain = self._candidates(duel, prompt, up, ids)
         valid = []
+        sig = (self.pos, repr(sorted(prompt.items())))
         for c in cands:
             try:
                 encode(prompt, c)
             except (InvalidResponse, KeyError, TypeError, ValueError):
                 continue
+            if c.get("cancel") and sig in self._cancelled:
+                continue  # (cancelling it before led back here without progress)
             if c not in valid:
                 valid.append(c)
         if not valid:
@@ -1556,6 +1602,8 @@ class BeliefReplay:
             self._trace(prompt, valid[i], False, len(valid))
             return valid[i]
         resp = self._choose(duel, prompt, valid, certain)
+        if resp.get("cancel"):
+            self._cancelled.add(sig)
         if dkey is not None:
             self._recent.append((dkey, len(valid), valid.index(resp)))
             self._since_state.append((dkey, len(valid), valid.index(resp)))
@@ -1627,6 +1675,8 @@ class BeliefReplay:
                 signal.alarm(max(2, self.probe_timeout >> self.depth))  # (depth of the parent)
                 self.depth += 1
                 self.check_state = False  # the main line checks states; probes only choose
+                # (a probe making many decisions without reproducing anything loops)
+                self.max_stall = min(self.max_stall, 50)
                 self.probe_start = self.pos
                 self.horizon = min(len(self.items), self.pos + self.probe_items)
                 # ... except the first one: a decision may show only there (e.g.
