@@ -177,14 +177,14 @@ message, every prompt of the viewer and the viewer's state view at every prompt)
 
 | cut      | seeds 1000-1999 | seeds 2000-2999 |
 |----------|-----------------|-----------------|
-| ~1/3     | 99.8%           | 100.0%           |
-| ~2/3     | 99.8%           | 100.0%           |
-| full game| 100.0%           | 99.8%           |
-| overall  | 99.9%           | 99.9%           |
+| ~1/3     | 100.0%          | 100.0%          |
+| ~2/3     | 99.95%          | 100.0%          |
+| full game| 99.95%          | 99.95%          |
+| overall  | 99.97%          | 99.98%          |
 
-About 96.5% of all reconstructions need no repair restart at all. The remaining failures are mostly
-effects whose behaviour depends on hidden cards in ways no repair covers yet (e.g. an
-excavation whose result decides what the opponent can pick), and copy identity puzzles.
+About 96.6% of all reconstructions need no repair restart at all. The three remaining failures:
+a release cost whose filter checks the hidden deck (the replay then releases the wrong hidden
+hand card), and which copy of an Xyz material had already used its granted effect this turn.
 
 Median reconstruction time is about 0.3s (a few long games take up to the 90s limit because
 of repeated repair restarts). Plain self-play is fast: about 0.2s CPU per game, ~650 decisions per game.

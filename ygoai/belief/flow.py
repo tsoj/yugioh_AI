@@ -450,6 +450,14 @@ class FlowSolver:
         from .completion import DeckCompletion
         comp = self.completion if self.completion is not None else DeckCompletion()
         unknown = 0
+        # codes excluded for a slot are excluded for the card it realizes to
+        excluded: dict[int, set] = defaultdict(set)
+        for v in t.exclusions:
+            a = v
+            while a is not None and a.kind == "claim":
+                a = a.assigned
+            if a is not None:
+                excluded[a.id] |= v.excluded
         for p in (0, 1):
             atoms = t.atoms[p]
             for a in atoms:
@@ -465,7 +473,8 @@ class FlowSolver:
             typed = [a for a in wild if commodities[vcom[a.id]][1] not in (WILD_MAIN, WILD_EXTRA)]
             for a in typed:
                 need = _wild_need(commodities[vcom[a.id]][1])
-                cands = [c for c in comp.stand_ins(need) if counts[self._base(c)] < 3]
+                cands = [c for c in comp.stand_ins(need) if counts[self._base(c)] < 3
+                         and c not in excluded.get(a.id, ())]
                 if not cands:
                     raise TrackerError(f"no stand-in for a hidden card of kind {need}")
                 a.resolved = cands[0]

@@ -93,6 +93,18 @@ class Divergence(RuntimeError):
         self.fix = fix
 
 
+def _stat_mismatch(e: Divergence) -> bool:
+    """A message that shows stats (e.g. the ATK of an attack) differs only in
+    them: like a state view, it shows the result of every decision since the
+    last one (e.g. which monster an effect raised)."""
+    exp = e.expected[1] if isinstance(e.expected, tuple) and len(e.expected) > 1 else e.expected
+    got = e.got
+    if not isinstance(exp, dict) or not isinstance(got, dict) or exp.get("type") != got.get("type"):
+        return False
+    diff = {k for k in set(exp) | set(got) if exp.get(k) != got.get(k)}
+    return bool(diff) and all(isinstance(k, str) and k.endswith(("_atk", "_def")) for k in diff)
+
+
 def first_difference(a, b, path: str = "") -> str | None:
     if type(a) is not type(b):
         return f"{path}: {a!r} != {b!r}"
@@ -440,9 +452,11 @@ class BeliefReplay:
                 duel.close()
                 last = e
                 bt = self._state_bt
-                if bt is not None and e.pos < bt["pos"]:
+                if bt is not None and (e.pos < bt["pos"] or e.pos == bt["pos"] and (
+                        e.reason.startswith("state mismatch") or _stat_mismatch(e))):
                     # the decision changed for a state mismatch made an earlier
-                    # observation differ: its next alternative, else an earlier decision
+                    # observation differ (or did not change the state): its next
+                    # alternative, else an earlier decision
                     k = bt["key"]
                     if self.overrides[k] + 1 < bt["n"][k]:
                         self.overrides[k] += 1
@@ -495,7 +509,7 @@ class BeliefReplay:
                     # whose consequence diverged: try the latest one differently
                     # (a state view shows the result of every decision since the
                     # previous one, e.g. an answer to "lower its Level?")
-                    state = e.reason.startswith("state mismatch")
+                    state = e.reason.startswith("state mismatch") or _stat_mismatch(e)
                     recent = self._since_state if state else self._recent
                     alt = next(((k, i + 1) for k, n, i in reversed(recent) if i + 1 < n), None)
                     if alt is not None and self.overrides.get(alt[0], -1) < alt[1]:
@@ -970,16 +984,39 @@ class BeliefReplay:
                 # the opponent chose an option the replay did not offer or take:
                 # which options exist can depend on hidden cards (e.g. "set a trap
                 # from the deck"); let them qualify from the activation on
+                # (first from just after the activation's message: the chain window
+                # before it sees the real cards, e.g. whether a hand trap may respond)
                 start = self._chain_start()
                 if start is not None:
-                    fix = ("matchpile", start, self.pos)
-                    if fix[1:] in self.match_piles:
-                        fix = None
-            if fix is None and exp["type"] == "CONFIRM_CARDS" and got["type"] != "CONFIRM_CARDS" \
-                    and exp["cards"] and exp["cards"][0]["con"] == self.opponent:
+                    fix = next((("matchpile", a, self.pos) for a in (min(start + 1, self.pos), start)
+                                if (a, self.pos) not in self.match_piles), None)
+            if fix is None and got["type"] == "POS_CHANGE" and exp["type"] != "POS_CHANGE" \
+                    and got["con"] == self.opponent and got.get("code") \
+                    and got["prev_pos"] & C.POS_FACEDOWN and got["pos"] & C.POS_FACEUP:
+                # the replay turned the opponent's hidden card face-up where the real
+                # game did not (e.g. an effect that flips only traps): the card is
+                # not the replay's
+                key = (self.pos, got["con"], got["loc"], (got["seq"],), got["code"])
+                if key not in self.exclusions and key not in self.failed_exclusions:
+                    fix = ("exclude", *key)
+            if fix is None and exp["type"] == "CONFIRM_CARDS" and exp["cards"] \
+                    and exp["cards"][0]["con"] == self.opponent \
+                    and (got["type"] != "CONFIRM_CARDS" or len(got["cards"]) < len(exp["cards"])):
                 # the opponent revealed a card that the replay's filter rejects (the
                 # filter depends on hidden cards, e.g. a matching card in the deck)
-                fix = self._match_fix(cp, msgs, idx, exp["cards"][0])
+                shown = [(c["con"], c["loc"], c["seq"]) for c in got["cards"]] if got["type"] == "CONFIRM_CARDS" else []
+                start = self._chain_start()
+                ch = self.items[start][1] if start is not None else None
+                if ch is not None and (self.opponent, ch["code"], ch["desc"]) in self._active_forces \
+                        and (start, self.pos) not in self.match_piles:
+                    # the activation is forced (its cost check failed in the replay):
+                    # the check depends on hidden cards, which the cost reveals too
+                    fix = ("matchpile", start, self.pos)
+                for c in exp["cards"] if fix is None else ():
+                    if (c["con"], c["loc"], c["seq"]) not in shown:
+                        fix = self._match_fix(cp, msgs, idx, c)
+                        if fix is not None:
+                            break
                 if fix is None:
                     start = self._chain_start()
                     if start is not None and (start, self.pos) not in self.match_piles:
@@ -1372,16 +1409,28 @@ class BeliefReplay:
         """The viewer selects among the opponent's hidden cards (e.g. in their deck):
         the prompt shows which positions hold eligible cards, so the hypothesis
         must put eligible cards exactly there."""
-        key = "cards"
+        key = "cards" if "cards" in exp else "select_cards"
         if exp["type"] != got["type"] or key not in exp or key not in got:
             return None
 
         def hidden(c):
-            return c["con"] == self.opponent and c["loc"] in HIDDEN_PILES and not c.get("code")
+            return c["con"] == self.opponent and not c.get("code") and (
+                c["loc"] in HIDDEN_PILES or (c["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE)
+                                             and c.get("pos", 0) & C.POS_FACEDOWN))
         want = {(c["con"], c["loc"], c["seq"]) for c in exp[key] if hidden(c)}
         have = {(c["con"], c["loc"], c["seq"]) for c in got[key] if hidden(c)}
         if want == have:
             return None
+        for loc in sorted(have - want):
+            if loc[1] in (C.LOCATION_MZONE, C.LOCATION_SZONE):
+                # a face-down card that is not eligible: not the replay's card
+                var = self.lockstep.var_at(*loc)
+                code = self.hypothesis.var_codes.get(var.id) if var is not None else None
+                entry = (self.pos, loc[0], loc[1], (loc[2],), code)
+                if code and entry not in self.exclusions and entry not in self.failed_exclusions:
+                    return ("exclude", *entry)
+        want = {x for x in want if x[1] in HIDDEN_PILES}
+        have = {x for x in have if x[1] in HIDDEN_PILES}
         # an eligible code, taken from one of the replay's eligible cards
         codes = []
         for c in have - want:
@@ -1546,6 +1595,17 @@ class BeliefReplay:
         if any(o["code"] == ch["code"] and o.get("desc", ch["desc"]) == ch["desc"] for o in options):
             return
         fix = self._force_fix(ch)
+        key = (self.opponent, ch["code"], ch["desc"])
+        if fix is None and t in ("SELECT_IDLECMD", "SELECT_BATTLECMD") and key in self._active_forces \
+                and not any(o.get("code") == ch["code"] for o in options):
+            # forced, and still not available (not even as the chain windows ended):
+            # a check beyond its cost and target
+            # depends on hidden cards (e.g. "can be activated the turn it was Set"
+            # if the deck has a fitting card); let them qualify until it is chained
+            end = next((j for j in range(self.pos, len(self.items)) if self.items[j][0] == "msg"
+                        and self.items[j][1]["type"] == "CHAINED"), None)
+            if end is not None and (self.pos, end) not in self.match_piles:
+                fix = ("matchpile", self.pos, end)
         if fix is not None:
             raise Divergence(self.pos, "opponent activation is not available in the replay", fix=fix)
 
@@ -1873,9 +1933,11 @@ class BeliefReplay:
         cands, certain = self._candidates(duel, prompt, up, ids)
         valid = []
         sig = (self.pos, repr(sorted(prompt.items())))
-        if self.depth > 0 and sig == getattr(self, "probe_sig", None):
+        if self.depth > 0 and sig == getattr(self, "probe_sig", None) \
+                and prompt["type"] in ("SELECT_IDLECMD", "SELECT_BATTLECMD", "SELECT_CHAIN"):
             # back at the probed prompt without any new observation: a cycle
-            # (e.g. a summon procedure that was cancelled)
+            # (e.g. a summon procedure that was cancelled; a card selection can
+            # repeat on purpose, e.g. two cards chosen one by one from the same hand)
             raise Divergence(self.pos, "probe returned to its prompt")
         for c in cands:
             try:

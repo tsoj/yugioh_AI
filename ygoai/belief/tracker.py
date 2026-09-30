@@ -319,6 +319,28 @@ class Tracker:
                 todo.extend(x.pool.members)
         return out
 
+    def _owner_leaves(self, v: Var, owner: int, limit: int = 200) -> tuple[list[Var], list[Var]]:
+        """The cards (slots of a single possible owner) the shuffles before slot `v`
+        mixed: those of `owner` and those of the other player."""
+        mine: list[Var] = []
+        other: list[Var] = []
+        todo, seen = [v], set()
+        while todo:
+            x = todo.pop()
+            if x.id in seen:
+                continue
+            seen.add(x.id)
+            if len(seen) > limit:
+                return [], []
+            os = self._possible_owners(x) if x is not v else {0, 1}
+            if len(os) == 1:
+                (mine if owner in os else other).append(x)
+            elif x.kind == "claim" and x.pool is not None:
+                todo.extend(x.pool.members)
+            else:
+                return [], []
+        return mine, other
+
     def _owned(self, v: Var | None, owner: int) -> None:
         """A card's owner shows even when it is hidden (a card given to the other
         player's hand keeps its sleeve): after a shuffle, the slot holds one of
@@ -331,7 +353,13 @@ class Tracker:
         members = v.pool.members
         owners = [self._possible_owners(m) for m in members]
         if all(os == owners[0] for os in owners):
-            return  # (tells nothing)
+            # (tells nothing directly) through earlier shuffles: not the only card
+            # of the other owner among the cards the shuffles mixed (e.g. one card
+            # taken from the other player's hand)
+            _, other = self._owner_leaves(v, owner)
+            if len(other) == 1 and not any(x is other[0] for x in v.not_same):
+                v.not_same.append(other[0])
+            return
         ids = frozenset(m.id for m, os in zip(members, owners) if owner in os)
         if ids:
             v.allowed = ids if v.allowed is None else (v.allowed & ids) or v.allowed
