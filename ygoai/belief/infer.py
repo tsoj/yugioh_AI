@@ -146,6 +146,9 @@ def infer_idle(prompt: dict, up: list[dict], up_ext: list[dict] | None = None) -
             lst = {"summon": "summonable", "spsummon": "spsummonable", "repos": "repositionable",
                    "mset": "msetable", "sset": "ssetable"}[key[0]]
             src = m if t == "FLIPSUMMONING" else source_of(m, before)
+            if src is not None and any(x["type"] in ("SHUFFLE_HAND", "SHUFFLE_DECK", "SHUFFLE_EXTRA")
+                                       and x["player"] == src["con"] for x in before):
+                src = None  # (the pile was shuffled since the prompt: its positions are others)
             entries = prompt[lst]
             cands = []
             if src is not None:

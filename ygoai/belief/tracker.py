@@ -133,6 +133,7 @@ class Tracker:
         self._referenced: list[Var] = []
         self._referenced_piles: set[tuple[int, int]] = set()  # (con, loc) they were revealed in
         self._picked: list[Var] = []  # of those, the ones picked at random
+        self._referenced_in_chain = False  # revealed while a chain was built or resolved
         self._chain: list[Var | None] = []  # the card of each chain link, by the time it chained
         self._chain_from_hand: list[bool] = []
         self._left_hand: list[Var] = []  # cards that left a hand while the current link resolves
@@ -376,6 +377,7 @@ class Tracker:
             self._referenced = []
             self._referenced_piles = set()
             self._picked = []
+            self._referenced_in_chain = False
         if t == "MOVE" and m["from"]["loc"] and not m["from"]["loc"] & C.LOCATION_OVERLAY:
             frm, to = m["from"], m["to"]
             v = self._plain_var(frm["con"], frm["loc"], frm["seq"])
@@ -425,8 +427,16 @@ class Tracker:
                 if v.kind == "claim" and v.pool is not None and self._referenced and not v.prefer \
                         and (frm["con"], frm["loc"]) in self._referenced_piles:
                     # (the first move out of the shuffled pile)
-                    pool = self._picked if any(x is not v for x in self._picked) else self._referenced
-                    v.prefer = [x for x in pool if x is not v]
+                    if not self._referenced_in_chain and to["loc"] == C.LOCATION_MZONE:
+                        # cards revealed outside a chain are the cost of a summon
+                        # procedure (e.g. Crimson Nova the Dark Cubic Lord reveals 3
+                        # other Cubic cards): the summoned card is another one
+                        v.not_same.extend(x for x in self._referenced if x is not v)
+                        # (the reveal was that procedure's cost: it says nothing more)
+                        self._referenced, self._referenced_piles, self._picked = [], set(), []
+                    else:
+                        pool = self._picked if any(x is not v for x in self._picked) else self._referenced
+                        v.prefer = [x for x in pool if x is not v]
             if to["loc"]:
                 self._put(v, to)
             self.observe(v, m["code"])
@@ -511,6 +521,7 @@ class Tracker:
                     self._confirmed.append(v)
                     self._referenced.append(v)
                     self._referenced_piles.add((c["con"], c["loc"]))
+                    self._referenced_in_chain = self._referenced_in_chain or bool(self._chain)
                 if c["code"]:
                     self.observe(v, c["code"])
         elif t == "RANDOM_SELECTED":
