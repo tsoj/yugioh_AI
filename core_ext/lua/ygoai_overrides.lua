@@ -65,3 +65,58 @@ function Auxiliary.SelectUnselectLoop(c, sg, mg, e, tp, minc, maxc, rescon)
 	if not ok then error(res, 0) end
 	return res
 end
+
+-- Fusion materials (proc_fusion.lua, "N materials + X or more"): the search
+-- tries every remaining card in the next step, so it reaches the same state in
+-- every order, both when it extends the chosen materials with candidates
+-- (Fusion.CheckSelectMixRep) and when it assigns materials already selected, e.g.
+-- by the player one by one, to the material slots (Fusion.CheckMixRepSelectedCond).
+-- Frightfur monsters with many Fluffals took seconds per check and ran into the
+-- Lua budget. Each of the two answers depends only on the state reached: the
+-- materials chosen, the cards that must still be used, the slots left, the counts
+-- and whether a substitute was used. Every intermediate group is still checked
+-- (Fusion.CheckAdditional, the Extra Monster Zone) exactly as before, along every
+-- order that the original tries; only a state that was answered already is not
+-- searched again. The answers are remembered for the duration of one
+-- Fusion.SelectMixRep call (one first material: everything else passed down, e.g.
+-- the candidate materials, stays the same below it).
+do
+	local select_mix_rep = Fusion.SelectMixRep
+	local check_select_mix_rep = Fusion.CheckSelectMixRep
+	local fmemo = nil
+
+	function Fusion.SelectMixRep(...)
+		if fmemo ~= nil then return select_mix_rep(...) end
+		fmemo = {}
+		local ok, res = pcall(select_mix_rep, ...)
+		fmemo = nil
+		if not ok then error(res, 0) end
+		return res
+	end
+
+	-- (memoised: called with tp, mg, sg, mustg, g, fc, sub, sub2, contact, sumtype,
+	-- chkf, fun1, minc, maxc and the slots left; everything but mustg, g, sub, the
+	-- counts and the slots stays the same during one Fusion.SelectMixRep call)
+	local function memoised(f, name)
+		return function(tp, mg, sg, mustg, g, fc, sub, sub2, contact, sumtype, chkf, fun1, minc, maxc, ...)
+			if fmemo == nil then
+				return f(tp, mg, sg, mustg, g, fc, sub, sub2, contact, sumtype, chkf, fun1, minc, maxc, ...)
+			end
+			local parts = {name, group_key(g), group_key(mustg), tostring(sub), tostring(minc), tostring(maxc)}
+			for _, slot in ipairs({...}) do
+				parts[#parts + 1] = tostring(slot)
+			end
+			local key = table.concat(parts, "|")
+			local hit = fmemo[key]
+			if hit == nil then
+				hit = {f(tp, mg, sg, mustg, g, fc, sub, sub2, contact, sumtype, chkf, fun1, minc, maxc, ...)}
+				fmemo[key] = hit
+			end
+			return hit[1]
+		end
+	end
+	-- extending the chosen materials with candidates
+	Fusion.CheckSelectMixRep = memoised(check_select_mix_rep, "ext")
+	-- assigning the materials already selected (e.g. by the player, one by one) to slots
+	Fusion.CheckMixRepSelectedCond = memoised(Fusion.CheckMixRepSelectedCond, "sel")
+end

@@ -305,7 +305,14 @@ filters in a canonical form (and ANNOUNCE_NUMBER options sorted).
   the same results, but faster. `aux.SelectUnselectGroup`'s search visited every group of k
   cards in up to k! orders (Rainbow Dark Dragon's check of 7 DARK monsters with different
   names took seconds at every idle prompt); it now remembers per group whether the rest can
-  complete it. `YGOAI_NO_OVERRIDES=1` loads the original helpers (same games, compared on 300).
+  complete it. Likewise the Fusion material search for "N materials + X or more"
+  (`proc_fusion.lua`), which reached each state in every order both when extending the chosen
+  materials and when assigning selected ones to the material slots (Frightfur monsters with
+  many Fluffals ran into the Lua budget, 22 s per check); each state is answered once per
+  check, with every intermediate group still checked along every order as before.
+  `YGOAI_NO_OVERRIDES=1` loads the original helpers: 780 games compared (seeds 1000-1099,
+  5000-5099, 6000-6099, 6900-6999 and the whole opening book) are identical, except one game
+  from the point where the original ran into the budget.
 * A card entering the hand, deck or Extra Deck forgets its position and activation history
   (JUST_POS, CONTINUOUS_POS, ATTACK_CANCELED, ACT_FROM_HAND status bits): it is a new object by
   the rules, and the stale bits made physical copies distinguishable.
