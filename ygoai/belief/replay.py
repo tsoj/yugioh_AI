@@ -330,6 +330,7 @@ class BeliefReplay:
         self.snapshots: dict[int, infer.LocMap] = {}
         self._roll_cp = None  # the latest main-line step's snapshot (kept only until the next)
         self._card_decisions: dict[tuple, dict[int, int]] = {}  # decision -> card id -> answer index
+        self._window_choices: list[tuple] = []  # (decision, activation answer) passed in leave windows
         self._multi_decisions: dict[tuple, tuple] = {}  # decision -> (card ids, chosen response)
         self._roll_dirty = True  # whether a card may have moved since that snapshot
         self.lockstep = Tracker(self.viewer, self.init)
@@ -371,6 +372,10 @@ class BeliefReplay:
                 # the shuffle (the tracker's preference, made a constraint)
                 if v is not None and v.kind == "claim" and v.pool is not None and v.prefer:
                     ids = frozenset(m.id for m in v.pool.members if any(m is x for x in v.prefer))
+                    if not ids:
+                        # (shuffled more than once since: the revealed cards themselves,
+                        # which the flow follows through the shuffles)
+                        ids = frozenset(x.id for x in v.prefer)
                     if ids:
                         v.allowed = ids if v.allowed is None else (v.allowed & ids) or v.allowed
         self.hypothesis = tracker.solve(self.completion, self.db)
@@ -1257,6 +1262,15 @@ class BeliefReplay:
                 if start is not None and (start, self.pos) not in self.match_piles \
                         and (start, self.pos) not in self.nomatch_piles:
                     fix = ("matchpile", start, self.pos)
+        if fix is None and item[0] == "prompt" and item[1]["type"] in ("SELECT_BATTLECMD", "SELECT_IDLECMD") \
+                and got.get("type") == "NEW_PHASE":
+            # the replay skipped a phase the real game did not: an effect that ends a
+            # phase lingers where it should not (e.g. activated in a later window than
+            # the real one, after the step whose end it resets at)
+            for dkey, act in reversed(self._window_choices):
+                if self.overrides.get(dkey) != act:
+                    fix = ("decide", dkey, act)
+                    break
         if fix is None and item[0] == "prompt":
             # the viewer's prompt comes next in the real game, but the replay
             # activated a forced effect first (e.g. a mandatory trigger whose
@@ -1833,13 +1847,15 @@ class BeliefReplay:
 
     def _selection_window(self, up: list[dict]) -> list[dict]:
         """The messages that show what the opponent selected: when the viewer
-        selects cards of its own right after it (e.g. "each player sends 3 cards"),
-        the operation on the selected cards comes after both selections."""
+        decides something right after it (e.g. "each player sends 3 cards"), the
+        operation on the selected cards comes after both decisions."""
         if any(m["type"] not in ("HINT", "CARD_HINT") for m in up):
             return up
         i = self.pos + len(up)
-        if i >= len(self.items) or self.items[i][0] != "prompt" or self.items[i][1]["type"] not in CARD_PROMPTS:
+        if i >= len(self.items) or self.items[i][0] != "prompt":
             return up
+        # (any prompt of the viewer: e.g. "each player may reveal a card from their
+        # deck" asks both before revealing both)
         return self._upcoming_ext()
 
     @staticmethod
@@ -2184,11 +2200,24 @@ class BeliefReplay:
         hint = getattr(self, "_event_hint", None)
         return hint is not None and hint[0] == self.pos and hint[1] in infer.PHASE_LEAVE_EVENTS
 
+    def _command_target(self) -> int | None:
+        """The phase the viewer's phase command right before this window asked for
+        (None if the window does not follow one, e.g. in the opponent's turn)."""
+        j = self.pos - 1
+        while j >= 1 and self.items[j][0] == "msg" and self.items[j][1]["type"] == "HINT":
+            j -= 1
+        it, before = self.items[j], self.items[j - 1]
+        if it[0] != "response" or before[0] != "prompt" \
+                or before[1]["type"] not in ("SELECT_IDLECMD", "SELECT_BATTLECMD") or not isinstance(it[1], dict):
+            return None
+        return {"to_ep": C.PHASE_END, "to_m2": C.PHASE_MAIN2, "to_bp": C.PHASE_BATTLE_START}.get(it[1].get("kind"))
+
     def _restarts_after_chain(self) -> bool:
         """Whether the stream shows the turn player's command again after the
         upcoming chain (instead of the phase change)."""
         depth, started = 0, False
-        for item in self.items[self.pos:self.pos + 600]:
+        window = self.items[self.pos:self.pos + 600]
+        for n, item in enumerate(window):
             if item[0] == "msg":
                 t = item[1]["type"]
                 if t == "CHAINING":
@@ -2196,7 +2225,19 @@ class BeliefReplay:
                 elif t == "CHAIN_END" and started:
                     depth = 1
                 elif t == "NEW_PHASE" and depth:
-                    return False
+                    # (unless the phase reached is another than the command asked
+                    # for: then the activation came in this window and changed the
+                    # phase, e.g. "end the Battle Phase" after the player chose the
+                    # End Phase; the core passes through phases on the way, e.g.
+                    # Main Phase 2 on the way to the End Phase)
+                    target = self._command_target()
+                    reached = item[1]["phase"]
+                    for x in window[n + 1:]:
+                        if x[0] != "msg" or x[1]["type"] not in ("NEW_PHASE", "HINT"):
+                            break
+                        if x[1]["type"] == "NEW_PHASE":
+                            reached = x[1]["phase"]
+                    return target is not None and reached != target
                 elif t == "WIN":
                     return True
             elif item[0] == "prompt" and depth and item[1]["type"] in ("SELECT_IDLECMD", "SELECT_BATTLECMD"):
@@ -2306,6 +2347,14 @@ class BeliefReplay:
         resp = self._choose(duel, prompt, valid, certain)
         if resp.get("cancel"):
             self._cancelled.add(sig)
+        if dkey is not None and prompt["type"] == "SELECT_CHAIN" and resp.get("index", -1) == -1 \
+                and self._leaving_phase():
+            # (passed in a phase-leave window in favour of a later one: which window
+            # it was can show much later, e.g. an effect ending the Battle Phase that
+            # lingers into the next one when activated after the Battle Step)
+            act = next((k for k, c in enumerate(valid) if c.get("index", -1) >= 0), None)
+            if act is not None:
+                self._window_choices.append((dkey, act))
         if dkey is not None and ids is not None and resp.get("indices"):
             self._multi_decisions[dkey] = (ids, resp)
         if dkey is not None:

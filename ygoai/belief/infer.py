@@ -877,6 +877,41 @@ def _infer_deck_sort(prompt: dict, up: list[dict]) -> list[int] | None:
     return None
 
 
+def _sort_by_events(cards: list[dict], up: list[dict]) -> list[int] | None:
+    """Effects that are no chain links (e.g. attack costs: "send a card", "pay
+    500 LP") applied in the chosen order: each shows as one event, and copies of a
+    card as the same kind of event. Match the cards' codes to the kinds of the next
+    events (the counts must fit) and rank the cards in the order of their events."""
+    import itertools
+    events = []
+    for m in up:
+        if m["type"] in ("HINT", "CARD_HINT", "PLAYER_HINT"):
+            continue
+        if len(events) == len(cards):
+            break
+        events.append(m["type"])
+    if len(events) != len(cards):
+        return None
+    codes = sorted({c["code"] for c in cards})
+    kinds = sorted(set(events))
+    count = {c: sum(1 for x in cards if x["code"] == c) for c in codes}
+    fits = []
+    for assign in itertools.product(kinds, repeat=len(codes)):
+        if len(fits) > 1:
+            break
+        f = dict(zip(codes, assign))
+        if all(sum(count[c] for c in codes if f[c] == t) == events.count(t) for t in kinds):
+            fits.append(f)
+    if len(fits) != 1:
+        return None  # (no or several ways: the events do not tell)
+    f = fits[0]
+    order = [None] * len(cards)
+    for k, t in enumerate(events):
+        i = next(i for i, c in enumerate(cards) if order[i] is None and f[c["code"]] == t)
+        order[i] = k
+    return order
+
+
 def infer_sort(prompt: dict, up: list[dict]) -> tuple[list[dict], bool]:
     import itertools
     n = len(prompt["cards"])
@@ -902,6 +937,10 @@ def infer_sort(prompt: dict, up: list[dict]) -> tuple[list[dict], bool]:
             cands.append({"order": order})
             if k == n:
                 return cands, True
+        else:
+            order = _sort_by_events(prompt["cards"], up)
+            if order is not None:
+                cands.append({"order": order})
     if prompt["type"] == "SORT_CARD":
         order = _infer_deck_sort(prompt, up)
         if order is not None:

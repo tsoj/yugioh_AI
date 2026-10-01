@@ -55,7 +55,7 @@ def check_prefix(record: GameRecord, viewer: int, items: list[tuple], cut: int,
     prefix = items[:cut]
     res = CheckResult(viewer=viewer, cut=cut, length=len(items), ok=False)
     t0 = time.monotonic()
-    stopped = cut == len(items) and (record.result or {}).get("reason") in ("turn_limit", "decision_limit")
+    stopped = cut == len(items) and (record.result or {}).get("reason") in ("turn_limit", "decision_limit", "time_limit")
     br = BeliefReplay(viewer, init_info(record, viewer), prefix, stopped=stopped, **replay_kwargs)
     br.log = lambda text: res.repairs.append(text) if text.startswith("restart") else None
     try:

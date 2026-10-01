@@ -417,6 +417,12 @@ class FlowSolver:
     def _realize(self, vcom: dict[int, int], commodities: list[tuple]) -> Hypothesis:
         t = self.t
         # 1. every pool: claims get members of the same commodity (hint identity first)
+        byid = {v.id: v for v in t.all_vars}
+
+        def allows(c: Var, m: Var) -> bool:
+            # (allowed may name earlier cards: then the member that is one of them)
+            return c.allowed is None or m.id in c.allowed or any(
+                a in byid and self._descends(m, byid[a]) for a in c.allowed)
         for pool in t.pools:
             free: dict[int, list[Var]] = defaultdict(list)
             for m in pool.members:
@@ -438,9 +444,9 @@ class FlowSolver:
                     # the member whose own history contains that slot
                     pick = next((m for m in cands if self._descends(m, c.same_as)), None)
                     if pick is None:
-                        pick = next((m for m in cands if c.allowed is None or m.id in c.allowed), None)
+                        pick = next((m for m in cands if allows(c, m)), None)
                 else:
-                    pick = next((m for m in cands if c.allowed is None or m.id in c.allowed), None)
+                    pick = next((m for m in cands if allows(c, m)), None)
                 if pick is None:
                     raise TrackerError(f"no member for {c} in pool {pool.index}")
                 available.remove(pick)

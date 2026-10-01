@@ -141,6 +141,8 @@ class Tracker:
         self._last_sig: tuple | None = None  # the latest message that is not a hint
         self.turn_player = 0
         self._releases = 0  # cards released for the current action (tribute count)
+        self._faceup_in_deck: list[Var] = []  # cards put into a deck face-up
+        self._top_check: int | None = None  # a deck just shuffled (whose top may be announced)
         own = init["deck"]
         opp_main, opp_extra = init["opponent_deck_size"], init["opponent_extra_size"]
         for p in (0, 1):
@@ -384,6 +386,19 @@ class Tracker:
 
     def message(self, m: dict) -> None:
         t = m["type"]
+        if self._top_check is not None:
+            p, self._top_check = self._top_check, None
+            if not (t == "DECK_TOP" and m["player"] == p) and self._faceup_in_deck:
+                # a shuffled deck whose top card is face-up is announced (DECK_TOP):
+                # this one was not, so its top card is none of the face-up ones
+                deck = self.lists[p][C.LOCATION_DECK]
+                top = deck[-1] if deck else None
+                if top is not None and top.kind == "claim":
+                    for x in self._faceup_in_deck:
+                        if x is not top and not any(y is x for y in top.not_same):
+                            top.not_same.append(x)
+        if t == "SHUFFLE_DECK":
+            self._top_check = m["player"]
         if t not in ("HINT", "CARD_HINT", "CHAIN_SOLVED"):
             self._last_sig = (t, m.get("player"))
         if self._solved is not None and t != "CHAIN_SOLVED":
@@ -470,6 +485,8 @@ class Tracker:
             if to["loc"]:
                 self._put(v, to)
             self.observe(v, m["code"])
+            if to["loc"] == C.LOCATION_DECK and to.get("pos", 0) & C.POS_FACEUP:
+                self._faceup_in_deck.append(v)  # (its place in the deck stays public)
         elif t == "DRAW":
             p = m["player"]
             deck = self.lists[p][C.LOCATION_DECK]
@@ -581,6 +598,8 @@ class Tracker:
             idx = len(deck) - 1 - m["seq"]
             if 0 <= idx < len(deck) and m["code"]:  # (shown whatever the position says)
                 self.observe(deck[idx], m["code"])
+                if m.get("pos", 0) & C.POS_FACEUP and not any(x is deck[idx] for x in self._faceup_in_deck):
+                    self._faceup_in_deck.append(deck[idx])  # (turned face-up: its place stays public)
         elif t == "SWAP":
             l1, l2 = m["loc1"], m["loc2"]
             v1 = self.var_at(l1["con"], l1["loc"], l1["seq"])
@@ -742,6 +761,12 @@ class Tracker:
                         raise TrackerError(f"size mismatch P{pl_idx} {name}: {len(cards)} vs {len(lst)}")
                     for v, card in zip(lst, cards):
                         self.observe(v, card.get("code", 0))
+                        if loc == C.LOCATION_DECK and card.get("code") and card.get("position", 0) & C.POS_FACEUP:
+                            # a face-up card in the deck: the one put there face-up
+                            same = [x for x in self._faceup_in_deck
+                                    if (x.fixed_code if x.fixed_code is not None else x.code) == card["code"]]
+                            if len(same) == 1:
+                                self._identify(v, same[0])
                         v.faceup = bool(card.get("position", 0) & C.POS_FACEUP)
                         if "owner" in card and loc == C.LOCATION_HAND:
                             self._owned(v, card["owner"])
