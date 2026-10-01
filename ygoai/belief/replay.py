@@ -630,7 +630,9 @@ class BeliefReplay:
             key = fix[1:]
             if key in self.assumptions:
                 return False
-            # a later assumption for the same card replaces an earlier one
+            # a later assumption for the same card replaces an earlier one (which
+            # then counts as tried)
+            self.failed_assumptions.update(a for a in self.assumptions if a[:4] == key[:4])
             self.assumptions = [a for a in self.assumptions if a[:4] != key[:4]] + [key]
             self.hypothesis = None
             self.stats.assumptions += 1
@@ -1085,13 +1087,18 @@ class BeliefReplay:
                 if start is not None:
                     fix = next((("matchpile", a, self.pos) for a in (min(start + 1, self.pos), start)
                                 if (a, self.pos) not in self.match_piles), None)
-            if fix is None and got["type"] == "POS_CHANGE" and exp["type"] != "POS_CHANGE" \
-                    and got["con"] == self.opponent and got.get("code") \
-                    and got["prev_pos"] & C.POS_FACEDOWN and got["pos"] & C.POS_FACEUP:
-                # the replay turned the opponent's hidden card face-up where the real
-                # game did not (e.g. an effect that flips only traps): the card is
-                # not the replay's
-                key = (self.pos, got["con"], got["loc"], (got["seq"],), got["code"])
+            revealed = None
+            if got["type"] == "POS_CHANGE" and got["prev_pos"] & C.POS_FACEDOWN and got["pos"] & C.POS_FACEUP:
+                revealed = got
+            elif got["type"] == "MOVE" and got["from"]["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE) \
+                    and got["from"].get("pos", 0) & C.POS_FACEDOWN:
+                revealed = got["from"]
+            if fix is None and revealed is not None and exp["type"] != got["type"] \
+                    and revealed["con"] == self.opponent and got.get("code"):
+                # the replay showed the opponent's face-down card (flipped it, or sent
+                # it away) where the real game did not (e.g. an effect that destroys
+                # only traps): the card is not the replay's
+                key = (self.pos, revealed["con"], revealed["loc"], (revealed["seq"],), got["code"])
                 if key not in self.exclusions and key not in self.failed_exclusions:
                     fix = ("exclude", *key)
             if fix is None and exp["type"] == "CONFIRM_CARDS" and exp["cards"] \
@@ -1284,6 +1291,13 @@ class BeliefReplay:
                 if cid and c == replay_code and hidden:
                     found.append({"con": self.opponent, "loc": loc, "seq": seq})
         field = [f for f in found if f["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE)]
+        if len(field) > 1:
+            # (several: the one the chain link being resolved targeted)
+            start = next((j for j in range(self.pos - 1, max(-1, self.pos - 30), -1)
+                          if self.items[j][0] == "msg" and self.items[j][1]["type"] == "CHAINING"), self.pos)
+            targets = [c for it in self.items[start:self.pos]
+                       if it[0] == "msg" and it[1]["type"] == "BECOME_TARGET" for c in it[1]["cards"]]
+            field = [f for f in field if any(infer.same_loc(f, t) for t in targets)]
         if len(field) == 1:
             found = field  # (a face-down card on the field, e.g. the target, before filler copies)
         if len(found) != 1:
@@ -1843,14 +1857,29 @@ class BeliefReplay:
             var = self.lockstep.var_at(li["con"], li["loc"], li["seq"])
         except TrackerError:
             return
-        if var is None or var.id in self.hypothesis.observed:
-            return
         key = (li["con"], li["loc"], li["seq"])
+        if var is None or (var.id in self.hypothesis.observed
+                           and not any(a[:4] == (self.pos, *key) for a in self.assumptions)):
+            return  # (observed, other than by an assumption at this slot and point)
         tried = {a[4] for a in self.assumptions if a[1:4] == key} | {
             a[4] for a in self.failed_assumptions if a[1:4] == key}
         for code in codes:
             if code and code not in tried:
                 raise Divergence(self.pos, reason, fix=("assume", self.pos, *key, code))
+
+    def _opp_seen_codes(self) -> list[int]:
+        """Codes of the opponent's cards the stream showed, in order of appearance."""
+        if not hasattr(self, "_seen_cache"):
+            out: dict[int, None] = {}
+            for it in self.items:
+                if it[0] != "msg":
+                    continue
+                m = it[1]
+                li = m["from"] if m["type"] == "MOVE" else m
+                if m.get("code") and li.get("con") == self.opponent:
+                    out.setdefault(m["code"], None)
+            self._seen_cache = [c for c in out if self.db.get(c) is not None]
+        return self._seen_cache
 
     def _filler(self) -> VanillaCompletion:
         if not hasattr(self, "_filler_cache"):
@@ -1888,6 +1917,18 @@ class BeliefReplay:
             if entries and all(fits(e["code"]) for e in entries):
                 return
             codes = [e["code"] for e in prompt[kind] if fits(e["code"])]
+            # (most likely a copy of a card the opponent has shown, e.g. one whose
+            # Tribute the field allows: then the generic stand-ins)
+            want = C.TYPE_MONSTER if kind == "msetable" else C.TYPE_SPELL | C.TYPE_TRAP
+            codes += [c for c in self._opp_seen_codes() if fits(c) and self.db.get(c).type & want
+                      and not self.db.get(c).type & (C.TYPE_FUSION | C.TYPE_SYNCHRO | C.TYPE_XYZ | C.TYPE_LINK)]
+            if kind == "msetable":
+                # (then stand-ins of the races the opponent's monsters have, e.g. a
+                # Zombie where only Zombies may be Tributed for)
+                races = Counter(self.db.get(c).race for c in self._opp_seen_codes()
+                                if self.db.get(c).type & C.TYPE_MONSTER)
+                for race, _ in races.most_common(3):
+                    codes += [c for c in filler.vanillas if self.db.get(c).race == race and fits(c)][:2]
             codes += [c for c in (filler.settable_monsters_all if kind == "msetable"
                                   else filler.settable_spells) if fits(c)]
             self._assume(src, codes, "opponent set a card the hypothesis cannot set")

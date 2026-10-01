@@ -113,6 +113,7 @@ class VanillaCompletion(DeckCompletion):
         self.settable_monsters = [c for c in self.main_pool if self.db.get(c).level <= 4][:10]
         vanillas = sorted(c.code for c in cards if c.type == C.TYPE_MONSTER | C.TYPE_NORMAL
                           and not c.alias and c.ot & 0x3)
+        self.vanillas = vanillas
         self.settable_monsters_all = []
         for levels in (range(1, 5), range(5, 7), range(7, 13)):
             self.settable_monsters_all += [c for c in vanillas if self.db.get(c).level in levels][:6]
