@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from ygoai.belief.check import cut_points, make_game, observation_stream  # noqa: E402
+from ygoai.belief.check import cut_point, make_game, observation_stream  # noqa: E402
 from ygoai.belief.replay import BeliefReplay, Divergence, first_difference  # noqa: E402
 from ygoai.game import ObservationLog, Observer, init_info, replay  # noqa: E402
 from ygoai.pretty import msg_str, prompt_str  # noqa: E402
@@ -60,7 +60,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("seed", type=int)
     ap.add_argument("viewer", type=int)
-    ap.add_argument("--cut", type=float, default=1.0)
+    ap.add_argument("--cut", type=float, default=1.0, help="fraction of the game, or -N: the end of turn N")
     ap.add_argument("--context", type=int, default=25)
     ap.add_argument("--after", type=int, default=5)
     ap.add_argument("--no-sim", action="store_true", help="do not print the reconstruction's events")
@@ -74,7 +74,9 @@ def main():
                     decks=args.decks, book=args.book)
     print(rec.decks[0].name, "vs", rec.decks[1].name, rec.agents, rec.result)
     items = observation_stream(rec, args.viewer)
-    cut = cut_points(items, (args.cut,))[0]
+    cut = cut_point(items, args.cut)
+    if cut is None:
+        sys.exit(f"the game has no cut {args.cut}")
     br = BeliefReplay(args.viewer, init_info(rec, args.viewer), items[:cut])
     if args.max_restarts is not None:
         br.max_restarts = args.max_restarts

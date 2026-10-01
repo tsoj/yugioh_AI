@@ -40,7 +40,9 @@ from __future__ import annotations
 
 import copy
 from collections import Counter
+import mmap
 import os
+import pickle
 import signal
 import sys
 import time
@@ -147,6 +149,7 @@ def _all_responses(prompt: dict) -> list[dict]:
 
 _DECISION_WINDOW = 10  # stream positions a decision stays a candidate for retrying
 _DECISION_TRIES = 24  # alternatives tried for one mismatch
+_PROBE_BUDGET = 48  # probes a probe of the main line may start in all (nested)
 
 
 def first_difference(a, b, path: str = "") -> str | None:
@@ -208,6 +211,7 @@ class BeliefReplay:
         self.completion = completion or VanillaCompletion(self.db)
         self.check_state = check_state
         self.max_probes = max_probes
+        self._probe_counter: mmap.mmap | None = None
         self.probe_items = probe_items
         self.max_depth = max_depth
         self.max_restarts = max_restarts
@@ -298,6 +302,10 @@ class BeliefReplay:
         if getattr(self, "sim_log", None) is not None:
             self.sim_log = []
         self.pos = 0
+        self._plan: list[tuple] = []  # ((position, prompt type), answer) found by a probe
+        self._planned = None
+        self._report_depth = -1  # (in a probe: its own decisions are reported to the parent)
+        self._probe_decisions: list[tuple] = []
         # control points identify calls of duel.process() as (stream position,
         # number of calls since that position was reached), which stays valid
         # when a repair changes how many steps happen earlier in the replay
@@ -807,10 +815,10 @@ class BeliefReplay:
                     if prev is not None and not self._roll_dirty:
                         self.snapshots[cp] = prev  # (no card moved since)
                     else:
-                        self.snapshots[cp] = infer.LocMap(duel, lazy=False)
+                        self.snapshots[cp] = infer.LocMap.snapshot(duel)
                     self._roll_dirty = False
                 else:
-                    self.snapshots[cp] = infer.LocMap(duel, lazy=False)
+                    self.snapshots[cp] = infer.LocMap.snapshot(duel)
             # active for every step at this stream position: the selection may
             # happen in a step that shows the viewer nothing
             forced_match = self.matches.get(cp[0])
@@ -2317,6 +2325,23 @@ class BeliefReplay:
             self._dkey = (self.pos, n)
         else:
             self._dkey = None
+        # the answers a successful probe found for the decisions after the probed
+        # one (the same duel state here: no need to probe them again)
+        at = (self.pos, prompt["type"])
+        self._planned = None
+        if self._plan:
+            if self._plan[0][0] == at:
+                self._planned = self._plan.pop(0)[1]
+            else:
+                self._plan = []
+        resp = self._decide_memo(duel, prompt, up)
+        if self._planned is not None and resp != self._planned:
+            self._plan = []  # (decided otherwise, e.g. by a repair: the rest no longer applies)
+        if self.depth > 0 and self.depth == self._report_depth:
+            self._probe_decisions.append((at, resp))
+        return resp
+
+    def _decide_memo(self, duel: Duel, prompt: dict, up: list[dict]) -> dict:
         key = None
         if self.depth == 0 and self.use_memo and self._dkey not in self.overrides:
             key = (self.pos, self.stall, repr(prompt))
@@ -2405,7 +2430,11 @@ class BeliefReplay:
             self._since_state.append((dkey, len(valid), i))
             self._trace(prompt, valid[i], False, len(valid))
             return valid[i]
-        resp = self._choose(duel, prompt, valid, certain)
+        if self._planned is not None and self._planned in valid:
+            resp = self._planned
+            self._trace(prompt, resp, False, len(valid))
+        else:
+            resp = self._choose(duel, prompt, valid, certain)
         if resp.get("cancel"):
             self._cancelled.add(sig)
         if dkey is not None and prompt["type"] == "SELECT_CHAIN" and resp.get("index", -1) == -1 \
@@ -2442,7 +2471,9 @@ class BeliefReplay:
             # the probed decision already reproduced enough new observations;
             # the next ambiguous decision is the parent's business
             raise _ProbeSuccess()
-        if self.depth >= self.max_depth:
+        if self.depth >= self.max_depth or (self.depth > 0 and self._probe_count() >= _PROBE_BUDGET):
+            # (a probe's own probes are bounded: e.g. materials chosen one by one
+            # with nothing observed in between branch combinatorially)
             return valid[0]
         self.stats.probed_decisions += 1
         # a choice among face-up cards on the field shows in the next state view
@@ -2464,11 +2495,14 @@ class BeliefReplay:
         for k, c in enumerate(valid[:self.max_probes]):
             if k >= n_inferred and (best is not None or unrefuted is not None):
                 break  # (the answers inference left out only when its own all failed)
+            if self.depth == 0:
+                self._probe_count(reset=True)  # (each probe of the main line gets the whole budget)
             self.stats.probes += 1
             outcome = self._probe(duel, prompt, c)
             reached = self.last_probe_reached
             if outcome == PROBE_OK:
                 self._trace(prompt, c, False, len(valid))
+                self._plan = self.last_probe_plan
                 return c
             if outcome in (PROBE_REPAIRABLE, PROBE_REPAIRABLE_AT_ONCE, PROBE_PROGRESSED):
                 key = (reached, outcome != PROBE_PROGRESSED)
@@ -2513,6 +2547,16 @@ class BeliefReplay:
         if self.trace is not None and self.depth == 0:
             self.trace.append((self.pos, prompt, response, certain, n))
 
+    def _probe_count(self, reset: bool = False) -> int:
+        """Probes started since the main line's current probe began (counted in
+        memory shared with the probes, which run in forked processes)."""
+        if self._probe_counter is None:
+            self._probe_counter = mmap.mmap(-1, 8)  # (anonymous: shared with forks)
+        if reset:
+            self._probe_counter[:8] = bytes(8)
+            return 0
+        return int.from_bytes(self._probe_counter[:8], "little")
+
     def _probe(self, duel: Duel, prompt: dict, response: dict) -> int:
         """Checks a candidate response in a forked copy of the process.
 
@@ -2522,6 +2566,9 @@ class BeliefReplay:
         and PROBE_FAILED otherwise. Choosing the wrong copy of a card looks
         like a repairable divergence, which is why clean successes win.
         """
+        if self.depth > 0:
+            n = self._probe_count() + 1
+            self._probe_counter[:8] = n.to_bytes(8, "little")
         rfd, wfd = os.pipe()  # (the probe reports how far it reproduced the stream)
         pid = os.fork()
         if pid == 0:
@@ -2533,6 +2580,9 @@ class BeliefReplay:
                 # nested probes get less time, so they cannot eat their parent's time
                 signal.alarm(max(2, self.probe_timeout >> self.depth))  # (depth of the parent)
                 self.depth += 1
+                self._report_depth = self.depth
+                self._probe_decisions = []
+                self._plan = []
                 self.check_state = False  # the main line checks states; probes only choose
                 # (a probe making many decisions without reproducing anything loops)
                 self.max_stall = min(self.max_stall, 50)
@@ -2573,7 +2623,14 @@ class BeliefReplay:
                     traceback.print_exc()
             finally:
                 try:
-                    os.write(wfd, reached.to_bytes(4, "little"))
+                    report = b""
+                    if code == PROBE_OK:
+                        # (the answers along the way, with enough verified after them)
+                        report = pickle.dumps([d for d in self._probe_decisions
+                                               if d[0][0] + self.min_progress <= reached][:200])
+                        if len(report) > 60000:
+                            report = b""  # (more than the pipe holds without a reader)
+                    os.write(wfd, reached.to_bytes(4, "little") + report)
                 finally:
                     os._exit(code)
         os.close(wfd)
@@ -2583,7 +2640,7 @@ class BeliefReplay:
             # probes may still hold the pipe open)
             os.set_blocking(rfd, False)
             try:
-                data = os.read(rfd, 4)
+                data = os.read(rfd, 65536)
             except BlockingIOError:
                 data = b""
         except BaseException:
@@ -2593,8 +2650,9 @@ class BeliefReplay:
             raise
         finally:
             os.close(rfd)
-        self.last_probe_reached = int.from_bytes(data, "little") if len(data) == 4 else self.pos
+        self.last_probe_reached = int.from_bytes(data[:4], "little") if len(data) >= 4 else self.pos
         code = os.waitstatus_to_exitcode(status)
+        self.last_probe_plan = pickle.loads(data[4:]) if code == PROBE_OK and len(data) > 4 else []
         if self.log and self.depth == 0:
             self.log(f"probe @{self.pos} {prompt['type']} {response} -> exit {code}")
         return code if code in (PROBE_OK, PROBE_REPAIRABLE, PROBE_TIMEOUT, PROBE_PROGRESSED,

@@ -126,6 +126,11 @@ class Tracker:
         self._last_prompt: dict | None = None
         self._chosen: tuple | None = None  # (var, con, code): the viewer's command's hand card
         self._resent_hints = False  # right after a shuffle (see _card_hint)
+        # (_owned's conclusions depend only on the owners seen so far: a slot seen
+        # again with no new owner anywhere tells nothing new)
+        self._owners_seen = 0
+        self._owned_at: dict[int, int] = {}
+        self._owners_memo: dict[int, tuple[int, set[int]]] = {}
         self._confirmed: list[Var] = []  # the cards of the latest CONFIRM_* message
         # cards revealed in the current resolution: a script that reveals cards,
         # shuffles them back and then moves cards of the same names moves the same
@@ -308,6 +313,10 @@ class Tracker:
 
     def _possible_owners(self, v: Var) -> set[int]:
         """Who can own the card in slot `v` (through the shuffles back to the decks)."""
+        hit = self._owners_memo.get(v.id)
+        if hit is not None and (hit[0] == self._owners_seen or len(hit[1]) == 1):
+            # (owners only narrow down as owners are seen: a single one stays)
+            return hit[1]
         out: set[int] = set()
         todo, seen = [v], set()
         while todo and len(out) < 2:
@@ -319,6 +328,7 @@ class Tracker:
             elif x.pool.index not in seen:
                 seen.add(x.pool.index)
                 todo.extend(x.pool.members)
+        self._owners_memo[v.id] = (self._owners_seen, out)
         return out
 
     def _owner_leaves(self, v: Var, owner: int, limit: int = 200) -> tuple[list[Var], list[Var]]:
@@ -349,9 +359,12 @@ class Tracker:
         the shuffled cards that owner could own."""
         if v is None:
             return
-        v.seen_owner = owner
-        if v.kind != "claim" or v.pool is None:
+        if v.seen_owner != owner:
+            v.seen_owner = owner
+            self._owners_seen += 1
+        if v.kind != "claim" or v.pool is None or self._owned_at.get(v.id) == self._owners_seen:
             return
+        self._owned_at[v.id] = self._owners_seen
         members = v.pool.members
         owners = [self._possible_owners(m) for m in members]
         if all(os == owners[0] for os in owners):

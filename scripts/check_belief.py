@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from ygoai.belief.check import check_prefix, cut_points, make_game, observation_stream  # noqa: E402
+from ygoai.belief.check import check_prefix, cut_point, game_decks, make_game_streams  # noqa: E402
 from ygoai.parallel import Crash, run_parallel  # noqa: E402
 
 class Timeout(BaseException):  # not swallowed by check_prefix
@@ -57,45 +57,47 @@ def get_completion(name: str):
     return _completion
 
 
-_games: dict = {}
-
-
-def _game(seed: int, mirror_prob: float, pairs=None, decks="random", book=None):
-    """The game and both observation streams (cached per worker process)."""
-    key = (seed, mirror_prob, pairs, decks, book)
-    if key not in _games:
-        record = make_game(seed, mirror_prob, [tuple(p) for p in pairs] if pairs else None, decks, book)
-        _games.clear()  # tasks of one seed tend to arrive together
-        _games[key] = (record, [observation_stream(record, v) for v in (0, 1)])
-    return _games[key]
-
-
-def run_task(task: tuple) -> list[dict]:
-    """One reconstruction: (seed, viewer, fraction, ...)."""
-    seed, viewer, frac, mirror_prob, timeout, completion, pairs, decks, book = task
-    global _main_pid
-    _main_pid = os.getpid()
-    signal.signal(signal.SIGALRM, _alarm)
-    try:
-        record, streams = _game(seed, mirror_prob, pairs, decks, book)
-    except Exception as e:  # noqa: BLE001
-        return [{"seed": seed, "viewer": viewer, "frac": frac, "ok": False, "error": f"game failed: {e}"}]
-    items = streams[viewer]
-    cut = cut_points(items, (frac,))[0]
+def _replay_case(record, items, seed: int, viewer: int, frac: float, timeout: int, completion: str) -> dict | None:
+    cut = cut_point(items, frac)
+    if cut is None:
+        return None  # (e.g. a turn the game did not reach)
     signal.alarm(timeout)
     t0 = time.monotonic()
     try:
         r = check_prefix(record, viewer, items, cut, completion=get_completion(completion))
-        res = {"seed": seed, "viewer": viewer, "frac": frac, "cut": cut, "len": len(items),
-               "ok": r.ok, "error": r.error, "seconds": r.seconds,
-               "decisions": r.opponent_decisions, "probed": r.probed, "probes": r.probes,
-               "restarts": r.restarts, "fixes": r.fixes, "repairs": r.repairs}
+        return {"seed": seed, "viewer": viewer, "frac": frac, "cut": cut, "len": len(items),
+                "ok": r.ok, "error": r.error, "seconds": r.seconds,
+                "decisions": r.opponent_decisions, "probed": r.probed, "probes": r.probes,
+                "restarts": r.restarts, "fixes": r.fixes, "repairs": r.repairs}
     except Timeout:
-        res = {"seed": seed, "viewer": viewer, "frac": frac, "cut": cut, "len": len(items),
-               "ok": False, "error": "timeout", "seconds": time.monotonic() - t0}
+        return {"seed": seed, "viewer": viewer, "frac": frac, "cut": cut, "len": len(items),
+                "ok": False, "error": "timeout", "seconds": time.monotonic() - t0}
     finally:
         signal.alarm(0)
-    return [res]
+
+
+def run_task(task: tuple) -> list[dict]:
+    """All reconstructions of one game: (seed, [(viewer, cut), ...], ...). The game
+    is played once, recording both players' observation streams on the way."""
+    seed, cases, mirror_prob, timeout, completion, pairs, decks, book, deck_pair = task
+    global _main_pid
+    _main_pid = os.getpid()
+    signal.signal(signal.SIGALRM, _alarm)
+    try:
+        record, streams = make_game_streams(seed, mirror_prob, [tuple(p) for p in pairs] if pairs else None,
+                                            decks, book, deck_pair=deck_pair)
+    except Exception as e:  # noqa: BLE001
+        return [{"seed": seed, "viewer": v, "frac": f, "ok": False, "error": f"game failed: {e}"}
+                for v, f in cases]
+    out = []
+    done = set()
+    for viewer, frac in cases:
+        cut = cut_point(streams[viewer], frac)
+        if cut is None or (viewer, cut) in done:
+            continue  # (the same prefix as another cut)
+        done.add((viewer, cut))
+        out.append(_replay_case(record, streams[viewer], seed, viewer, frac, timeout, completion))
+    return out
 
 
 def main() -> int:
@@ -109,6 +111,8 @@ def main() -> int:
     ap.add_argument("--index", type=Path, help="game index of scripts/index_games.py (with --tags)")
     ap.add_argument("--tags", help="comma separated: only games from --index with any of these tags")
     ap.add_argument("--fractions", default="0.333,0.667,1.0")
+    ap.add_argument("--turns", default="1,2,3",
+                    help="also cut at the end of these turns (results show them as frac -N); '' for none")
     ap.add_argument("--mirror-prob", type=float, default=0.2)
     ap.add_argument("--timeout", type=int, default=180, help="seconds per belief replay")
     ap.add_argument("-j", "--jobs", type=int, default=mp.cpu_count())
@@ -122,7 +126,8 @@ def main() -> int:
     ap.add_argument("--completion", choices=["vanilla", "corpus"], default="vanilla",
                     help="how unknown opponent cards are guessed")
     args = ap.parse_args()
-    fractions = tuple(float(f) for f in args.fractions.split(","))
+    fractions = tuple(float(f) for f in args.fractions.split(",") if f) \
+        + tuple(-float(t) for t in args.turns.split(",") if t)
     if args.cases:
         cases = []
         for line in args.cases.open():
@@ -140,19 +145,25 @@ def main() -> int:
             print(f"{len(seeds)} games with tags {sorted(wanted)}", flush=True)
         else:
             seeds = [args.start + i for i in range(args.games)]
-        # one task per reconstruction, the long full-game ones first
-        cases = [(seed, viewer, frac) for frac in sorted(fractions, reverse=True)
-                 for seed in seeds for viewer in (0, 1)]
+        cases = [(seed, viewer, frac) for seed in seeds for viewer in (0, 1)
+                 for frac in sorted(fractions, reverse=True)]
     pairs = tuple(tuple(p.split("-")) for p in args.pairs.split(",")) if args.pairs else None
-    tasks = [(seed, viewer, frac, args.mirror_prob, args.timeout, args.completion, pairs, args.decks, args.book)
-             for seed, viewer, frac in cases]
+    # one task per game (it is played once for all of its reconstructions)
+    by_seed: dict[int, list] = {}
+    for seed, viewer, frac in cases:
+        by_seed.setdefault(seed, []).append((viewer, frac))
+    # (the decks are chosen here: the workers then never load the deck corpus,
+    # which keeps them small and the replay's probes (forks) cheap)
+    tasks = [(seed, cs, args.mirror_prob, args.timeout, args.completion, pairs, args.decks, args.book,
+              game_decks(seed, args.mirror_prob, args.decks, args.book))
+             for seed, cs in by_seed.items()]
     results = []
     t0 = time.monotonic()
     out = args.output.open("w") if args.output else None  # streamed: large runs can be watched
     for task, res in run_parallel(run_task, tasks, args.jobs):
         if isinstance(res, Crash):
-            res = [{"seed": task[0], "viewer": task[1], "frac": task[2], "ok": False,
-                    "error": f"crash: {res.error}"}]
+            res = [{"seed": task[0], "viewer": v, "frac": f, "ok": False, "error": f"crash: {res.error}"}
+                   for v, f in task[1]]
         results.extend(res)
         if out:
             for r in res:
@@ -174,7 +185,7 @@ def main() -> int:
             by_frac[r["frac"]][0] += r["ok"]
             by_frac[r["frac"]][1] += 1
     for frac, (k, n) in sorted(by_frac.items()):
-        print(f"  cut {frac:.2f}: {k}/{n}")
+        print(f"  cut {f'turn {-frac:.0f}' if frac < 0 else f'{frac:.2f}'}: {k}/{n}")
     times = [r["seconds"] for r in results if r.get("seconds")]
     if times:
         times.sort()

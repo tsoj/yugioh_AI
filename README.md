@@ -39,8 +39,10 @@ python3 scripts/selfplay.py -n 1000 --agents mixed
 python3 scripts/match.py --engine greedy=builtin:greedy \
     --engine "random=python3 -m ygoai.engine random" -n 200 --sprt 0 10 --tc 60+0.5
 
-# belief replay consistency test (both players, cut at 1/3, 2/3 and the full game);
-# every reconstruction is a separate task, results are streamed to the JSON lines file
+# belief replay consistency test (both players, cut at the end of turns 1, 2 and 3, at 1/3,
+# 2/3 and the full game; turn cuts show as frac -1, -2, -3; --fractions / --turns choose);
+# one task per game (played once, both observation streams recorded while it is played),
+# results are streamed to the JSON lines file
 python3 scripts/check_belief.py -n 1000 --start 1000 -o runs/check.jsonl
 # ... with other agent pairings (seed % number of pairs picks one; agents: random, greedy,
 # setter = sets cards face-down and responds in chain windows, mixed = greedy with 30% random)
@@ -63,7 +65,7 @@ python3 scripts/index_games.py -n 1000 --start 1000 -o runs/index.jsonl
 python3 scripts/check_belief.py --index runs/index.jsonl --tags shuffle_set_card,toss_coin -o runs/t.jsonl
 
 # look at one reconstruction in detail (--max-restarts N stops after N repairs)
-python3 scripts/debug_belief.py SEED VIEWER [--cut 0.5]
+python3 scripts/debug_belief.py SEED VIEWER [--cut 0.5]   # (--cut -2: the end of turn 2)
 
 # leak check: does the (secret) card creation order show in the observations?
 python3 scripts/diff_creation.py -n 1000 --start 5000
@@ -188,24 +190,29 @@ searched decision; making it incremental is an obvious next step.
 
 ## Current results
 
-Measured with `scripts/check_belief.py -n 1000` (both players; cut after ~1/3, ~2/3 and at
-the end of the game, 6000 reconstructions per run; the reconstruction must reproduce every
-filtered message, every prompt of the viewer and the viewer's state view at every prompt).
+Measured with `scripts/check_belief.py -n 1000` (both players; cut at the end of turns 1, 2 and 3,
+after ~1/3, ~2/3 and at the end of the game, ~9,800 reconstructions per run (a turn cut that gives
+the same prefix as another one is skipped); the reconstruction must reproduce every filtered
+message, every prompt of the viewer and the viewer's state view at every prompt). A run takes
+about 2 minutes on 32 threads (i9-13900K).
 Seeds 1000-4999 use random corpus deck pairs (20% mirror matches); 5000-6999 use the decks
 ordered for card variety (`--decks diverse`). Agents: random and greedy, or (marked "other
 agents") the `setter` and `mixed` agents against each other and the others (`--pairs
-setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter`). Seeds
+setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter`). By now
 all of them have been used while developing (5000-6999 started out fresh, at 99.43% / 99.32%):
 
 | cut      | 1000-1999 | 2000-2999 | 3000-3999 | 4000-4999 (other agents) | 5000-5999 (diverse decks) | 6000-6999 (diverse decks, other agents) |
 |----------|-----------|-----------|-----------|--------------------------|---------------------------|-----------------------------------------|
+| turn 1   | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                                  |
+| turn 2   | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                                  |
+| turn 3   | 99.92%    | 100.0%    | 100.0%    | 99.92%                   | 99.84%                    | 100.0%                                  |
 | ~1/3     | 100.0%    | 100.0%    | 100.0%    | 99.85%                   | 99.95%                    | 99.85%                                  |
 | ~2/3     | 100.0%    | 100.0%    | 100.0%    | 99.75%                   | 99.90%                    | 99.90%                                  |
-| full game| 100.0%    | 100.0%    | 99.85%    | 99.65%                   | 99.75%                    | 99.70%                                  |
-| overall  | 100.0%    | 100.0%    | 99.95%    | 99.75%                   | 99.87%                    | 99.82%                                  |
+| full game| 100.0%    | 100.0%    | 99.85%    | 99.65%                   | 99.75%                    | 99.75%                                  |
+| overall  | 99.99%    | 100.0%    | 99.97%    | 99.84%                   | 99.90%                    | 99.90%                                  |
 
 Fresh seeds are the honest measure: the corpus has ~164k decks, and new decks bring new card
-mechanics (every range so far started between 99.3% and 99.4% when it was fresh). About 96% of
+mechanics (every range so far started between 99.3% and 99.4% when it was fresh). About 97% of
 all reconstructions need no repair restart at all.
 
 For broad tests, `scripts/make_book.py` builds an opening book whose 762 decks (381 openings)
@@ -292,7 +299,13 @@ filters in a canonical form (and ANNOUNCE_NUMBER options sorted).
   `proc_workaround.lua` (e.g. which cards must be released because of an extra-release effect)
   keep telling the truth.
 * Extra API: reorder a pile (by code or by card id), force shuffle results by card id, swap two
-  cards within a pile, read card ids per location, clear the forced activations.
+  cards within a pile, read card ids per location (or of every location of both players in
+  one call: `OCG_ExtGetAllCards`), clear the forced activations.
+* `core_ext/lua/ygoai_overrides.lua`, loaded after `utility.lua`: script helpers with exactly
+  the same results, but faster. `aux.SelectUnselectGroup`'s search visited every group of k
+  cards in up to k! orders (Rainbow Dark Dragon's check of 7 DARK monsters with different
+  names took seconds at every idle prompt); it now remembers per group whether the rest can
+  complete it. `YGOAI_NO_OVERRIDES=1` loads the original helpers (same games, compared on 300).
 * A card entering the hand, deck or Extra Deck forgets its position and activation history
   (JUST_POS, CONTINUOUS_POS, ATTACK_CANCELED, ACT_FROM_HAND status bits): it is a new object by
   the rules, and the stale bits made physical copies distinguishable.

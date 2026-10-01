@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes as ct
+import os
 import itertools
 import struct
 from dataclasses import dataclass
@@ -10,7 +11,25 @@ from pathlib import Path
 
 from . import constants as C
 from .carddb import CardDB, default_db
-from .paths import CARD_SCRIPTS_DIR, CORE_LIB
+from .paths import CARD_SCRIPTS_DIR, CORE_LIB, OVERRIDE_SCRIPTS
+
+_ALL_LOCS = (C.LOCATION_DECK, C.LOCATION_HAND, C.LOCATION_MZONE, C.LOCATION_SZONE,
+             C.LOCATION_GRAVE, C.LOCATION_REMOVED, C.LOCATION_EXTRA)
+
+
+def parse_all_cards(raw: bytes) -> tuple[dict, dict]:
+    """Parses Duel.all_cards_raw (6 uint32 per entry: player, location, sequence,
+    material index + 1, code, card id)."""
+    flat = memoryview(raw).cast("I").tolist()
+    lists: dict = {(p, loc): [] for p in (0, 1) for loc in _ALL_LOCS}
+    mats: dict = {}
+    for i in range(0, len(flat), 6):
+        p, loc, seq, mat, code, cid = flat[i:i + 6]
+        if mat:
+            mats.setdefault((p, loc, seq), []).append((code, cid))
+        else:
+            lists[p, loc].append((code, cid))
+    return lists, mats
 
 
 class OCG_CardData(ct.Structure):
@@ -115,6 +134,7 @@ def _load_library(path: Path) -> ct.CDLL:
         "OCG_ExtSetLocationOrderById": (i32, [vp, u8, u32, ct.POINTER(u32), u32]),
         "OCG_ExtGetLocationCards": (u32, [vp, u8, u32, ct.POINTER(u32), ct.POINTER(u32), u32]),
         "OCG_ExtGetOverlayCards": (u32, [vp, u8, u32, u32, ct.POINTER(u32), ct.POINTER(u32), u32]),
+        "OCG_ExtGetAllCards": (u32, [vp, ct.POINTER(u32), u32]),
         "OCG_ExtGetInfo": (None, [vp, ct.POINTER(u32)]),
         "OCG_ExtForceActivatable": (None, [vp, u8, u32, ct.c_uint64]),
         "OCG_ExtClearForceActivatable": (None, [vp]),
@@ -158,6 +178,9 @@ def _find_script(name: str) -> bytes | None:
     if name in _script_cache:
         return _script_cache[name]
     base = Path(name).name
+    if base == OVERRIDE_SCRIPTS.name:
+        data = _script_cache[name] = OVERRIDE_SCRIPTS.read_bytes()
+        return data
     candidates = []
     if base.startswith("c") and base[1:-4].isdigit():
         candidates = [CARD_SCRIPTS_DIR / "official" / base, CARD_SCRIPTS_DIR / "pre-release" / base,
@@ -268,7 +291,10 @@ class Duel:
             raise CoreError(f"OCG_CreateDuel failed with status {status}")
         self.handle = handle
         _duels_by_key[self._key] = self
-        for script in ("constant.lua", "utility.lua"):
+        scripts = ["constant.lua", "utility.lua"]
+        if not os.environ.get("YGOAI_NO_OVERRIDES"):  # (for comparing against the original helpers)
+            scripts.append(OVERRIDE_SCRIPTS.name)
+        for script in scripts:
             if not _script_reader(None, self.handle, script.encode()):
                 raise CoreError(f"failed to load {script}")
 
@@ -356,6 +382,25 @@ class Duel:
         ids = (ct.c_uint32 * cap)()
         n = lib().OCG_ExtGetOverlayCards(self.handle, player, location, sequence, codes, ids, cap)
         return [(codes[i], ids[i]) for i in range(min(n, cap))]
+
+    _all_buf = None
+
+    def all_cards_raw(self) -> bytes:
+        """Every slot of both players in one call, unparsed (see parse_all_cards)."""
+        cap = 2048
+        buf = Duel._all_buf
+        if buf is None:
+            buf = Duel._all_buf = (ct.c_uint32 * (6 * cap))()
+        n = lib().OCG_ExtGetAllCards(self.handle, buf, cap)
+        if n > cap:
+            buf = (ct.c_uint32 * (6 * n))()
+            n = lib().OCG_ExtGetAllCards(self.handle, buf, n)
+        return ct.string_at(buf, 24 * n)
+
+    def all_cards(self) -> tuple[dict, dict]:
+        """Every slot of both players in one call: ({(player, location): [(code,
+        card id), ...]}, {(player, location, sequence): materials as (code, id)})."""
+        return parse_all_cards(self.all_cards_raw())
 
     def info(self) -> dict:
         out = (ct.c_uint32 * 5)()

@@ -453,10 +453,46 @@ class LocMap:
         # bottom first) in stream order, if the caller knows them (the replay does)
         self.plan: list[tuple] = list(getattr(duel, "shuffle_plan", None) or ())
         if not lazy:
-            for p in (0, 1):
-                for loc in (*LIST_LOCS, C.LOCATION_MZONE, C.LOCATION_SZONE):
-                    self._load(p, loc)
+            self._fill(*duel.all_cards())
             self.duel = None
+
+    @classmethod
+    def snapshot(cls, duel) -> "LocMap":
+        """A LocMap(duel, lazy=False) that reads the positions now (one cheap
+        call) but builds its maps only when first used."""
+        lm = cls.__new__(cls)
+        lm.duel = None
+        lm.plan = list(getattr(duel, "shuffle_plan", None) or ())
+        lm._raw = duel.all_cards_raw()
+        return lm
+
+    def __getattr__(self, name):
+        # (only for attributes not set yet: the maps of a snapshot, see snapshot)
+        raw = self.__dict__.get("_raw")
+        if raw is None or name not in ("lists", "zones", "overlays", "unknown", "codes", "_loaded"):
+            raise AttributeError(name)
+        del self._raw
+        self.lists, self.zones, self.overlays = {}, {}, {}
+        self.unknown, self.codes, self._loaded = set(), {}, set()
+        from ..core import parse_all_cards
+        self._fill(*parse_all_cards(raw))
+        return getattr(self, name)
+
+    def _fill(self, lists: dict, mats: dict) -> None:
+        for (p, loc), cards in lists.items():
+            if loc in LIST_LOCS:
+                self.lists[p, loc] = [cid for _, cid in cards]
+            elif loc in (C.LOCATION_MZONE, C.LOCATION_SZONE):
+                self.zones[p, loc] = [cid for _, cid in cards]
+                for seq, (_, cid) in enumerate(cards):
+                    if cid:
+                        ov = mats.get((p, loc, seq), ())
+                        self.overlays[cid] = [oid for _, oid in ov]
+                        self.codes.update((oid, code) for code, oid in ov)
+            else:
+                continue
+            self.codes.update((cid, code) for code, cid in cards if cid)
+            self._loaded.add((p, loc))
 
     def __deepcopy__(self, memo):
         import copy as _copy

@@ -510,6 +510,43 @@ OCGEXT_API uint32_t OCG_ExtGetOverlayCards(OCG_Duel ocg_duel, uint8_t playerid, 
 	return n;
 }
 
+// Every slot of both players at once (one call instead of one per location and
+// per material): 6 uint32 per entry: player, location, sequence, material index
+// + 1 (0 for the slot itself; its materials follow it), code, card id (0, 0 for
+// an empty field zone). Locations in the order deck, hand, monster zones, spell
+// zones, GY, banished, Extra Deck. Returns the entry count (writes at most `cap`).
+OCGEXT_API uint32_t OCG_ExtGetAllCards(OCG_Duel ocg_duel, uint32_t* out, uint32_t cap) {
+	auto* pduel = static_cast<duel*>(ocg_duel);
+	static const uint32_t locations[] = {LOCATION_DECK, LOCATION_HAND, LOCATION_MZONE, LOCATION_SZONE,
+	                                     LOCATION_GRAVE, LOCATION_REMOVED, LOCATION_EXTRA};
+	uint32_t n = 0;
+	auto put = [&](uint32_t p, uint32_t loc, uint32_t seq, uint32_t mat, card* pcard) {
+		if(n < cap) {
+			uint32_t* e = out + n * 6;
+			e[0] = p; e[1] = loc; e[2] = seq; e[3] = mat;
+			e[4] = pcard ? pcard->data.code : 0;
+			e[5] = pcard ? pcard->cardid : 0;
+		}
+		++n;
+	};
+	for(uint32_t p = 0; p < 2; ++p) {
+		for(uint32_t loc : locations) {
+			auto* list = location_list(pduel, static_cast<uint8_t>(p), loc);
+			uint32_t size = static_cast<uint32_t>(list->size());
+			for(uint32_t i = 0; i < size; ++i) {
+				card* pcard = (*list)[i];
+				put(p, loc, i, 0, pcard);
+				if(pcard && (loc & (LOCATION_MZONE | LOCATION_SZONE))) {
+					uint32_t m = 0;
+					for(card* mat : pcard->xyz_materials)
+						put(p, loc, i, ++m, mat);
+				}
+			}
+		}
+	}
+	return n;
+}
+
 // Debugging: the pending trigger chains (core.new_fchain and core.new_ochain).
 // Writes 6 uint64 per entry: forced, handler code, description, handler
 // controller, handler location, handler sequence. Returns the entry count.

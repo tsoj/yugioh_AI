@@ -129,22 +129,38 @@ def parse_field_query(buf: bytes) -> dict:
     return {"chain": chain}
 
 
+# parsed location queries by their raw bytes (most locations are unchanged
+# between two snapshots)
+_parsed: dict[bytes, list[dict | None]] = {}
+
+
+def _parse_location_cached(buf: bytes) -> list[dict | None]:
+    cards = _parsed.get(buf)
+    if cards is None:
+        if len(_parsed) > 20000:
+            _parsed.clear()
+        cards = _parsed[buf] = parse_location_query(buf)
+    # (fresh dicts: the caller adds the card ids; nested values are never changed)
+    return [dict(c) if c is not None else None for c in cards]
+
+
 def capture(duel: Duel) -> dict:
     """God view snapshot: every card of every location with full query data and card id."""
     info = duel.info()
     snap = {"turn": info["turn"], "turn_player": info["turn_player"], "phase": info["phase"],
             "lp": info["lp"], "players": []}
+    all_ids, mats = duel.all_cards()
     for p in (0, 1):
         pl = {}
         for name, loc in LOCATIONS:
             flags = QUERY_BASIC if loc == C.LOCATION_DECK else QUERY_ALL
-            cards = parse_location_query(duel.query_location_raw(p, loc, flags))
-            ids = duel.location_cards(p, loc)
+            cards = _parse_location_cached(duel.query_location_raw(p, loc, flags))
+            ids = all_ids[p, loc]
             for i, card in enumerate(cards):
                 if card is not None:
                     card["id"] = ids[i][1]
                     if card.get("overlays"):
-                        card["overlay_ids"] = [cid for _, cid in duel.overlay_cards(p, loc, i)]
+                        card["overlay_ids"] = [cid for _, cid in mats.get((p, loc, i), ())]
             pl[name] = cards
         snap["players"].append(pl)
     snap.update(parse_field_query(duel.query_field_raw()))

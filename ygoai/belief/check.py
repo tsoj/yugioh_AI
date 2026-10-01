@@ -17,6 +17,22 @@ def observation_stream(record: GameRecord, viewer: int, with_state: bool = True)
     return log.items
 
 
+def cut_point(items: list[tuple], frac: float) -> int | None:
+    """Prefix length for a cut: a fraction of the game as in cut_points, or with
+    a negative value -N the end of turn N (right after the viewer's last prompt
+    before turn N + 1 starts; None if the game has no turn N + 1 or the viewer no
+    prompt before it)."""
+    if frac >= 0:
+        return cut_points(items, (frac,))[0]
+    turns = 0
+    for i, it in enumerate(items):
+        if it[0] == "msg" and it[1]["type"] == "NEW_TURN":
+            turns += 1
+            if turns == -frac + 1:
+                return next((j + 1 for j in range(i - 1, -1, -1) if items[j][0] == "prompt"), None)
+    return None
+
+
 def cut_points(items: list[tuple], fractions: tuple[float, ...]) -> list[int]:
     """Prefix lengths ending right after a viewer prompt near each fraction (1.0 = everything)."""
     prompts = [i for i, it in enumerate(items) if it[0] == "prompt"]
@@ -112,31 +128,52 @@ def load_book(path) -> list:
     return _books[key]
 
 
-def make_game(seed: int, mirror_prob: float = 0.2, pairs: list[tuple[str, str]] | None = None,
-              decks: str = "random", book: str | None = None) -> GameRecord:
-    """The test game for `seed`: random decks (sometimes a mirror match) and
-    agent pairing pairs[seed % len(pairs)] (by default PAIRS). With decks="diverse",
-    the decks come from the order that covers as many different cards as possible
-    (game `seed` uses its positions 2*seed and 2*seed + 1). With a `book` (see
-    scripts/make_book.py), game `seed` plays its opening seed % (number of openings)."""
+def game_decks(seed: int, mirror_prob: float = 0.2, decks: str = "random", book: str | None = None) -> tuple:
+    """The deck pair of test game `seed`: random decks (sometimes a mirror match);
+    with decks="diverse" from the order that covers as many different cards as
+    possible (game `seed` uses its positions 2*seed and 2*seed + 1); with a `book`
+    (see scripts/make_book.py) opening seed % (number of openings)."""
     import random
-    from ..agents import make_agent
     from ..carddb import default_db
     from ..decks import DeckPool
     global _deck_pool
+    if book:
+        return tuple(load_book(book)[seed % len(load_book(book))])  # (the book decides the pairing)
     if _deck_pool is None:
         _deck_pool = DeckPool(default_db())
     rng = random.Random(seed)
-    if book:
-        d0, d1 = load_book(book)[seed % len(load_book(book))]  # (the book decides the pairing)
-    elif decks == "diverse":
+    if decks == "diverse":
         d0 = _deck_pool.diverse(2 * seed)
-        d1 = d0 if rng.random() < mirror_prob else _deck_pool.diverse(2 * seed + 1)
-    else:
-        d0 = _deck_pool.sample(rng)
-        d1 = d0 if rng.random() < mirror_prob else _deck_pool.sample(rng)
+        return d0, d0 if rng.random() < mirror_prob else _deck_pool.diverse(2 * seed + 1)
+    d0 = _deck_pool.sample(rng)
+    return d0, d0 if rng.random() < mirror_prob else _deck_pool.sample(rng)
+
+
+def make_game(seed: int, mirror_prob: float = 0.2, pairs: list[tuple[str, str]] | None = None,
+              decks: str = "random", book: str | None = None, observers: list | None = None,
+              deck_pair: tuple | None = None) -> GameRecord:
+    """The test game for `seed`: the decks of game_decks (or `deck_pair`, e.g. chosen
+    by a process that has the deck corpus loaded) and agent pairing
+    pairs[seed % len(pairs)] (by default PAIRS)."""
+    from ..agents import make_agent
+    d0, d1 = deck_pair or game_decks(seed, mirror_prob, decks, book)
     pairs = pairs or PAIRS
     names = pairs[seed % len(pairs)]
     record = new_record([d0, d1], seed)
-    play(record, [make_agent(names[0], seed * 2), make_agent(names[1], seed * 2 + 1)], time_limit=120)
+    play(record, [make_agent(names[0], seed * 2), make_agent(names[1], seed * 2 + 1)], time_limit=120,
+         observers=observers)
     return record
+
+
+def make_game_streams(seed: int, *args, **kwargs) -> tuple[GameRecord, list[list[tuple]]]:
+    """make_game and both players' observation streams, recorded while the game
+    is played (the same as observation_stream, without replaying the game)."""
+    logs = [ObservationLog(v) for v in (0, 1)]
+    record = make_game(seed, *args, observers=logs, **kwargs)
+    streams = []
+    for log in logs:
+        items = log.items
+        # (a replay stops at the win; the game itself goes on to the end of its step)
+        end = next((i + 1 for i, it in enumerate(items) if it[0] == "msg" and it[1]["type"] == "WIN"), len(items))
+        streams.append(items[:end])
+    return record, streams
