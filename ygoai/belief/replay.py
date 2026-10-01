@@ -278,6 +278,10 @@ class BeliefReplay:
         # one-decision backtracking: (stream position, index among the decisions
         # at that position) -> candidate to use instead of the inferred one
         self.overrides: dict[tuple[int, int], int] = {}
+        # decisions answered with a response of their own ("respond" repairs: a card
+        # selection changed to include a card that later shows to have been in it)
+        self.forced_resp: dict[tuple[int, int], dict] = {}
+        self.tried_resp: set[tuple] = set()
         self._last_hyp_fix: str | None = None
         # opponent decisions of earlier attempts: (pos, prompt) -> response
         self.memo: dict[tuple, dict] = {}
@@ -326,6 +330,7 @@ class BeliefReplay:
         self.snapshots: dict[int, infer.LocMap] = {}
         self._roll_cp = None  # the latest main-line step's snapshot (kept only until the next)
         self._card_decisions: dict[tuple, dict[int, int]] = {}  # decision -> card id -> answer index
+        self._multi_decisions: dict[tuple, tuple] = {}  # decision -> (card ids, chosen response)
         self._roll_dirty = True  # whether a card may have moved since that snapshot
         self.lockstep = Tracker(self.viewer, self.init)
 
@@ -708,6 +713,11 @@ class BeliefReplay:
             self.nomatch_id_spans.add(entry)
             self.stats.assumptions += 1
             return True
+        if kind == "respond":
+            _, dkey, indices = fix
+            self.tried_resp.add((dkey, indices))
+            self.forced_resp[dkey] = {"indices": list(indices)}
+            return True
         if kind == "decide":
             _, dkey, k = fix
             if self.overrides.get(dkey) == k:
@@ -969,6 +979,28 @@ class BeliefReplay:
                 return ("force", *key)
         return None
 
+    def _include_fix(self, locs: list[dict], duel: Duel) -> tuple | None:
+        """A recent card selection of the opponent must have included the card at
+        each of `locs`: answer it with that card in place of one of its picks."""
+        live = infer.LocMap(duel)
+        for li in locs:
+            cid = live.at(li)
+            if not cid:
+                continue
+            for dkey, _, _ in reversed(self._recent):
+                ids, resp = self._multi_decisions.get(dkey, (None, None))
+                if not ids or cid not in ids:
+                    continue
+                j = ids.index(cid)
+                picks = list(resp["indices"])
+                if j in picks:
+                    continue
+                for p in reversed(range(len(picks))):
+                    new = tuple(sorted(picks[:p] + [j] + picks[p + 1:]))
+                    if (dkey, new) not in self.tried_resp:
+                        return ("respond", dkey, new)
+        return None
+
     def _forced_cost_fix(self) -> tuple | None:
         """The opponent's activation is forced (its cost or target check failed in
         the replay) and still being activated: the check depends on hidden cards,
@@ -1092,6 +1124,11 @@ class BeliefReplay:
                 # the replay moved a copy of a card that the real game moves later
                 # from elsewhere in the same operation: the copies are swapped
                 fix = self._later_copy_fix(cp, msgs, idx, got, duel)
+            if fix is None and exp["type"] == got["type"] == "RANDOM_SELECTED":
+                # the real random pick took a card the replay's group did not have:
+                # an earlier selection (e.g. "pick 4 cards of the other's deck")
+                # included it
+                fix = self._include_fix([c for c in exp["cards"] if c not in got["cards"]], duel)
             if fix is None and exp["type"] == "HINT" and exp["hint_type"] == C.HINT_OPSELECTED \
                     and exp["player"] == self.opponent and exp != got:
                 # the opponent chose an option the replay did not offer or take:
@@ -2246,6 +2283,19 @@ class BeliefReplay:
             # (which card each single-card answer takes, for "decide" repairs)
             self._card_decisions[dkey] = {ids[c["indices"][0]]: k for k, c in enumerate(valid)
                                           if len(c.get("indices") or ()) == 1 and c["indices"][0] < len(ids)}
+        if dkey is not None and dkey in self.forced_resp:
+            r = self.forced_resp[dkey]
+            try:
+                encode(prompt, r)
+                ok = True
+            except (InvalidResponse, KeyError, TypeError, ValueError):
+                ok = False
+            if ok:
+                if ids is not None:
+                    self._multi_decisions[dkey] = (ids, r)
+                self._recent.append((dkey, len(valid), -1))
+                self._trace(prompt, r, False, len(valid))
+                return r
         if dkey is not None and dkey in self.overrides and self.overrides[dkey] < len(valid):
             i = self.overrides[dkey]
             self._recent.append((dkey, len(valid), i))
@@ -2255,6 +2305,8 @@ class BeliefReplay:
         resp = self._choose(duel, prompt, valid, certain)
         if resp.get("cancel"):
             self._cancelled.add(sig)
+        if dkey is not None and ids is not None and resp.get("indices"):
+            self._multi_decisions[dkey] = (ids, resp)
         if dkey is not None:
             self._recent.append((dkey, len(valid), valid.index(resp)))
             self._since_state.append((dkey, len(valid), valid.index(resp)))
