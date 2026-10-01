@@ -42,6 +42,9 @@ python3 scripts/match.py --engine greedy=builtin:greedy \
 # belief replay consistency test (both players, cut at 1/3, 2/3 and the full game);
 # every reconstruction is a separate task, results are streamed to the JSON lines file
 python3 scripts/check_belief.py -n 1000 --start 1000 -o runs/check.jsonl
+# ... with other agent pairings (seed % number of pairs picks one; agents: random, greedy,
+# setter = sets cards face-down and responds in chain windows, mixed = greedy with 30% random)
+python3 scripts/check_belief.py -n 1000 --start 4000 --pairs setter-greedy,mixed-setter -o runs/c.jsonl
 
 # quick iteration: rerun only what failed before, then diff the two runs
 python3 scripts/check_belief.py --cases runs/check.jsonl --only-failed -o runs/retry.jsonl
@@ -142,7 +145,15 @@ minimal example.
     revealed before the shuffle (it keeps them in a group). Where the codes show, the matching
     of copies prefers these cards anyway; where they do not, the moved cards are constrained to
     be among the revealed ones;
-  * retry a different candidate for one recent opponent decision.
+  * exchange the roles of two copies of an Xyz material from the start of the duel when the
+    viewer is offered an effect they grant a different number of times (which copy used it);
+  * exclude a code where the replay flipped or offered a face-down card the real game did not;
+  * retry a different candidate for one recent opponent decision (also when a message that
+    shows stats, e.g. an attack's ATK, differs: like a state view, it shows the result of every
+    decision since the last one).
+
+  The main line keeps the positions of the latest step, which most repairs need, so finding a
+  repair takes no restart of its own.
 
 ### Using the belief replay in an AI
 
@@ -169,24 +180,26 @@ searched decision; making it incremental is an obvious next step.
 
 ## Current results
 
-Measured with `scripts/check_belief.py -n 1000` (random and greedy agents, random human deck
-pairs from the corpus, 20% mirror matches; both players; cut after ~1/3, ~2/3 and at the end of
-the game, 6000 reconstructions per run; the reconstruction must reproduce every filtered
-message, every prompt of the viewer and the viewer's state view at every prompt). Seeds
-1000-1999 were used while developing; seeds 2000-2999 are the check for generalization:
+Measured with `scripts/check_belief.py -n 1000` (random human deck pairs from the corpus, 20%
+mirror matches; both players; cut after ~1/3, ~2/3 and at the end of the game, 6000
+reconstructions per run; the reconstruction must reproduce every filtered message, every prompt
+of the viewer and the viewer's state view at every prompt). Seeds 1000-2999 were used while
+developing (random and greedy agents); seeds 3000-3999 (same agents) and 4000-4999 (the
+`setter` and `mixed` agents against each other and the others, `--pairs
+setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter`) are fresh:
 
-| cut      | seeds 1000-1999 | seeds 2000-2999 |
-|----------|-----------------|-----------------|
-| ~1/3     | 100.0%          | 100.0%          |
-| ~2/3     | 99.95%          | 100.0%          |
-| full game| 99.95%          | 99.95%          |
-| overall  | 99.97%          | 99.98%          |
+| cut      | 1000-1999 | 2000-2999 | 3000-3999 (fresh) | 4000-4999 (fresh, other agents) |
+|----------|-----------|-----------|-------------------|---------------------------------|
+| ~1/3     | 100.0%    | 100.0%    | 99.65%            | 99.55%                          |
+| ~2/3     | 100.0%    | 100.0%    | 99.45%            | 99.40%                          |
+| full game| 99.95%    | 100.0%    | 99.05%            | 99.00%                          |
+| overall  | 99.98%    | 100.0%    | 99.38%            | 99.32%                          |
 
-About 96.6% of all reconstructions need no repair restart at all. The three remaining failures:
-a release cost whose filter checks the hidden deck (the replay then releases the wrong hidden
-hand card), and which copy of an Xyz material had already used its granted effect this turn.
+The gap between the development seeds and the fresh ones is the honest measure: the corpus has
+~164k decks, and new decks bring new card mechanics. About 96% of all reconstructions need no
+repair restart at all.
 
-Median reconstruction time is about 0.3s (a few long games take up to the 90s limit because
+Median reconstruction time is about 0.3-0.6s (a few long games take up to the 90s limit because
 of repeated repair restarts). Plain self-play is fast: about 0.2s CPU per game, ~650 decisions per game.
 
 First match of the example search agent (`belief_mc`: belief replay + flat Monte Carlo with
@@ -260,7 +273,10 @@ filters in a canonical form (and ANNOUNCE_NUMBER options sorted).
   (deck, hand, extra, `Duel.ShuffleSetCard` and the zone assignment of a group SSet), coin and
   dice results, `Group.RandomSelect`,
   "treat this effect as activatable" (skips cost/target checks), "treat this card as
-  matching every filter" and "treat this card as matching no filter".
+  matching every filter" and "treat this card as matching no filter". The forced (non-)matching
+  decides the filters of card scripts only; the filters of the rule helpers in
+  `proc_workaround.lua` (e.g. which cards must be released because of an extra-release effect)
+  keep telling the truth.
 * Extra API: reorder a pile (by code or by card id), force shuffle results by card id, swap two
   cards within a pile, read card ids per location, clear the forced activations.
 * A card entering the hand, deck or Extra Deck forgets its position and activation history
@@ -314,5 +330,5 @@ ygoai/         the Python package
   actions.py     responses              observe.py    per-player filtering
   state.py       state snapshots        game.py       arbiter, records, replays
   protocol.py    engine protocol        match.py      matches, Elo, SPRT
-  agents/        random and greedy AIs  belief/       tracker, replay, inference
+  agents/        simple AIs (random, greedy, setter, mixed)  belief/       tracker, replay, inference
 ```

@@ -98,9 +98,9 @@ PAIRS = [("random", "random"), ("random", "greedy"), ("greedy", "random"), ("gre
 _deck_pool = None
 
 
-def make_game(seed: int, mirror_prob: float = 0.2) -> GameRecord:
+def make_game(seed: int, mirror_prob: float = 0.2, pairs: list[tuple[str, str]] | None = None) -> GameRecord:
     """The test game for `seed`: random decks (sometimes a mirror match) and
-    agent pairing PAIRS[seed % 4]."""
+    agent pairing pairs[seed % len(pairs)] (by default PAIRS)."""
     import random
     from ..agents import make_agent
     from ..carddb import default_db
@@ -111,7 +111,8 @@ def make_game(seed: int, mirror_prob: float = 0.2) -> GameRecord:
     rng = random.Random(seed)
     d0 = _deck_pool.sample(rng)
     d1 = d0 if rng.random() < mirror_prob else _deck_pool.sample(rng)
-    names = PAIRS[seed % len(PAIRS)]
+    pairs = pairs or PAIRS
+    names = pairs[seed % len(pairs)]
     record = new_record([d0, d1], seed)
     play(record, [make_agent(names[0], seed * 2), make_agent(names[1], seed * 2 + 1)], time_limit=120)
     return record

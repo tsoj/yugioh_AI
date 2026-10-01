@@ -60,11 +60,11 @@ def get_completion(name: str):
 _games: dict = {}
 
 
-def _game(seed: int, mirror_prob: float):
+def _game(seed: int, mirror_prob: float, pairs=None):
     """The game and both observation streams (cached per worker process)."""
-    key = (seed, mirror_prob)
+    key = (seed, mirror_prob, pairs)
     if key not in _games:
-        record = make_game(seed, mirror_prob)
+        record = make_game(seed, mirror_prob, [tuple(p) for p in pairs] if pairs else None)
         _games.clear()  # tasks of one seed tend to arrive together
         _games[key] = (record, [observation_stream(record, v) for v in (0, 1)])
     return _games[key]
@@ -72,12 +72,12 @@ def _game(seed: int, mirror_prob: float):
 
 def run_task(task: tuple) -> list[dict]:
     """One reconstruction: (seed, viewer, fraction, ...)."""
-    seed, viewer, frac, mirror_prob, timeout, completion = task
+    seed, viewer, frac, mirror_prob, timeout, completion, pairs = task
     global _main_pid
     _main_pid = os.getpid()
     signal.signal(signal.SIGALRM, _alarm)
     try:
-        record, streams = _game(seed, mirror_prob)
+        record, streams = _game(seed, mirror_prob, pairs)
     except Exception as e:  # noqa: BLE001
         return [{"seed": seed, "viewer": viewer, "frac": frac, "ok": False, "error": f"game failed: {e}"}]
     items = streams[viewer]
@@ -114,6 +114,8 @@ def main() -> int:
     ap.add_argument("-j", "--jobs", type=int, default=mp.cpu_count())
     ap.add_argument("-o", "--output", type=Path, help="write all results as JSON lines")
     ap.add_argument("-v", "--verbose", action="store_true")
+    ap.add_argument("--pairs", help="agent pairings, e.g. setter-greedy,mixed-random (game seed %% number "
+                                    "of pairs picks one; default: random/greedy in all four combinations)")
     ap.add_argument("--completion", choices=["vanilla", "corpus"], default="vanilla",
                     help="how unknown opponent cards are guessed")
     args = ap.parse_args()
@@ -138,7 +140,8 @@ def main() -> int:
         # one task per reconstruction, the long full-game ones first
         cases = [(seed, viewer, frac) for frac in sorted(fractions, reverse=True)
                  for seed in seeds for viewer in (0, 1)]
-    tasks = [(seed, viewer, frac, args.mirror_prob, args.timeout, args.completion)
+    pairs = tuple(tuple(p.split("-")) for p in args.pairs.split(",")) if args.pairs else None
+    tasks = [(seed, viewer, frac, args.mirror_prob, args.timeout, args.completion, pairs)
              for seed, viewer, frac in cases]
     results = []
     t0 = time.monotonic()

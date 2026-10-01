@@ -39,6 +39,7 @@ Any other difference raises `Divergence`.
 from __future__ import annotations
 
 import copy
+from collections import Counter
 import os
 import signal
 import sys
@@ -103,6 +104,16 @@ def _stat_mismatch(e: Divergence) -> bool:
         return False
     diff = {k for k in set(exp) | set(got) if exp.get(k) != got.get(k)}
     return bool(diff) and all(isinstance(k, str) and k.endswith(("_atk", "_def")) for k in diff)
+
+
+# messages that leave every card where it was (the rolling snapshot stays valid)
+_NO_MOVES = frozenset((
+    "HINT", "CARD_HINT", "PLAYER_HINT", "CHAINING", "CHAINED", "CHAIN_SOLVING", "CHAIN_SOLVED",
+    "CHAIN_END", "CHAIN_NEGATED", "CHAIN_DISABLED", "NEW_PHASE", "NEW_TURN", "POS_CHANGE",
+    "SUMMONING", "SUMMONED", "SPSUMMONING", "SPSUMMONED", "FLIPSUMMONING", "FLIPSUMMONED",
+    "BECOME_TARGET", "CONFIRM_CARDS", "DAMAGE", "RECOVER", "PAY_LPCOST", "LPUPDATE", "ATTACK",
+    "BATTLE", "ATTACK_DISABLED", "DAMAGE_STEP_START", "DAMAGE_STEP_END", "ADD_COUNTER",
+    "REMOVE_COUNTER", "FIELD_DISABLED", "CARD_SELECTED", "RANDOM_SELECTED", "SET"))
 
 
 def first_difference(a, b, path: str = "") -> str | None:
@@ -277,6 +288,8 @@ class BeliefReplay:
         self.prev_shuffle_cps = getattr(self, "shuffle_cps", {})
         self.shuffle_cps: dict[tuple[int, int], list[int]] = {}
         self.snapshots: dict[int, infer.LocMap] = {}
+        self._roll_cp = None  # the latest main-line step's snapshot (kept only until the next)
+        self._roll_dirty = True  # whether a card may have moved since that snapshot
         self.lockstep = Tracker(self.viewer, self.init)
 
     # -- setup -----------------------------------------------------------------
@@ -681,6 +694,7 @@ class BeliefReplay:
             todo = self.carry_swaps + [(a, b) for a, b in self.swaps.get(cp, ())
                                        if (cp, a, b) not in self._folded_swaps]
             if todo:
+                self._roll_dirty = True
                 # the pending response selected card objects: never move those
                 busy = set(infer.response_card_ids(duel, pending, pending_resp)) if pending else set()
                 carry = []
@@ -689,8 +703,21 @@ class BeliefReplay:
                         carry.append((a, b))  # not possible yet: try again next step
                 self.carry_swaps = carry
             self._apply_forces(duel)
-            if cp in self.snapshot_cps and cp not in self.snapshots:
-                self.snapshots[cp] = infer.LocMap(duel, lazy=False)
+            if cp not in self.snapshots and (self.depth == 0 or cp in self.snapshot_cps):
+                # (the main line keeps the latest step's positions, which most repairs
+                # need, so that finding them takes no restart of its own)
+                if self.depth == 0:
+                    prev = self.snapshots.get(self._roll_cp)
+                    if self._roll_cp is not None and self._roll_cp not in self.snapshot_cps:
+                        self.snapshots.pop(self._roll_cp, None)
+                    self._roll_cp = cp
+                    if prev is not None and not self._roll_dirty:
+                        self.snapshots[cp] = prev  # (no card moved since)
+                    else:
+                        self.snapshots[cp] = infer.LocMap(duel, lazy=False)
+                    self._roll_dirty = False
+                else:
+                    self.snapshots[cp] = infer.LocMap(duel, lazy=False)
             # active for every step at this stream position: the selection may
             # happen in a step that shows the viewer nothing
             forced_match = self.matches.get(cp[0])
@@ -716,6 +743,8 @@ class BeliefReplay:
             if forced_match:
                 duel.set_forced_match([])
             msgs = [parse(m) for m in duel.get_messages()]
+            if not self._roll_dirty and any(m["type"] not in _NO_MOVES for m in msgs):
+                self._roll_dirty = True
             for m in msgs:
                 self._simlog("msg", m, cp)
             # a swap must happen before the prompt that led to the move was built
@@ -810,7 +839,8 @@ class BeliefReplay:
                     fix = self._force_fix(item[1]) if item[0] == "msg" else None
                     if fix is None and item[0] == "prompt":
                         fix = self._prompt_copy_fix(item[1], fp, duel, cp) \
-                            or self._hidden_candidates_fix(item[1], fp)
+                            or self._hidden_candidates_fix(item[1], fp) \
+                            or self._granted_copy_fix(item[1], fp, duel)
                     what = item[1].get("type") if item[0] == "prompt" else item[1].get("type", item[0])
                     raise Divergence(self.pos, f"prompt mismatch [{what} vs {fp['type']}]", item, fp, fix)
                 if (self.check_state or self.pos == self.probe_state_at) and item[2] is not None:
@@ -870,6 +900,21 @@ class BeliefReplay:
             if key not in self.forces and key not in self.unforced:
                 return ("force", *key)
         return None
+
+    def _forced_cost_fix(self) -> tuple | None:
+        """The opponent's activation is forced (its cost or target check failed in
+        the replay) and still being activated: the check depends on hidden cards,
+        and so does its cost or target selection (e.g. "reveal a card whose other
+        copy is in the deck"): let the hidden cards qualify during the activation."""
+        start = self._chain_start()
+        if start is None or (start, self.pos) in self.match_piles:
+            return None
+        ch = self.items[start][1]
+        if (self.opponent, ch["code"], ch["desc"]) not in self._active_forces:
+            return None
+        if any(it[0] == "msg" and it[1]["type"] == "CHAINED" for it in self.items[start:self.pos]):
+            return None
+        return ("matchpile", start, self.pos)
 
     def _unforce_fix(self, got: dict) -> tuple | None:
         """The replay activated a forced effect that the real game did not."""
@@ -1001,17 +1046,14 @@ class BeliefReplay:
                     fix = ("exclude", *key)
             if fix is None and exp["type"] == "CONFIRM_CARDS" and exp["cards"] \
                     and exp["cards"][0]["con"] == self.opponent \
-                    and (got["type"] != "CONFIRM_CARDS" or len(got["cards"]) < len(exp["cards"])):
+                    and (got["type"] != "CONFIRM_CARDS" or {(c["con"], c["loc"], c["seq"]) for c in exp["cards"]}
+                         - {(c["con"], c["loc"], c["seq"]) for c in got["cards"]}):
                 # the opponent revealed a card that the replay's filter rejects (the
                 # filter depends on hidden cards, e.g. a matching card in the deck)
                 shown = [(c["con"], c["loc"], c["seq"]) for c in got["cards"]] if got["type"] == "CONFIRM_CARDS" else []
-                start = self._chain_start()
-                ch = self.items[start][1] if start is not None else None
-                if ch is not None and (self.opponent, ch["code"], ch["desc"]) in self._active_forces \
-                        and (start, self.pos) not in self.match_piles:
-                    # the activation is forced (its cost check failed in the replay):
-                    # the check depends on hidden cards, which the cost reveals too
-                    fix = ("matchpile", start, self.pos)
+                # (a forced activation's reveal: its cost depends on hidden cards, e.g.
+                # "reveal a card whose other copy is in the deck", not the revealed card)
+                fix = self._forced_cost_fix()
                 for c in exp["cards"] if fix is None else ():
                     if (c["con"], c["loc"], c["seq"]) not in shown:
                         fix = self._match_fix(cp, msgs, idx, c)
@@ -1074,6 +1116,8 @@ class BeliefReplay:
                 # qualified can depend on hidden cards (e.g. a cost that needs a
                 # matching card in the deck), so let it match the filters
                 fix = self._match_fix(cp, msgs, idx, exp["from"])
+            if fix is None:
+                fix = self._forced_cost_fix()
             if fix is None and got["type"] in _NOTHING_MORE | {"CHAINED"} \
                     and exp["type"] not in _NOTHING_MORE | {"CHAINED"}:
                 # (last resort) the real game did more before going on (e.g. a cost
@@ -1331,6 +1375,33 @@ class BeliefReplay:
                  for i in range(len(pairs) + 1)}
         new = frozenset((k, v) for k, v in self._roles(pairs + [(a, b)]).items() if k != v)
         return new not in tried
+
+    def _granted_copy_fix(self, exp: dict, got: dict, duel: Duel) -> tuple | None:
+        """The viewer's prompt offers an effect granted by Xyz materials a different
+        number of times: copies of a material differ in history (which one's effect
+        was used this turn; the choice among identical entries follows the card
+        ids), so an attached copy and one that left trade roles from the start."""
+        if exp["type"] != got["type"] or "activatable" not in exp:
+            return None
+        ce = Counter((o["code"], o.get("desc", 0)) for o in exp["activatable"])
+        cg = Counter((o["code"], o.get("desc", 0)) for o in got.get("activatable", ()))
+        for (code, desc), n in sorted(ce.items()):
+            if cg[(code, desc)] == n or not desc >> 20 or desc >> 20 == code:
+                continue
+            src = desc >> 20
+            o = next(o for o in exp["activatable"] if (o["code"], o.get("desc", 0)) == (code, desc))
+            if not o["loc"] & C.LOCATION_MZONE:
+                continue
+            attached = [cid for c, cid in duel.overlay_cards(o["con"], C.LOCATION_MZONE, o["seq"]) if c == src]
+            others = [cid for p in (0, 1) for loc in (C.LOCATION_GRAVE, C.LOCATION_REMOVED, C.LOCATION_HAND,
+                                                      C.LOCATION_DECK, C.LOCATION_EXTRA)
+                      for c, cid in duel.location_cards(p, loc) if c == src]
+            for a in attached:
+                for b in others:
+                    if self._role_swap_is_new(a, b) and ((0, 0), a, b) not in self.failed_swaps \
+                            and ((0, 0), b, a) not in self.failed_swaps:
+                        return ("swap", (0, 0), a, b)
+        return None
 
     def _prompt_copy_fix(self, exp: dict, got: dict, duel: Duel, cp: int) -> tuple | None:
         """The viewer's prompt lists a different copy of a card (copies can differ in

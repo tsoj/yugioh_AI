@@ -41,15 +41,16 @@ def _alarm(*_):
     raise _Timeout()
 
 
-def diff(seed: int, timeout: int = 300) -> list[tuple] | str:
-    """Differences, or a string if the check itself failed."""
+def diff(task: tuple, timeout: int = 300) -> list[tuple] | str:
+    """Differences for (seed, agent pairings), or a string if the check itself failed."""
+    seed, pairs = task
     signal.signal(signal.SIGALRM, _alarm)
     signal.alarm(timeout)
     # (a loop inside the core never returns to Python: the watchdog ends the
     # worker, which run_parallel reports as a crash of this seed)
     faulthandler.dump_traceback_later(timeout + 60, exit=True)
     try:
-        return _diff(seed)
+        return _diff(seed, pairs)
     except _Timeout:
         return "timeout"
     except Exception as e:  # noqa: BLE001
@@ -59,8 +60,8 @@ def diff(seed: int, timeout: int = 300) -> list[tuple] | str:
         signal.alarm(0)
 
 
-def _diff(seed: int) -> list[tuple]:
-    record = make_game(seed)
+def _diff(seed: int, pairs=None) -> list[tuple]:
+    record = make_game(seed, pairs=[tuple(p) for p in pairs] if pairs else None)
     base = streams(record)
     out = []
     for k in (1, 2):
@@ -97,12 +98,15 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("-n", type=int, default=200)
     ap.add_argument("--start", type=int, default=3000)
+    ap.add_argument("--pairs", help="agent pairings as in check_belief.py, e.g. setter-greedy,mixed-random")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
+    pairs = tuple(tuple(p.split("-")) for p in args.pairs.split(",")) if args.pairs else None
     kinds = collections.Counter()
     games = leaky = 0
     failed = []
-    for seed, res in run_parallel(diff, list(range(args.start, args.start + args.n)), os.cpu_count()):
+    tasks = [(seed, pairs) for seed in range(args.start, args.start + args.n)]
+    for (seed, _), res in run_parallel(diff, tasks, os.cpu_count()):
         if not isinstance(res, list):
             failed.append((seed, res))
             print(seed, "check failed:", res, flush=True)

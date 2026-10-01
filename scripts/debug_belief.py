@@ -66,8 +66,9 @@ def main():
     ap.add_argument("--no-sim", action="store_true", help="do not print the reconstruction's events")
     ap.add_argument("--no-truth", action="store_true", help="do not print the real game's events")
     ap.add_argument("--max-restarts", type=int, help="stop after this many repairs (to inspect one attempt)")
+    ap.add_argument("--pairs", help="agent pairings as in check_belief.py, e.g. setter-greedy,mixed-random")
     args = ap.parse_args()
-    rec = make_game(args.seed)
+    rec = make_game(args.seed, pairs=[tuple(p.split("-")) for p in args.pairs.split(",")] if args.pairs else None)
     print(rec.decks[0].name, "vs", rec.decks[1].name, rec.agents, rec.result)
     items = observation_stream(rec, args.viewer)
     cut = cut_points(items, (args.cut,))[0]
