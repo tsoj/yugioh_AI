@@ -10,7 +10,7 @@ from pathlib import Path
 from . import constants as C
 from .carddb import CardDB
 from .core import _find_script
-from .paths import DECKS_DIR
+from .paths import DECKS_DIR, ROOT
 
 
 @dataclass
@@ -110,9 +110,77 @@ class DeckPool:
             self._cache[path] = normalize(parse_ydk(path), self.db)
         return self._cache[path]
 
+    def diverse(self, index: int) -> Deck:
+        """The deck at `index` of the diverse order (see `diverse_order`), wrapping around."""
+        if not hasattr(self, "_order"):
+            self._order = diverse_order(self, ROOT / "build" / "diverse_decks.json")
+        return self.load(self._by_name()[self._order[index % len(self._order)]])
+
+    def _by_name(self) -> dict[str, Path]:
+        if not hasattr(self, "_names"):
+            self._names = {p.name: p for p in self.paths}
+        return self._names
+
     def sample(self, rng: random.Random) -> Deck:
         for _ in range(1000):
             deck = self.load(rng.choice(self.paths))
             if deck is not None:
                 return deck
         raise RuntimeError("could not find a usable deck")
+
+
+DIVERSE_HEAD = 20000  # decks ordered for coverage (the rest follow in random order)
+
+
+def diverse_order(pool: DeckPool, cache: Path | None = None, seed: int = 0) -> list[str]:
+    """Usable decks of the pool (file names) without duplicates, ordered so that
+    the decks early in the order together contain as many different cards as
+    possible: each next deck is the one adding the most cards not yet covered
+    (ties at random); once every card is covered, a new round starts. Popular
+    builds that differ in a few cards come late, rare cards early."""
+    import heapq
+    import json
+    if cache is not None and cache.exists():
+        data = json.loads(cache.read_text())
+        if data.get("seed") == seed and data.get("n_paths") == len(pool.paths):
+            return data["order"]
+    rng = random.Random(seed)
+    seen: set[tuple] = set()
+    names: list[str] = []
+    cards: list[frozenset] = []
+    for path in pool.paths:
+        deck = pool.load(path)
+        if deck is None:
+            continue
+        key = tuple(sorted(deck.main)) + (0,) + tuple(sorted(deck.extra))
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(path.name)
+        cards.append(frozenset(pool.db.get(c).alias or c for c in deck.main + deck.extra))
+    pool._cache.clear()  # (the decks are loaded again when used)
+    tiebreak = [rng.random() for _ in names]
+    left = set(range(len(names)))
+    order: list[int] = []
+    while left and len(order) < DIVERSE_HEAD:
+        covered: set = set()
+        heap = [(-len(cards[i]), tiebreak[i], i) for i in left]
+        heapq.heapify(heap)
+        while heap and len(order) < DIVERSE_HEAD:
+            neg, tb, i = heapq.heappop(heap)
+            gain = len(cards[i] - covered)
+            if gain < -neg:
+                heapq.heappush(heap, (-gain, tb, i))  # (stale estimate)
+                continue
+            if gain == 0:
+                break  # (every card covered: a new round)
+            order.append(i)
+            left.discard(i)
+            covered |= cards[i]
+    rest = sorted(left)
+    rng.shuffle(rest)
+    result = [names[i] for i in order + rest]
+    if cache is not None:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps({"seed": seed, "n_paths": len(pool.paths), "order": result}))
+    return result

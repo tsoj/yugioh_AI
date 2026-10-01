@@ -1069,7 +1069,8 @@ class BeliefReplay:
                             and e["loc"] in (*HIDDEN_PILES, C.LOCATION_GRAVE, C.LOCATION_REMOVED):
                         fix = self._swap_fix(cp, msgs, idx, e, g, duel)
                     break
-            if fix is None and exp["type"] == got["type"] == "MOVE" and not exp.get("code") \
+            if fix is None and exp["type"] == got["type"] == "MOVE" \
+                    and (not exp.get("code") or exp.get("code") != got.get("code")) \
                     and exp["from"]["con"] == got["from"]["con"] and exp["from"]["loc"] == got["from"]["loc"] \
                     and exp["from"]["seq"] != got["from"]["seq"] and exp["from"]["loc"] in HIDDEN_PILES \
                     and exp["to"] == got["to"]:

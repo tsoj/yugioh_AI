@@ -45,6 +45,14 @@ python3 scripts/check_belief.py -n 1000 --start 1000 -o runs/check.jsonl
 # ... with other agent pairings (seed % number of pairs picks one; agents: random, greedy,
 # setter = sets cards face-down and responds in chain windows, mixed = greedy with 30% random)
 python3 scripts/check_belief.py -n 1000 --start 4000 --pairs setter-greedy,mixed-setter -o runs/c.jsonl
+# ... with decks chosen for card variety: the corpus without duplicates, ordered so that
+# each next deck adds the most cards not covered yet (game seed s uses positions 2s, 2s+1;
+# the order is cached in build/diverse_decks.json); popular builds are near duplicates
+python3 scripts/check_belief.py -n 1000 --start 5000 --decks diverse -o runs/c.jsonl
+# ... or an opening book covering every card of the corpus (see below)
+python3 scripts/make_book.py -o build/book.jsonl
+python3 scripts/check_belief.py -n 1143 --start 7000 --book build/book.jsonl -o runs/c.jsonl
+python3 scripts/card_coverage.py -n 1143 --start 7000 --book build/book.jsonl
 
 # quick iteration: rerun only what failed before, then diff the two runs
 python3 scripts/check_belief.py --cases runs/check.jsonl --only-failed -o runs/retry.jsonl
@@ -180,24 +188,30 @@ searched decision; making it incremental is an obvious next step.
 
 ## Current results
 
-Measured with `scripts/check_belief.py -n 1000` (random human deck pairs from the corpus, 20%
-mirror matches; both players; cut after ~1/3, ~2/3 and at the end of the game, 6000
-reconstructions per run; the reconstruction must reproduce every filtered message, every prompt
-of the viewer and the viewer's state view at every prompt). Seeds 1000-2999 were used while
-developing (random and greedy agents); seeds 3000-3999 (same agents) and 4000-4999 (the
-`setter` and `mixed` agents against each other and the others, `--pairs
-setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter`) are fresh:
+Measured with `scripts/check_belief.py -n 1000` (both players; cut after ~1/3, ~2/3 and at
+the end of the game, 6000 reconstructions per run; the reconstruction must reproduce every
+filtered message, every prompt of the viewer and the viewer's state view at every prompt).
+Seeds 1000-4999 use random corpus deck pairs (20% mirror matches); 5000-6999 use the decks
+ordered for card variety (`--decks diverse`). Agents: random and greedy, or (marked "other
+agents") the `setter` and `mixed` agents against each other and the others (`--pairs
+setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter`). Seeds
+1000-4999 were used while developing; 5000-6999 are fresh:
 
-| cut      | 1000-1999 | 2000-2999 | 3000-3999 (fresh) | 4000-4999 (fresh, other agents) |
-|----------|-----------|-----------|-------------------|---------------------------------|
-| ~1/3     | 100.0%    | 100.0%    | 99.65%            | 99.55%                          |
-| ~2/3     | 100.0%    | 100.0%    | 99.45%            | 99.40%                          |
-| full game| 99.95%    | 100.0%    | 99.05%            | 99.00%                          |
-| overall  | 99.98%    | 100.0%    | 99.38%            | 99.32%                          |
+| cut      | 1000-1999 | 2000-2999 | 3000-3999 | 4000-4999 (other agents) | 5000-5999 (fresh, diverse decks) | 6000-6999 (fresh, diverse decks, other agents) |
+|----------|-----------|-----------|-----------|--------------------------|----------------------------------|------------------------------------------------|
+| ~1/3     | 100.0%    | 100.0%    | 99.95%    | 99.85%                   | 99.80%                           | 99.50%                                         |
+| ~2/3     | 100.0%    | 100.0%    | 99.90%    | 99.75%                   | 99.45%                           | 99.55%                                         |
+| full game| 100.0%    | 100.0%    | 99.70%    | 99.55%                   | 99.05%                           | 98.90%                                         |
+| overall  | 100.0%    | 100.0%    | 99.85%    | 99.72%                   | 99.43%                           | 99.32%                                         |
 
-The gap between the development seeds and the fresh ones is the honest measure: the corpus has
-~164k decks, and new decks bring new card mechanics. About 96% of all reconstructions need no
-repair restart at all.
+The fresh seeds are the honest measure: the corpus has ~164k decks, and new decks bring new card
+mechanics (seeds 3000-4999 started at 99.38% / 99.32% when they were fresh). About 96% of all
+reconstructions need no repair restart at all.
+
+For broad tests, `scripts/make_book.py` builds an opening book whose 762 decks (381 openings)
+together contain every card of the usable corpus decks (13,869); `--book build/book.jsonl` plays
+opening seed % 381. Three passes (1143 games) show ~90% of the cards in a game and activate
+~55% (`scripts/card_coverage.py`; many cards never chain, e.g. Normal Monsters).
 
 Median reconstruction time is about 0.3-0.6s (a few long games take up to the 90s limit because
 of repeated repair restarts). Plain self-play is fast: about 0.2s CPU per game, ~650 decisions per game.

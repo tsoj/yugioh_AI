@@ -98,9 +98,27 @@ PAIRS = [("random", "random"), ("random", "greedy"), ("greedy", "random"), ("gre
 _deck_pool = None
 
 
-def make_game(seed: int, mirror_prob: float = 0.2, pairs: list[tuple[str, str]] | None = None) -> GameRecord:
+_books: dict = {}
+
+
+def load_book(path) -> list:
+    """The openings (pairs of decks) of a book written by scripts/make_book.py."""
+    import json
+    from ..decks import Deck
+    key = str(path)
+    if key not in _books:
+        with open(path) as f:
+            _books[key] = [[Deck.from_json(d) for d in json.loads(line)["decks"]] for line in f if line.strip()]
+    return _books[key]
+
+
+def make_game(seed: int, mirror_prob: float = 0.2, pairs: list[tuple[str, str]] | None = None,
+              decks: str = "random", book: str | None = None) -> GameRecord:
     """The test game for `seed`: random decks (sometimes a mirror match) and
-    agent pairing pairs[seed % len(pairs)] (by default PAIRS)."""
+    agent pairing pairs[seed % len(pairs)] (by default PAIRS). With decks="diverse",
+    the decks come from the order that covers as many different cards as possible
+    (game `seed` uses its positions 2*seed and 2*seed + 1). With a `book` (see
+    scripts/make_book.py), game `seed` plays its opening seed % (number of openings)."""
     import random
     from ..agents import make_agent
     from ..carddb import default_db
@@ -109,8 +127,14 @@ def make_game(seed: int, mirror_prob: float = 0.2, pairs: list[tuple[str, str]] 
     if _deck_pool is None:
         _deck_pool = DeckPool(default_db())
     rng = random.Random(seed)
-    d0 = _deck_pool.sample(rng)
-    d1 = d0 if rng.random() < mirror_prob else _deck_pool.sample(rng)
+    if book:
+        d0, d1 = load_book(book)[seed % len(load_book(book))]  # (the book decides the pairing)
+    elif decks == "diverse":
+        d0 = _deck_pool.diverse(2 * seed)
+        d1 = d0 if rng.random() < mirror_prob else _deck_pool.diverse(2 * seed + 1)
+    else:
+        d0 = _deck_pool.sample(rng)
+        d1 = d0 if rng.random() < mirror_prob else _deck_pool.sample(rng)
     pairs = pairs or PAIRS
     names = pairs[seed % len(pairs)]
     record = new_record([d0, d1], seed)

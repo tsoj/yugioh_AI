@@ -67,8 +67,11 @@ def main():
     ap.add_argument("--no-truth", action="store_true", help="do not print the real game's events")
     ap.add_argument("--max-restarts", type=int, help="stop after this many repairs (to inspect one attempt)")
     ap.add_argument("--pairs", help="agent pairings as in check_belief.py, e.g. setter-greedy,mixed-random")
+    ap.add_argument("--decks", choices=["random", "diverse"], default="random")
+    ap.add_argument("--book", help="opening book (scripts/make_book.py)")
     args = ap.parse_args()
-    rec = make_game(args.seed, pairs=[tuple(p.split("-")) for p in args.pairs.split(",")] if args.pairs else None)
+    rec = make_game(args.seed, pairs=[tuple(p.split("-")) for p in args.pairs.split(",")] if args.pairs else None,
+                    decks=args.decks, book=args.book)
     print(rec.decks[0].name, "vs", rec.decks[1].name, rec.agents, rec.result)
     items = observation_stream(rec, args.viewer)
     cut = cut_points(items, (args.cut,))[0]
