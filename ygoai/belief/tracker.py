@@ -431,9 +431,10 @@ class Tracker:
             self._resent_hints = True
         else:
             self._resent_hints = False
-        if t == "MOVE" and (m.get("reason", 0) & C.REASON_RELEASE or _leaves_field(m)):
+        if t == "MOVE" and (m.get("reason", 0) & (C.REASON_RELEASE | C.REASON_COST) or _leaves_field(m)):
             # (a card can also be sent instead of Tributed, e.g. with Floowandereeze
-            # and the Unexplored Winds: it counts for the Level of a Set monster)
+            # and the Unexplored Winds, or banished from a graveyard with Tribute
+            # Burial: it counts for the Level of a Set monster)
             self._releases += 1
         elif t not in ("MOVE", "HINT", "CARD_HINT", "SET", "SPSUMMONING", "ADD_COUNTER", "REMOVE_COUNTER"):
             # (a counter placed because of the Tribute is a consequence, not a new action)

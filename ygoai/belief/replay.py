@@ -62,6 +62,7 @@ from .tracker import Hypothesis, Tracker, TrackerError
 
 STATUS_END, STATUS_AWAITING, STATUS_CONTINUE = 0, 1, 2
 PROBE_OK, PROBE_FAILED, PROBE_TIMEOUT, PROBE_REPAIRABLE, PROBE_PROGRESSED = 0, 1, 3, 4, 5
+PROBE_REPAIRABLE_AT_ONCE = 6  # repairable, but at the very first item after the decision
 # messages after which moves no longer result from the current selection
 # (a summon ends the selection of what it summons: later moves are other actions)
 # (and a cost's selection ends when the chain link is complete)
@@ -840,7 +841,8 @@ class BeliefReplay:
                     if fix is None and item[0] == "prompt":
                         fix = self._prompt_copy_fix(item[1], fp, duel, cp) \
                             or self._hidden_candidates_fix(item[1], fp) \
-                            or self._granted_copy_fix(item[1], fp, duel)
+                            or self._granted_copy_fix(item[1], fp, duel) \
+                            or self._enabler_fix(item[1], fp, duel)
                     what = item[1].get("type") if item[0] == "prompt" else item[1].get("type", item[0])
                     raise Divergence(self.pos, f"prompt mismatch [{what} vs {fp['type']}]", item, fp, fix)
                 if (self.check_state or self.pos == self.probe_state_at) and item[2] is not None:
@@ -1084,6 +1086,17 @@ class BeliefReplay:
                 # the viewer's own selection hint names the card it handles (e.g. "select
                 # the zone for <card>"): the replay's card of that name is that card
                 fix = self._hint_code_fix(exp["data"], got["data"], duel)
+                if fix is None:
+                    # (or the order the operation handles its cards in: two copies of
+                    # the replay's card are the other way round, e.g. which one was
+                    # revealed before the hand was shuffled)
+                    for loc in (C.LOCATION_HAND, C.LOCATION_DECK, C.LOCATION_GRAVE):
+                        ids = [cid for code, cid in duel.location_cards(self.viewer, loc) if code == got["data"]]
+                        for i, a in enumerate(ids):
+                            for b in ids[i + 1:]:
+                                fix = fix or self._history_swap(a, b, cp)
+                        if fix is not None:
+                            break
             if fix is None and got["type"] == "HINT" and got["hint_type"] == C.HINT_OPSELECTED \
                     and got["player"] == self.opponent and exp != got \
                     and not (exp["type"] == "HINT" and exp["hint_type"] == C.HINT_OPSELECTED):
@@ -1100,6 +1113,14 @@ class BeliefReplay:
                 # (the filter depends on hidden cards, e.g. a fitting card in the
                 # deck): let it match
                 fix = self._match_fix(cp, msgs, idx, exp["cards"][0], duel)
+                start = self.pos
+                while start > 0 and self.items[start - 1][0] == "msg" \
+                        and self.items[start - 1][1]["type"] == "BECOME_TARGET":
+                    start -= 1
+                if fix is not None and fix[0] == "match" and start < self.pos:
+                    # (the targets of one selection are announced one by one: the
+                    # selection happened before the first of them)
+                    fix = None if fix[2] in self.matches.get(start, ()) else ("match", (start, 0), fix[2])
             if fix is None and exp["type"] == "MOVE" and exp["from"]["con"] == self.opponent \
                     and exp["from"]["loc"] in HIDDEN_PILES and exp != got:
                 fix = self._kind_fix(cp, msgs, idx, exp) or self._match_fix(cp, msgs, idx, exp["from"])
@@ -1375,6 +1396,30 @@ class BeliefReplay:
                  for i in range(len(pairs) + 1)}
         new = frozenset((k, v) for k, v in self._roles(pairs + [(a, b)]).items() if k != v)
         return new not in tried
+
+    def _enabler_fix(self, exp: dict, got: dict, duel: Duel) -> tuple | None:
+        """The viewer is offered an effect the replay does not offer: the opponent's
+        hidden cards can enable it, most directly a copy of the same card (e.g. one
+        whose watcher, active in every location, raises the event both copies
+        respond to). Assume one copy at the bottom of the opponent's deck, once."""
+        key = "chains" if "chains" in exp else "activatable"
+        if key not in exp or (exp["type"] != got["type"] and exp["type"] != "SELECT_CHAIN"):
+            return None  # (no chain window at all in the replay when nothing could respond)
+        have = Counter((o["code"], o.get("desc", 0)) for o in got.get(key, ())) \
+            if exp["type"] == got["type"] else Counter()
+        n = len(duel.location_cards(self.opponent, C.LOCATION_DECK))
+        for o in exp[key]:
+            if have[(o["code"], o.get("desc", 0))] > 0 or o["con"] != self.viewer or not n:
+                continue
+            if any(a[4] == o["code"] and a[1:3] == (self.opponent, C.LOCATION_DECK)
+                   for a in [*self.assumptions, *self.failed_assumptions]):
+                continue
+            try:
+                self._assume({"con": self.opponent, "loc": C.LOCATION_DECK, "seq": 0}, [o["code"]],
+                             "the viewer's option needs a card of the opponent")
+            except Divergence as d:
+                return d.fix
+        return None
 
     def _granted_copy_fix(self, exp: dict, got: dict, duel: Duel) -> tuple | None:
         """The viewer's prompt offers an effect granted by Xyz materials a different
@@ -1778,7 +1823,8 @@ class BeliefReplay:
             filler = self._filler()
             if kind == "msetable":
                 tributes = sum(1 for x in up[:i] if x["type"] == "MOVE"
-                               and (x["reason"] & C.REASON_RELEASE or tracker_mod._leaves_field(x)))
+                               and (x["reason"] & (C.REASON_RELEASE | C.REASON_COST)
+                                    or tracker_mod._leaves_field(x)))
                 levels = {0: range(1, 5), 1: range(5, 7)}.get(tributes, range(7, 13))
 
                 def fits(code):
@@ -2070,35 +2116,30 @@ class BeliefReplay:
             prompt["type"] in CARD_PROMPTS and bool(cards) and all(
                 c["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE) and c.get("pos", C.POS_FACEUP) & C.POS_FACEUP
                 for c in cards))
-        repairable = None
+        # No candidate may reproduce the stream as is. Then the best is the one
+        # that reproduced the most of it before running into a problem, a
+        # repairable one (e.g. two copies of a card that have to trade places)
+        # before one the replay cannot repair; one that only ran out of time
+        # without contradicting the stream comes after those.
+        best = None  # (reached, repairable, candidate)
         unrefuted = None
-        progressed = None  # failed only after reproducing enough of the stream
         for c in valid[:self.max_probes]:
             self.stats.probes += 1
             outcome = self._probe(duel, prompt, c)
+            reached = self.last_probe_reached
             if outcome == PROBE_OK:
                 self._trace(prompt, c, False, len(valid))
                 return c
-            if outcome == PROBE_REPAIRABLE and repairable is None:
-                repairable = c
+            if outcome in (PROBE_REPAIRABLE, PROBE_REPAIRABLE_AT_ONCE, PROBE_PROGRESSED):
+                key = (reached, outcome != PROBE_PROGRESSED)
+                if best is None or key > best[:2]:
+                    best = (*key, c)
             if outcome == PROBE_TIMEOUT and unrefuted is None:
                 unrefuted = c
-            if outcome == PROBE_PROGRESSED and progressed is None:
-                progressed = c
-        if repairable is None and unrefuted is not None:
-            # it ran out of time without contradicting the stream: better than
-            # candidates that did contradict it
-            repairable = unrefuted
-        if repairable is None and progressed is not None:
-            # the others were contradicted right away; this one reproduced new
-            # observations first (its later problem is the main line's to repair)
-            repairable = progressed
-        if repairable is not None:
-            # No candidate reproduces the stream as is, but one runs into a
-            # problem the replay can repair (e.g. two copies of a card that
-            # have to trade places), so it is probably the right choice.
-            self._trace(prompt, repairable, False, len(valid))
-            return repairable
+        choice = best[2] if best is not None else unrefuted
+        if choice is not None:
+            self._trace(prompt, choice, False, len(valid))
+            return choice
         fix = None
         if prompt["type"] == "SELECT_OPTION" and not any(
                 m["type"] == "HINT" and m["hint_type"] == C.HINT_OPSELECTED and m["player"] == self.opponent
@@ -2126,9 +2167,12 @@ class BeliefReplay:
         and PROBE_FAILED otherwise. Choosing the wrong copy of a card looks
         like a repairable divergence, which is why clean successes win.
         """
+        rfd, wfd = os.pipe()  # (the probe reports how far it reproduced the stream)
         pid = os.fork()
         if pid == 0:
             code = 2
+            reached = self.pos
+            os.close(rfd)
             try:
                 signal.signal(signal.SIGALRM, lambda *_: os._exit(3))
                 # nested probes get less time, so they cannot eat their parent's time
@@ -2152,16 +2196,20 @@ class BeliefReplay:
                      if self.items[j][0] == "prompt" and self.items[j][2] is not None), None)
                 self._loop(duel, prompt, response)
                 code = 0
+                reached = self.pos
             except _ProbeSuccess:
                 code = PROBE_OK
+                reached = self.pos
             except Divergence as e:
-                code = PROBE_REPAIRABLE if e.fix is not None else \
+                reached = e.pos
+                code = (PROBE_REPAIRABLE if e.pos > self.probe_start else PROBE_REPAIRABLE_AT_ONCE) \
+                    if e.fix is not None else \
                     PROBE_PROGRESSED if e.pos - self.probe_start >= self.min_progress else PROBE_FAILED
                 if os.environ.get("YGOAI_PROBE_DEBUG"):
                     from ..pretty import msg_str
                     exp = e.expected[1] if isinstance(e.expected, tuple) else e.expected
                     show = lambda m: (msg_str(m) if isinstance(m, dict) and "type" in m else str(m))[:160]
-                    print(f"   probe {response} @{self.probe_start}: {e} | exp {show(exp)} | got {show(e.got)}",
+                    print(f"   probe {response} @{self.probe_start}: {e} fix={e.fix} | exp {show(exp)} | got {show(e.got)}",
                           file=sys.stderr)
             except BaseException:
                 code = 2
@@ -2169,18 +2217,33 @@ class BeliefReplay:
                     import traceback
                     traceback.print_exc()
             finally:
-                os._exit(code)
+                try:
+                    os.write(wfd, reached.to_bytes(4, "little"))
+                finally:
+                    os._exit(code)
+        os.close(wfd)
         try:
             _, status = os.waitpid(pid, 0)
+            # (non-blocking: a probe that timed out wrote nothing, and its own
+            # probes may still hold the pipe open)
+            os.set_blocking(rfd, False)
+            try:
+                data = os.read(rfd, 4)
+            except BlockingIOError:
+                data = b""
         except BaseException:
             # e.g. a timeout of the caller: never leave the probe running
             os.kill(pid, signal.SIGKILL)
             os.waitpid(pid, 0)
             raise
+        finally:
+            os.close(rfd)
+        self.last_probe_reached = int.from_bytes(data, "little") if len(data) == 4 else self.pos
         code = os.waitstatus_to_exitcode(status)
         if self.log and self.depth == 0:
             self.log(f"probe @{self.pos} {prompt['type']} {response} -> exit {code}")
-        return code if code in (PROBE_OK, PROBE_REPAIRABLE, PROBE_TIMEOUT, PROBE_PROGRESSED) else PROBE_FAILED
+        return code if code in (PROBE_OK, PROBE_REPAIRABLE, PROBE_TIMEOUT, PROBE_PROGRESSED,
+                                PROBE_REPAIRABLE_AT_ONCE) else PROBE_FAILED
 
 
 def belief_replay(viewer: int, init: dict, items: list[tuple], **kwargs) -> tuple[Duel, BeliefReplay]:

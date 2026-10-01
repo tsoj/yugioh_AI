@@ -62,6 +62,12 @@ def source_of(dest: dict, before: list[dict]) -> dict | None:
             break
     if idx is None:
         return None
+    if any(m["type"] == "MOVE" and same_loc(m["to"], before[idx]["from"]) for m in before[:idx]):
+        # the card got there in the same span (e.g. discarded as the cost of its own
+        # summon from the graveyard): where it was before that
+        earlier = source_of(before[idx]["from"], before[:idx])
+        if earlier is not None:
+            return earlier
     src = dict(before[idx]["from"])
     if src["loc"] in LIST_LOCS:
         # undo the shifts of earlier moves out of / into the same pile
@@ -240,12 +246,15 @@ def infer_battle(prompt: dict, up: list[dict], up_ext: list[dict] | None = None)
 
 def infer_chain(prompt: dict, up: list[dict]) -> tuple[list[dict], bool]:
     n = len(prompt["chains"])
-    if up and up[0]["type"] == "CARD_HINT":
+    if up and up[0]["type"] == "CARD_HINT" and up[0]["hint_type"] != C.CHINT_DESC_REMOVE:
         # an option that is no chain link (a continuous effect among the forced
         # triggers) acts right away, e.g. updating a turn counter on its card
+        # (a hint that expires, e.g. at the end of the turn, is no action)
         ch = next((m for m in up if m["type"] == "CHAINING"), None)
         own = [j for j, o in enumerate(prompt["chains"]) if same_loc(o, up[0])]
         if own and (ch is None or not same_loc(ch, up[0])):
+            if not prompt["forced"]:
+                return [{"index": j} for j in own] + [{"index": -1}], False
             return [{"index": j} for j in own], len(own) == 1
     if prompt["forced"]:
         # An option that is no chain link (e.g. Imperial Order's maintenance cost)
@@ -308,6 +317,14 @@ def infer_option(prompt: dict, up: list[dict], player: int) -> tuple[list[dict],
         if m["type"] == "HINT" and m["hint_type"] == C.HINT_OPSELECTED and m["data"] in opts:
             i = opts.index(m["data"])
             return [{"index": i}] + [{"index": j} for j in range(len(opts)) if j != i], True
+    for m in up[:12]:
+        if m["type"] == "HINT" and m["hint_type"] == C.HINT_CARD and m["data"]:
+            # the card whose effect is applied (e.g. a field spell that allows another
+            # way to summon) names the option that comes from it
+            named = [j for j, o in enumerate(opts) if o >> 20 == m["data"]]
+            if len(named) == 1:
+                i = named[0]
+                return [{"index": i}] + [{"index": j} for j in range(len(opts)) if j != i], False
     return [{"index": j} for j in range(len(opts))], len(opts) == 1
 
 
@@ -654,6 +671,10 @@ _WINDOW_END = frozenset(("CHAINING", "CHAINED", "CHAIN_SOLVED", "CHAIN_END", "NE
 def selection_window(up: list[dict]) -> list[dict]:
     for i, m in enumerate(up):
         if m["type"] in _WINDOW_END:
+            return up[:i]
+        if m["type"] == "BECOME_TARGET" and any(x["type"] not in ("HINT", "CARD_HINT") for x in up[:i]):
+            # (targets chosen after other consequences, e.g. after the cost's moves,
+            # belong to a later selection)
             return up[:i]
     return up
 
