@@ -195,18 +195,18 @@ Seeds 1000-4999 use random corpus deck pairs (20% mirror matches); 5000-6999 use
 ordered for card variety (`--decks diverse`). Agents: random and greedy, or (marked "other
 agents") the `setter` and `mixed` agents against each other and the others (`--pairs
 setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter`). Seeds
-1000-4999 were used while developing; 5000-6999 are fresh:
+all of them have been used while developing (5000-6999 started out fresh, at 99.43% / 99.32%):
 
-| cut      | 1000-1999 | 2000-2999 | 3000-3999 | 4000-4999 (other agents) | 5000-5999 (fresh, diverse decks) | 6000-6999 (fresh, diverse decks, other agents) |
-|----------|-----------|-----------|-----------|--------------------------|----------------------------------|------------------------------------------------|
-| ~1/3     | 100.0%    | 100.0%    | 99.95%    | 99.85%                   | 99.80%                           | 99.50%                                         |
-| ~2/3     | 100.0%    | 100.0%    | 99.90%    | 99.75%                   | 99.45%                           | 99.55%                                         |
-| full game| 100.0%    | 100.0%    | 99.70%    | 99.55%                   | 99.05%                           | 98.90%                                         |
-| overall  | 100.0%    | 100.0%    | 99.85%    | 99.72%                   | 99.43%                           | 99.32%                                         |
+| cut      | 1000-1999 | 2000-2999 | 3000-3999 | 4000-4999 (other agents) | 5000-5999 (diverse decks) | 6000-6999 (diverse decks, other agents) |
+|----------|-----------|-----------|-----------|--------------------------|---------------------------|-----------------------------------------|
+| ~1/3     | 100.0%    | 100.0%    | 100.0%    | 99.85%                   | 99.95%                    | 99.85%                                  |
+| ~2/3     | 100.0%    | 100.0%    | 100.0%    | 99.75%                   | 99.90%                    | 99.90%                                  |
+| full game| 100.0%    | 100.0%    | 99.85%    | 99.65%                   | 99.75%                    | 99.70%                                  |
+| overall  | 100.0%    | 100.0%    | 99.95%    | 99.75%                   | 99.87%                    | 99.82%                                  |
 
-The fresh seeds are the honest measure: the corpus has ~164k decks, and new decks bring new card
-mechanics (seeds 3000-4999 started at 99.38% / 99.32% when they were fresh). About 96% of all
-reconstructions need no repair restart at all.
+Fresh seeds are the honest measure: the corpus has ~164k decks, and new decks bring new card
+mechanics (every range so far started between 99.3% and 99.4% when it was fresh). About 96% of
+all reconstructions need no repair restart at all.
 
 For broad tests, `scripts/make_book.py` builds an opening book whose 762 decks (381 openings)
 together contain every card of the usable corpus decks (13,869); `--book build/book.jsonl` plays

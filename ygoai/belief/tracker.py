@@ -380,8 +380,15 @@ class Tracker:
             return
         if self._resent_hints and v.kind == "claim" and v.pool is not None and v.pool is self.pools[-1]:
             carriers = frozenset(x.id for x in v.pool.members if mark in x.marks)
-            if carriers:
+            # (more slots showing it than cards that had it: not hints shown again
+            # after the shuffle, but new ones)
+            shown = [x for x in v.pool.claims if mark in x.marks and x is not v]
+            if carriers and len(shown) < len(carriers):
                 v.allowed = carriers if v.allowed is None else v.allowed & carriers
+            elif carriers:
+                for x in shown:
+                    if x.allowed == carriers:
+                        x.allowed = None
         v.marks = v.marks | {mark}
 
     def message(self, m: dict) -> None:
@@ -451,8 +458,10 @@ class Tracker:
             # and the Unexplored Winds, or banished from a graveyard with Tribute
             # Burial: it counts for the Level of a Set monster)
             self._releases += 1
-        elif t not in ("MOVE", "HINT", "CARD_HINT", "SET", "SPSUMMONING", "ADD_COUNTER", "REMOVE_COUNTER"):
-            # (a counter placed because of the Tribute is a consequence, not a new action)
+        elif t not in ("MOVE", "HINT", "CARD_HINT", "PLAYER_HINT", "MISSED_EFFECT", "SET", "SPSUMMONING",
+                       "ADD_COUNTER", "REMOVE_COUNTER"):
+            # (a counter placed because of the Tribute is a consequence, not a new
+            # action; neither is a notice, e.g. a trigger missed because of a Tribute)
             self._releases = 0
         if t == "SET" and not m["code"]:
             # a hidden card was Set: its kind follows from the zone (and tributes)

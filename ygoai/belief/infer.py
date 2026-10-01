@@ -837,10 +837,9 @@ def _infer_deck_sort(prompt: dict, up: list[dict]) -> list[int] | None:
     moved to the top (or bottom) one by one, which the viewer sees as MOVE
     messages. The permutation reproducing those moves is the answer.
     """
-    import itertools
     cards = prompt["cards"]
     count = len(cards)
-    if count == 0 or count > 6 or any(c["loc"] != C.LOCATION_DECK for c in cards):
+    if count == 0 or any(c["loc"] != C.LOCATION_DECK for c in cards):
         return None
     con = cards[0]["con"]
     seqs = [c["seq"] for c in cards]
@@ -856,25 +855,25 @@ def _infer_deck_sort(prompt: dict, up: list[dict]) -> list[int] | None:
             break
     if len(observed) != count:
         return None
-    size = (max(seqs) + 1) if not bottom else None
-    for perm in itertools.permutations(range(count)):
-        tc = [None] * count
-        for i, r in enumerate(perm):
-            tc[r] = seqs[i]
-        deck = list(range(size if size is not None else max(seqs) + 1 + 64))
-        moves = []
-        for i in range(count):
-            card = tc[i] if bottom else tc[count - i - 1]
-            frm = deck.index(card)
-            deck.pop(frm)
-            if bottom:
-                deck.insert(0, card)
-            else:
-                deck.append(card)
-            moves.append((frm, deck.index(card)))
-        if moves == observed:
-            return list(perm)
-    return None
+    # replay the moves on the deck (positions named by the sequence they had when
+    # the prompt came): each move shows which card went next
+    deck = list(range(max(seqs) + 1 + (64 if bottom else 0)))
+    tc: list[int | None] = [None] * count
+    for i, (frm, to) in enumerate(observed):
+        if frm >= len(deck):
+            return None
+        card = deck.pop(frm)
+        if bottom:
+            deck.insert(0, card)
+        else:
+            deck.append(card)
+        if deck.index(card) != to or card not in seqs:
+            return None
+        tc[i if bottom else count - i - 1] = card
+    if None in tc or len(set(tc)) != count:
+        return None
+    # tc[order[i]] = card i
+    return [tc.index(seqs[i]) for i in range(count)]
 
 
 def _sort_by_events(cards: list[dict], up: list[dict]) -> list[int] | None:
