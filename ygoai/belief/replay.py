@@ -1543,6 +1543,22 @@ class BeliefReplay:
         of it in the replay looks exactly like it (the copies differ in history,
         e.g. only one had its level changed): swap the two copies."""
         live = infer.LocMap(duel)
+        for le, lg in zip(exp.get("chain") or (), got.get("chain") or ()):
+            he, hg = le.get("handler"), lg.get("handler")
+            if le.get("code") != lg.get("code") or not he or not hg or infer.same_loc(he, hg):
+                continue
+            # the chain link's card is another copy than the replay's (e.g. the
+            # copy that stayed in the deck when the shuffled cards were excavated):
+            # swap it with a copy where the real one is
+            a = live.at(hg)
+            cands = [live.at(he)] + [cid for code, cid in duel.location_cards(he["con"], he["loc"] & 0xff)
+                                     if code == le["code"]]
+            for b in dict.fromkeys(c for c in cands if c and c != a):
+                if live.codes.get(b, le["code"]) != le["code"]:
+                    continue
+                fix = self._history_swap(a, b, cp) if a else None
+                if fix is not None:
+                    return fix
         for p in (0, 1):
             for name, loc in LOCATIONS:
                 e_cards, g_cards = exp["players"][p][name], got["players"][p][name]
@@ -1553,6 +1569,17 @@ class BeliefReplay:
                         continue
                     if not e or not g or not e.get("code") or e.get("code") != g.get("code"):
                         return None
+                    if loc in (C.LOCATION_MZONE, C.LOCATION_SZONE) \
+                            and {k for k in set(e) | set(g) if e.get(k) != g.get(k)} == {"status"}:
+                        # only the card's history differs (e.g. a position change while
+                        # it was in the deck): another copy from a hidden pile
+                        a = live.at({"con": p, "loc": loc, "seq": i})
+                        for hloc in (C.LOCATION_DECK, C.LOCATION_HAND, C.LOCATION_EXTRA):
+                            for code, b in duel.location_cards(p, hloc):
+                                if code == e["code"] and a and b != a:
+                                    fix = self._history_swap(a, b, cp)
+                                    if fix is not None:
+                                        return fix
                     for j, g2 in enumerate(g_cards):
                         if j == i or g2 != e or e_cards[j] == g2:
                             continue

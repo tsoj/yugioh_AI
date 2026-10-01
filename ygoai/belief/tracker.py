@@ -709,6 +709,17 @@ class Tracker:
             if h and h.get("loc") and not h["loc"] & (C.LOCATION_OVERLAY | C.LOCATION_DECK) \
                     and loc_visible(h, self.viewer):
                 self._identify(self._plain_var(h["con"], h["loc"], h["seq"]), var)
+            elif h and h.get("loc") == C.LOCATION_DECK and var is not None:
+                # (where in the deck is masked) the link's card is in the deck: no
+                # card outside of it is that card (e.g. it was shuffled back and
+                # other cards excavated)
+                for p in (0, 1):
+                    outside = [v for zone in (C.LOCATION_MZONE, C.LOCATION_SZONE)
+                               for v in self.zones[p][zone] if v is not None]
+                    outside += [v for loc, lst in self.lists[p].items() if loc != C.LOCATION_DECK for v in lst]
+                    for v in outside:
+                        if v.kind == "claim" and v is not var and not any(x is var for x in v.not_same):
+                            v.not_same.append(var)
         for pl_idx, pl in enumerate(s["players"]):
             for name, loc in LOCATIONS:
                 cards = pl[name]
