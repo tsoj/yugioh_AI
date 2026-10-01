@@ -117,6 +117,37 @@ _NO_MOVES = frozenset((
     "REMOVE_COUNTER", "FIELD_DISABLED", "CARD_SELECTED", "RANDOM_SELECTED", "SET"))
 
 
+def _all_responses(prompt: dict) -> list[dict]:
+    """The legal answers to an opponent prompt that inference may have left out
+    (card selections only one card at a time; zones and announcements, whose
+    choices the stream shows directly, not at all)."""
+    from ..actions import battle_options, idle_options
+    t = prompt["type"]
+    if t == "SELECT_IDLECMD":
+        return idle_options(prompt)
+    if t == "SELECT_BATTLECMD":
+        return battle_options(prompt)
+    if t == "SELECT_CHAIN":
+        return ([] if prompt["forced"] else [{"index": -1}]) + [{"index": j} for j in range(len(prompt["chains"]))]
+    if t in ("SELECT_EFFECTYN", "SELECT_YESNO"):
+        return [{"yes": True}, {"yes": False}]
+    if t == "SELECT_OPTION":
+        return [{"index": j} for j in range(len(prompt["options"]))]
+    if t == "SELECT_POSITION":
+        return [{"position": p} for p in (C.POS_FACEUP_ATTACK, C.POS_FACEDOWN_ATTACK, C.POS_FACEUP_DEFENSE,
+                                          C.POS_FACEDOWN_DEFENSE) if prompt["positions"] & p]
+    if t in ("SELECT_CARD", "SELECT_TRIBUTE") and prompt["min"] <= 1 <= prompt["max"]:
+        return [{"indices": [j]} for j in range(len(prompt["cards"]))]
+    if t == "SELECT_UNSELECT_CARD":
+        fin = [{"finish": True}] if prompt.get("finishable") or prompt.get("cancelable") else []
+        return [{"index": j} for j in range(len(prompt["select_cards"]))] + fin
+    return []
+
+
+_DECISION_WINDOW = 10  # stream positions a decision stays a candidate for retrying
+_DECISION_TRIES = 24  # alternatives tried for one mismatch
+
+
 def first_difference(a, b, path: str = "") -> str | None:
     if type(a) is not type(b):
         return f"{path}: {a!r} != {b!r}"
@@ -281,7 +312,10 @@ class BeliefReplay:
         self._shuffle_count = 0  # shuffles so far (index into the hypothesis' shuffles)
         self._event_hint = None  # (stream position, data) of the opponent's latest timing event
         self._decisions_at: dict[int, int] = {}  # stream position -> decisions made there
-        self._recent: list[tuple] = []  # (key, candidates, chosen) of the decisions since the last item
+        # (key, candidates, chosen) of the recent decisions: those of the last few
+        # stream positions (a decision's consequence can show a few items later,
+        # e.g. after the hint of a replacement effect)
+        self._recent: list[tuple] = []
         self._since_state: list[tuple] = []  # the same, since the last state view that matched
         self._cancelled: set[tuple] = set()  # (stream position, prompt) answered by cancelling
         self._opp_prompt: dict | None = None  # the opponent's latest prompt
@@ -466,27 +500,34 @@ class BeliefReplay:
                 duel.close()
                 last = e
                 bt = self._state_bt
+                if bt is not None and e.pos == bt["pos"] and not bt["state"] and e.fix is not None \
+                        and self._add_fix(e.fix):
+                    # (searching the decisions for a message mismatch: a repair at the
+                    # same point applies on top of the alternative being tried)
+                    if self.log:
+                        self.log(f"restart {self.stats.restarts}: {e.reason} -> {e.fix} (with decision "
+                                 f"{bt['key']} candidate {self.overrides.get(bt['key'])})")
+                    self.stats.restarts += 1
+                    continue
                 if bt is not None and (e.pos < bt["pos"] or e.pos == bt["pos"] and (
-                        e.reason.startswith("state mismatch") or _stat_mismatch(e))):
-                    # the decision changed for a state mismatch made an earlier
-                    # observation differ (or did not change the state): its next
-                    # alternative, else an earlier decision
-                    k = bt["key"]
-                    if self.overrides[k] + 1 < bt["n"][k]:
-                        self.overrides[k] += 1
-                    else:
-                        del self.overrides[k]
-                        bt["done"].add(k)
-                        alt = next(((kk, i + 1) for kk, n, i in reversed(bt["list"])
-                                    if kk not in bt["done"] and i + 1 < n), None)
-                        if alt is None:
-                            self._state_bt = None
-                            raise Divergence(bt["pos"], bt["reason"], None, None)
-                        bt["key"] = alt[0]
-                        self.overrides[alt[0]] = alt[1]
+                        not bt["state"] or e.reason.startswith("state mismatch") or _stat_mismatch(e))):
+                    # the decision changed for a mismatch made an earlier observation
+                    # differ (or did not get past it): its next alternative, else an
+                    # earlier decision (within a budget)
+                    bt["tries"] += 1
+                    if bt["tries"] > _DECISION_TRIES:
+                        for kk, _, _ in bt["list"]:
+                            self.overrides.pop(kk, None)
+                        self._state_bt = None
+                        raise Divergence(bt["pos"], bt["reason"], None, None)
+                    self.overrides.pop(bt["key"], None)
+                    if not bt["queue"]:
+                        self._state_bt = None
+                        raise Divergence(bt["pos"], bt["reason"], None, None)
+                    bt["key"], self.overrides[bt["key"]] = bt["queue"].pop(0)
                     if self.log:
                         self.log(f"restart {self.stats.restarts}: {e.reason} -> decision {bt['key']} "
-                                 f"candidate {self.overrides[bt['key']]} (for the state at {bt['pos']})")
+                                 f"candidate {self.overrides[bt['key']]} (for the mismatch at {bt['pos']})")
                     self.stats.restarts += 1
                     continue
                 if bt is not None and e.pos > bt["pos"]:
@@ -525,12 +566,19 @@ class BeliefReplay:
                     # previous one, e.g. an answer to "lower its Level?")
                     state = e.reason.startswith("state mismatch") or _stat_mismatch(e)
                     recent = self._since_state if state else self._recent
-                    alt = next(((k, i + 1) for k, n, i in reversed(recent) if i + 1 < n), None)
-                    if alt is not None and self.overrides.get(alt[0], -1) < alt[1]:
+                    # the other candidates of the decisions, one decision at a time (the
+                    # others as before): first each decision's next best candidate, the
+                    # latest decision first, then the ones after that
+                    todo = [(k, [j for j in range(n) if j != i]) for k, n, i in reversed(recent)
+                            if k not in self.overrides]
+                    queue = [(k, alts[d]) for d in range(max((len(a) for _, a in todo), default=0))
+                             for k, alts in todo if d < len(alts)]
+                    alt = queue.pop(0) if queue else None
+                    if alt is not None:
                         self.overrides[alt[0]] = alt[1]
-                        if state and self._state_bt is None:
+                        if self._state_bt is None:
                             self._state_bt = {"pos": e.pos, "reason": e.reason, "list": list(recent),
-                                              "key": alt[0], "n": {k: n for k, n, _ in recent}, "done": set()}
+                                              "key": alt[0], "queue": queue, "state": state, "tries": 0}
                         if self.log:
                             self.log(f"restart {self.stats.restarts}: {e.reason} -> decision {alt[0]} candidate {alt[1]}")
                         self.stats.restarts += 1
@@ -678,7 +726,7 @@ class BeliefReplay:
         self.lockstep.process(it)
         self.pos += 1
         self.stall = 0
-        self._recent = []
+        self._recent = [d for d in self._recent if d[0][0] >= self.pos - _DECISION_WINDOW]
 
     def _loop(self, duel: Duel, prompt: dict | None, response: dict | None) -> None:
         pending = None  # the prompt whose response the next step processes
@@ -2048,6 +2096,11 @@ class BeliefReplay:
             ids = infer.card_ids(duel, cards)
             self._check_assumption(duel, prompt, up, ids)
         cands, certain = self._candidates(duel, prompt, up, ids)
+        # inference only orders: every other legal answer stays available behind
+        # its candidates (for backtracking, and when none of them works)
+        self._inferred = list(cands)
+        if self.depth == 0:  # (backtracking happens on the main line only)
+            cands = list(cands) + [c for c in _all_responses(prompt) if c not in cands]
         valid = []
         sig = (self.pos, repr(sorted(prompt.items())))
         if self.depth > 0 and sig == getattr(self, "probe_sig", None) \
@@ -2092,7 +2145,9 @@ class BeliefReplay:
         return resp
 
     def _choose(self, duel: Duel, prompt: dict, valid: list[dict], certain: bool) -> dict:
-        if certain or len(valid) == 1:
+        n_inferred = sum(1 for c in valid if c in self._inferred)
+        if certain or len(valid) == 1 or n_inferred == 1:
+            # (one inferred answer: the others are there for backtracking only)
             self._trace(prompt, valid[0], True, len(valid))
             return valid[0]
         if self.depth > 0 and self.pos - self.probe_start >= self.min_progress and self.probe_boundary \
@@ -2123,7 +2178,9 @@ class BeliefReplay:
         # without contradicting the stream comes after those.
         best = None  # (reached, repairable, candidate)
         unrefuted = None
-        for c in valid[:self.max_probes]:
+        for k, c in enumerate(valid[:self.max_probes]):
+            if k >= n_inferred and (best is not None or unrefuted is not None):
+                break  # (the answers inference left out only when its own all failed)
             self.stats.probes += 1
             outcome = self._probe(duel, prompt, c)
             reached = self.last_probe_reached

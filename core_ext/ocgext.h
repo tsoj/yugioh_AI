@@ -56,6 +56,11 @@ bool is_forced_match(duel* pduel, card* pcard);
 // OCG_ExtSetForcedNoMatch).
 bool is_forced_nomatch(duel* pduel, card* pcard);
 
+// Records that a card filter was evaluated on `pcard` with `result`, if the read
+// log is on and the card is hidden from its viewer (see OCG_ExtSetReadLog).
+void log_filter_read(duel* pduel, card* pcard, bool result);
+bool read_log_on(duel* pduel);
+
 void on_destroy(duel* pduel);
 
 } // namespace ocgext

@@ -638,7 +638,7 @@ diff -ruN core_a/group.h core_b/group.h
  	
 diff -ruN core_a/interpreter.cpp core_b/interpreter.cpp
 --- core_a/interpreter.cpp	2026-09-29 02:42:20.576597991 +0200
-+++ core_b/interpreter.cpp	2026-10-01 01:31:36.203475418 +0200
++++ core_b/interpreter.cpp	2026-10-01 04:11:35.831763910 +0200
 @@ -15,6 +15,7 @@
  #include "lua_obj.h"
  #include "group.h"
@@ -707,7 +707,14 @@ diff -ruN core_a/interpreter.cpp core_b/interpreter.cpp
  	luaL_checkstack(current_state, extraargs + 2, nullptr);
  	lua_pushvalue(current_state, findex);
  	pushobject(current_state, pcard);
-@@ -464,6 +503,8 @@
+@@ -459,11 +498,15 @@
+ 	} else
+ 		result = lua_toboolean(current_state, -1);
+ 	lua_pop(current_state, 1);
++	if(ocgext::read_log_on(pduel) && !is_rule_filter(current_state, findex))
++		ocgext::log_filter_read(pduel, pcard, result);
+ 	return result;
+ }
  bool interpreter::check_matching_table(card* pcard, int32_t findex, int32_t table_index) {
  	if(!findex || !lua_istable(current_state, table_index))
  		return true;
@@ -716,6 +723,15 @@ diff -ruN core_a/interpreter.cpp core_b/interpreter.cpp
  	luaL_checkstack(current_state, 2, nullptr);
  	lua_pushvalue(current_state, findex);
  	pushobject(current_state, pcard);
+@@ -474,6 +517,8 @@
+ 	} else
+ 		result = lua_toboolean(current_state, -1);
+ 	lua_pop(current_state, 1);
++	if(ocgext::read_log_on(pduel) && !is_rule_filter(current_state, findex))
++		ocgext::log_filter_read(pduel, pcard, result);
+ 	return result;
+ }
+ lua_Integer interpreter::get_operation_value(card* pcard, int32_t findex, int32_t extraargs) {
 diff -ruN core_a/libcard.cpp core_b/libcard.cpp
 --- core_a/libcard.cpp	2026-09-29 02:42:20.576780969 +0200
 +++ core_b/libcard.cpp	2026-09-30 14:18:18.589660136 +0200

@@ -43,6 +43,9 @@ struct State {
 	// card ids that count as matching every card filter
 	std::set<uint32_t> forced_match;
 	std::set<uint32_t> forced_nomatch;
+	// the read log: filters evaluated on cards the viewer cannot see
+	int read_viewer = -1;
+	std::vector<std::pair<uint32_t, uint8_t>> read_log;  // (card id, result)
 	uint32_t errors = 0;
 	uint32_t consumed = 0;
 };
@@ -245,6 +248,39 @@ bool is_forced_nomatch(duel* pduel, card* pcard) {
 	return st && !st->forced_nomatch.empty() && pcard && st->forced_nomatch.count(pcard->cardid) > 0;
 }
 
+// Whether `viewer` cannot see which card `pcard` is (by what the game shows:
+// piles, face-down cards, the other player's private hand cards). The order of
+// the decks is unknown to both players, so deck cards are hidden from both.
+static bool hidden_from(card* pcard, uint8_t viewer) {
+	const auto loc = pcard->current.location;
+	if(loc & LOCATION_OVERLAY)
+		return false;
+	const bool own = pcard->current.controler == viewer;
+	const bool facedown = (pcard->current.position & POS_FACEDOWN) != 0;
+	switch(loc) {
+	case LOCATION_DECK: return true;
+	case LOCATION_HAND: return !own && !(pcard->current.position & POS_FACEUP);
+	case LOCATION_EXTRA:
+	case LOCATION_MZONE:
+	case LOCATION_SZONE:
+	case LOCATION_REMOVED: return !own && facedown;
+	default: return false;
+	}
+}
+
+bool read_log_on(duel* pduel) {
+	auto* st = find_state(pduel);
+	return st && st->read_viewer >= 0;
+}
+
+void log_filter_read(duel* pduel, card* pcard, bool result) {
+	auto* st = find_state(pduel);
+	if(!st || st->read_viewer < 0 || !pcard || st->read_log.size() >= 4096)
+		return;
+	if(hidden_from(pcard, static_cast<uint8_t>(st->read_viewer)))
+		st->read_log.emplace_back(pcard->cardid, result ? 1 : 0);
+}
+
 void on_destroy(duel* pduel) {
 	states.erase(pduel);
 }
@@ -337,6 +373,27 @@ OCGEXT_API void OCG_ExtSetForcedNoMatch(OCG_Duel ocg_duel, const uint32_t* ids, 
 // hand, face-down extra, grave, banished) of the same player: the two
 // physical cards trade places and keep their own history (reason, turn id,
 // ...). Used to exchange copies of the same card. Returns 1 on success.
+// Turns the read log on for `viewer` (or off with -1).
+OCGEXT_API void OCG_ExtSetReadLog(OCG_Duel ocg_duel, int viewer) {
+	auto& st = states[static_cast<duel*>(ocg_duel)];
+	st.read_viewer = viewer;
+	st.read_log.clear();
+}
+
+// Copies out and clears the read log: card ids and results (1 = matched).
+OCGEXT_API uint32_t OCG_ExtTakeReadLog(OCG_Duel ocg_duel, uint32_t* ids, uint8_t* results, uint32_t cap) {
+	auto* st = find_state(static_cast<duel*>(ocg_duel));
+	if(!st)
+		return 0;
+	uint32_t n = static_cast<uint32_t>(std::min<size_t>(cap, st->read_log.size()));
+	for(uint32_t i = 0; i < n; ++i) {
+		ids[i] = st->read_log[i].first;
+		results[i] = st->read_log[i].second;
+	}
+	st->read_log.clear();
+	return n;
+}
+
 OCGEXT_API int OCG_ExtSwapCards(OCG_Duel ocg_duel, uint32_t id_a, uint32_t id_b) {
 	auto* pduel = static_cast<duel*>(ocg_duel);
 	card* a = nullptr;
