@@ -157,9 +157,14 @@ def game_decks(seed: int, mirror_prob: float = 0.2, decks: str = "random", book:
     global _deck_pool
     if book:
         return tuple(load_book(book)[seed % len(load_book(book))])  # (the book decides the pairing)
-    if _deck_pool is None:
+    if _deck_pool is None and decks != "cards":
         _deck_pool = DeckPool(default_db())
     rng = random.Random(seed)
+    if decks == "cards":
+        from ..decks import random_card_deck
+        db = default_db()
+        d0 = random_card_deck(db, rng, f"random cards {seed}a")
+        return d0, d0 if rng.random() < mirror_prob else random_card_deck(db, rng, f"random cards {seed}b")
     if decks == "diverse":
         d0 = _deck_pool.diverse(2 * seed)
         return d0, d0 if rng.random() < mirror_prob else _deck_pool.diverse(2 * seed + 1)

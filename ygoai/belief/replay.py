@@ -164,6 +164,8 @@ def _all_responses(prompt: dict) -> list[dict]:
 # status bits an operation in progress sets on the cards it was given (e.g. the
 # cards chosen for destruction): which cards were chosen, not their history
 _OPERATION_STATUS = C.STATUS_DESTROY_CONFIRMED | C.STATUS_LEAVE_CONFIRMED | C.STATUS_BATTLE_DESTROYED
+_PROPERTY_TRIES = 24  # cards placed for one card's checks of hidden card values
+_PROPERTY_BATCH = 8  # ... per repair
 _MAX_SELECTIONS = 30  # multi-card selections offered beyond the inferred ones
 _DECISION_WINDOW = 10  # stream positions a decision stays a candidate for retrying
 _DECISION_TRIES = 24  # alternatives tried for one mismatch
@@ -729,6 +731,16 @@ class BeliefReplay:
             self.assumptions = [a for a in self.assumptions if a[:4] != key[:4]] + [key]
             self.hypothesis = None
             self.stats.assumptions += 1
+            self._last_hyp_fix = "assume"
+            return True
+        if kind == "assume_many":
+            new = [a for a in fix[1] if a not in self.assumptions
+                   and not any(b[:4] == a[:4] for b in self.assumptions)]
+            if not new:
+                return False
+            self.assumptions = self.assumptions + new
+            self.hypothesis = None
+            self.stats.assumptions += len(new)
             self._last_hyp_fix = "assume"
             return True
         if kind == "unassume":
@@ -1348,6 +1360,9 @@ class BeliefReplay:
                 if start is not None:
                     fix = next((("matchpile", a, self.pos) for a in (min(start + 1, self.pos), start)
                                 if (a, self.pos) not in self.match_piles), None)
+                if fix is None and start is not None:
+                    # (still not: the option checks values of several hidden cards)
+                    fix = self._property_fix(self.items[start][1].get("code"), duel)
             revealed = None
             if got["type"] == "POS_CHANGE" and got["prev_pos"] & C.POS_FACEDOWN and got["pos"] & C.POS_FACEUP:
                 revealed = got
@@ -1517,6 +1532,14 @@ class BeliefReplay:
                 if a in self.assumptions:
                     fix = ("unassume", a)
                     break
+        if fix is None and item[0] == "msg":
+            # (inside the opponent's activation, whose script checks values of
+            # several hidden cards, e.g. how many Ranks higher an Xyz in the Extra
+            # Deck can be: the cost paid differs)
+            j = self._link_start()
+            if j < self.pos and self.items[j][0] == "msg" and self.items[j][1]["type"] == "CHAINING" \
+                    and self.items[j][1]["trigger_con"] == self.opponent:
+                fix = self._property_fix(self.items[j][1]["code"], duel)
         if fix is None and item[0] == "prompt" and self._link_start() < self.pos:
             # the viewer is asked something in the real game while a chain link
             # resolves, the replay's link went on without it: what the link does can
@@ -1559,6 +1582,69 @@ class BeliefReplay:
             # consequence can come much later, e.g. "it returns to the hand during
             # the End Phase")
             self._silent_choices.append((dkey, ids, len(valid), i))
+
+    def _property_fix(self, code: int, duel: Duel) -> tuple | None:
+        """The opponent's card checks values of several of its hidden cards (e.g.
+        two Solfachord Pendulums with different Scales in the deck, an Xyz monster a
+        number of Ranks higher in the Extra Deck): no forced filter answer can make
+        inert stand-ins satisfy that. Put cards its script refers to (its archetypes
+        and named cards, read from the script) in hidden slots of the piles it
+        names: one of each value such checks compare (Scale, Level or Rank) per
+        repair, the opponent's seen cards first; the engine decides whether they do."""
+        from . import script_index
+        if not code or not script_index.script_info(code)[2]:
+            return None
+        tried = self.__dict__.setdefault("_property_tried", {}).setdefault(code, set())
+        tried_values = self.__dict__.setdefault("_property_values", {}).setdefault(code, set())
+        placed = self.__dict__.setdefault("_property_placed", {}).setdefault(code, [])
+        if len(tried) >= _PROPERTY_TRIES:
+            return None
+        piles = script_index.piles(code)
+        seen = set(self._opp_seen_codes())
+        # (the slots of this card's earlier placements are reused: the next batch
+        # replaces it)
+        reusable = {(a[2], a[3]) for a in placed if a in self.assumptions}
+        batch, values, taken = [], set(), set()
+
+        def value_of(card):
+            return ("extra" if card.is_extra_deck else "deck", card.lscale, card.level)
+        pool = [c for c in script_index.candidates(code, self.db) if c not in tried and self.db.get(c)
+                and self.db.get(c).type & C.TYPE_MONSTER and not self.db.get(c).type & C.TYPE_TOKEN
+                and value_of(self.db.get(c))[0] in piles]
+        # (values not tried yet first, then the opponent's seen cards)
+        pool.sort(key=lambda c: (value_of(self.db.get(c)) in tried_values, c not in seen))
+        for c in pool:
+            card = self.db.get(c)
+            value = value_of(card)
+            if value in values:
+                continue
+            loc = C.LOCATION_EXTRA if value[0] == "extra" else C.LOCATION_DECK
+            n = len(duel.location_cards(self.opponent, loc))
+            for seq in reversed(range(n)):
+                if (loc, seq) in taken:
+                    continue
+                try:
+                    var = self.lockstep.var_at(self.opponent, loc, seq)
+                except TrackerError:
+                    continue
+                if var is None or var.faceup:
+                    continue
+                if (loc, seq) not in reusable and (var.id in self.hypothesis.observed or any(
+                        a[1:4] == (self.opponent, loc, seq) for a in self.assumptions)):
+                    continue
+                batch.append((self.pos, self.opponent, loc, seq, c))
+                taken.add((loc, seq))
+                values.add(value)
+                tried.add(c)
+                tried_values.add(value)
+                break
+            if len(batch) >= _PROPERTY_BATCH:
+                break
+        if batch:
+            # (the previous batch for this card made way)
+            self.assumptions = [a for a in self.assumptions if a not in placed]
+            placed[:] = batch
+        return ("assume_many", tuple(batch)) if batch else None
 
     def _stat_fix(self, exp: dict, got: dict, duel: Duel) -> tuple | None:
         """Only the stats of a card on the field differ. If the card is new since

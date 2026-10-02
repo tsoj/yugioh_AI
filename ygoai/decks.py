@@ -184,3 +184,27 @@ def diverse_order(pool: DeckPool, cache: Path | None = None, seed: int = 0) -> l
         cache.parent.mkdir(parents=True, exist_ok=True)
         cache.write_text(json.dumps({"seed": seed, "n_paths": len(pool.paths), "order": result}))
     return result
+
+
+_random_card_pools: dict = {}
+
+
+def random_card_deck(db: CardDB, rng: random.Random, name: str = "random cards") -> Deck:
+    """A deck of random legal cards (1-3 copies each): 40 main, 15 extra. No
+    structure at all, unlike human decks: for edge cases of rarely combined cards."""
+    key = id(db)
+    if key not in _random_card_pools:
+        codes = sorted(c.code for c in db.cards.values()
+                       if c.ot & 0x3 and not is_alt_art(c) and not c.is_token and card_supported(db, c.code))
+        _random_card_pools[key] = ([c for c in codes if not db.get(c).is_extra_deck],
+                                   [c for c in codes if db.get(c).is_extra_deck])
+    main_pool, extra_pool = _random_card_pools[key]
+
+    def fill(pool, n):
+        out: list[int] = []
+        while len(out) < n:
+            code = rng.choice(pool)
+            if out.count(code) < 3:
+                out += [code] * min(rng.randint(1, 3), 3 - out.count(code), n - len(out))
+        return out
+    return Deck(main=fill(main_pool, 40), extra=fill(extra_pool, 15), name=name)

@@ -54,6 +54,8 @@ python3 scripts/check_belief.py -n 1000 --start 5000 --decks diverse -o runs/c.j
 # ... or an opening book covering every card of the corpus (see below)
 python3 scripts/make_book.py -o build/book.jsonl
 python3 scripts/check_belief.py -n 1143 --start 7000 --book build/book.jsonl -o runs/c.jsonl
+# decks of random legal cards (no human deck structure: edge cases)
+python3 scripts/check_belief.py -n 1000 --start 30000 --decks cards -o runs/r.jsonl
 python3 scripts/card_coverage.py -n 1143 --start 7000 --book build/book.jsonl
 
 # quick iteration: rerun only what failed before, then diff the two runs
@@ -243,10 +245,13 @@ greedy rollouts, vanilla deck completion) against `greedy`, 40 openings with swa
 Open design questions (from the remaining failures):
 
 * **Hidden deck contents with a specific property.** Forcing hidden cards to match a filter
-  covers "the deck holds a fitting card", but not checks over a property of several cards, e.g.
-  two Pendulum Scales that differ (Solfachord Happiness) or an Xyz monster a given number of Ranks
-  higher in the Extra Deck (Rank-Up-Magic) that was never revealed. That needs stand-ins chosen
-  from cards with the property (or the opponent's seen cards) instead of inert fillers.
+  covers "the deck holds a fitting card", but not checks that compare values of several cards,
+  e.g. two Pendulum Scales that differ (Solfachord Happiness) or an Xyz monster a given number of
+  Ranks higher in the Extra Deck (Rank-Up-Magic), never revealed. `belief/script_index.py` reads
+  from each script which archetypes and cards it refers to (`listed_series`, `listed_names`),
+  which piles it names and whether it compares values (`GetClassCount`, `GetMaxGroup`, ...); the
+  replay then places such cards (one per distinct Scale/Level/Rank, the opponent's seen cards
+  first) in hidden slots and lets the engine decide. Open: cards whose scripts list nothing.
 
 * **Physical identity in the solver.** The flow model reasons about codes; identity facts enter
   it only where they imply code facts, and the per-shuffle matching applies the rest. An exact

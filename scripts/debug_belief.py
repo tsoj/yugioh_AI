@@ -67,7 +67,7 @@ def main():
     ap.add_argument("--no-truth", action="store_true", help="do not print the real game's events")
     ap.add_argument("--max-restarts", type=int, help="stop after this many repairs (to inspect one attempt)")
     ap.add_argument("--pairs", help="agent pairings as in check_belief.py, e.g. setter-greedy,mixed-random")
-    ap.add_argument("--decks", choices=["random", "diverse"], default="random")
+    ap.add_argument("--decks", choices=["random", "diverse", "cards"], default="random")
     ap.add_argument("--book", help="opening book (scripts/make_book.py)")
     args = ap.parse_args()
     rec = make_game(args.seed, pairs=[tuple(p.split("-")) for p in args.pairs.split(",")] if args.pairs else None,
