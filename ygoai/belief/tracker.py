@@ -804,6 +804,28 @@ class Tracker:
         if p["type"] == "SELECT_EFFECTYN" and p.get("code"):
             self.observe(self.var_at(p["con"], p["loc"], p["seq"], p["pos"]), p["code"])
 
+    @staticmethod
+    def _descends(v: Var, x: Var) -> bool:
+        """Whether `v` is `x` or a later claim on it (through the shuffles since)."""
+        frontier, seen = [v], set()
+        while frontier:
+            y = frontier.pop()
+            if y is x:
+                return True
+            if y.kind != "claim" or y.pool is None or y.pool.index in seen:
+                continue
+            seen.add(y.pool.index)
+            frontier.extend(y.pool.members)
+        return False
+
+    def _faceup_deck_cards(self, player: int) -> list[Var]:
+        """The face-up cards in a player's deck: those put there face-up that are
+        still there, each physical card once (a later DECK_TOP adds the same card
+        again as a claim of a later shuffle)."""
+        deck = self.lists[player][C.LOCATION_DECK]
+        inside = [x for x in self._faceup_in_deck if any(self._descends(v, x) for v in deck)]
+        return [x for x in inside if not any(y is not x and self._descends(y, x) for y in inside)]
+
     def _identify(self, v: Var | None, same: Var | None) -> None:
         """`v` is known to be the physical card that was `same` before the last
         shuffle of its pile."""
@@ -868,12 +890,13 @@ class Tracker:
                     used: set[int] = set()
                     shown = Counter(c.get("code") for c in cards if loc == C.LOCATION_DECK and c.get("code")
                                     and c.get("position", 0) & C.POS_FACEUP)
+                    faceup_now = self._faceup_deck_cards(pl_idx) if shown else []
                     for v, card in zip(lst, cards):
                         self.observe(v, card.get("code", 0))
                         if loc == C.LOCATION_DECK and card.get("code") and card.get("position", 0) & C.POS_FACEUP:
                             # a face-up card in the deck: one put there face-up (of several
                             # such copies any, each once: they are alike)
-                            known = [x for x in self._faceup_in_deck
+                            known = [x for x in faceup_now
                                      if (x.fixed_code if x.fixed_code is not None else x.code) == card["code"]]
                             same = [x for x in known if id(x) not in used]
                             # (only if the shown copies are exactly the known ones: another

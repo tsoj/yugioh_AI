@@ -367,6 +367,11 @@ def infer_place(prompt: dict, up: list[dict], up_ext: list[dict] | None = None) 
             chosen = [p for p in _zone_places({**prompt, "count": 32}, zone)[0]["places"] if tuple(p) in avail]
             if len(chosen) == prompt["count"]:
                 return [{"places": chosen}], True
+            if len(chosen) > prompt["count"]:
+                # (the zones are chosen a few at a time, e.g. one by one with "another
+                # one?" in between: any of those not chosen yet)
+                import itertools
+                return [{"places": list(sub)} for sub in itertools.combinations(chosen, prompt["count"])][:20], False
         if m["type"] == "MOVE":
             to = m["to"]
             key = (to["con"], to["loc"], to["seq"])

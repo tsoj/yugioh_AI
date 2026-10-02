@@ -533,6 +533,9 @@ class FlowSolver:
                     cands.sort(key=lambda c: -races[self.db.get(c).race] if self.db.get(c) else 0)
                 if not cands:
                     raise TrackerError(f"no stand-in for a hidden card of kind {need}")
+                # (different stand-ins first: checks can count different names, e.g.
+                # Tierra, Source of Destruction needs 10 differently named cards)
+                cands.sort(key=lambda c: counts[self._base(c)] > 0)
                 a.resolved = cands[0]
                 counts[self._base(cands[0])] += 1
             plain = [a for a in wild if a.resolved is None]

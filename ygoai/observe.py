@@ -196,6 +196,9 @@ def _strip_prompt(msg: dict, viewer: int) -> dict:
         # hidden cards opened, e.g. a hand trap's; a player at a table sees none)
         m.pop("hint_timing", None)
         m.pop("hint_timing_other", None)
+        # (spe_count counts the offered effects whose hint timing matches those
+        # timings: the same information, a hint for clients only)
+        m.pop("spe_count", None)
     elif t == "SELECT_POSITION":
         # (the code of the card whose position is chosen: it can be an opponent's
         # face-down card, e.g. "change a monster's battle position", and the prompt
