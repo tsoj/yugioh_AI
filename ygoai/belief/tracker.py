@@ -143,6 +143,7 @@ class Tracker:
         self._referenced_piles: set[tuple[int, int]] = set()  # (con, loc) they were revealed in
         self._picked: list[Var] = []  # of those, the ones picked at random
         self._referenced_in_chain = False  # revealed while a chain was built or resolved
+        self._referenced_link = 0  # the chain link they were revealed for (0: none)
         self._chain: list[Var | None] = []  # the card of each chain link, by the time it chained
         self._chain_from_hand: list[bool] = []
         self._left_hand: list[Var] = []  # cards that left a hand while the current link resolves
@@ -153,7 +154,10 @@ class Tracker:
         self._last_sig: tuple | None = None  # the latest message that is not a hint
         self.turn_player = 0
         self._releases = 0  # cards released for the current action (tribute count)
-        self._faceup_in_deck: list[Var] = []  # cards put into a deck face-up
+        self._faceup_in_deck: list[Var] = []  # cards put into a deck face-up (or turned so)
+        self._deck_arrivals: list[Var] = []  # cards moved into a deck since its last shuffle
+        self._faceup_left: list[tuple[Var, int]] = []  # face-up cards that left a deck, code unknown yet
+        self._prev_sig: tuple | None = None  # the message before the latest one (not hints)
         self._top_check: int | None = None  # a deck just shuffled (whose top may be announced)
         own = init["deck"]
         opp_main, opp_extra = init["opponent_deck_size"], init["opponent_extra_size"]
@@ -427,7 +431,7 @@ class Tracker:
         if t == "SHUFFLE_DECK":
             self._top_check = m["player"]
         if t not in ("HINT", "CARD_HINT", "CHAIN_SOLVED"):
-            self._last_sig = (t, m.get("player"))
+            self._prev_sig, self._last_sig = self._last_sig, (t, m.get("player"))
         if self._solved is not None and t != "CHAIN_SOLVED":
             var, player, left = self._solved
             self._solved = None
@@ -476,6 +480,8 @@ class Tracker:
                 self._confirmed = []
         elif t not in ("CONFIRM_CARDS", "CONFIRM_DECKTOP", "CONFIRM_EXTRATOP", "SHUFFLE_DECK", "SHUFFLE_HAND",
                        "SHUFFLE_EXTRA", "HINT", "CARD_HINT", "RANDOM_SELECTED",
+                       # (the top card shown after the shuffle, e.g. decks turned over)
+                       "DECK_TOP",
                        # (the picked card being summoned: the others are taken out next)
                        "SPSUMMONING", "SPSUMMONED", "SUMMONING", "SUMMONED"):
             self._confirmed = []  # only "reveal, shuffle back, pick one at random" counts
@@ -515,10 +521,14 @@ class Tracker:
             self._require(m, ("monster",))
         if t == "MOVE":
             frm, to = m["from"], m["to"]
+            if frm["loc"] == C.LOCATION_DECK and frm.get("pos", 0) & C.POS_FACEUP:
+                self._faceup_leaves(frm, m["code"])
             if frm["loc"] == 0:
                 v = self._new(to["con"], "created")
             else:
                 v = self._take(frm)
+                if frm["loc"] == C.LOCATION_DECK:
+                    self._left_deck(v)
                 if frm["loc"] == C.LOCATION_HAND and frm.get("pos", 0) & C.POS_FACEUP and not m["code"] \
                         and v.kind == "claim" and v.pool is not None and v.code is None:
                     # (not if it was revealed since the shuffle: then it shows itself)
@@ -567,8 +577,10 @@ class Tracker:
             if to["loc"]:
                 self._put(v, to)
             self.observe(v, m["code"])
-            if to["loc"] == C.LOCATION_DECK and to.get("pos", 0) & C.POS_FACEUP:
-                self._faceup_in_deck.append(v)  # (its place in the deck stays public)
+            if to["loc"] == C.LOCATION_DECK:
+                self._deck_arrivals.append(v)
+                if to.get("pos", 0) & C.POS_FACEUP:
+                    self._faceup_in_deck.append(v)  # (its place in the deck stays public)
         elif t == "DRAW":
             p = m["player"]
             deck = self.lists[p][C.LOCATION_DECK]
@@ -576,10 +588,21 @@ class Tracker:
                 if not deck:
                     raise TrackerError("draw from empty deck")
                 v = deck.pop()
+                self._left_deck(v)
                 v.faceup = bool(c["pos"] & C.POS_FACEUP)
                 self.lists[p][C.LOCATION_HAND].append(v)
                 self.observe(v, c["code"])
+            if deck and self._prev_sig != ("DECK_TOP", p) and deck[-1].kind == "claim":
+                # a draw that leaves a face-up card on top announces it (DECK_TOP
+                # before the draw): this one did not, so the new top card is none of
+                # the face-up ones
+                top = deck[-1]
+                for x in self._faceup_deck_cards(p):
+                    if x is not top and not any(y is x for y in top.not_same):
+                        top.not_same.append(x)
         elif t == "SHUFFLE_DECK":
+            deck = self.lists[m["player"]][C.LOCATION_DECK]
+            self._deck_arrivals = [x for x in self._deck_arrivals if not any(x is y for y in deck)]
             self._shuffle(m["player"], C.LOCATION_DECK)
         elif t == "SHUFFLE_HAND":
             p = m["player"]
@@ -672,6 +695,7 @@ class Tracker:
                     self._referenced.append(v)
                     self._referenced_piles.add((c["con"], c["loc"]))
                     self._referenced_in_chain = self._referenced_in_chain or bool(self._chain)
+                    self._referenced_link = len(self._chain)
                 if c["code"]:
                     self.observe(v, c["code"])
         elif t == "RANDOM_SELECTED":
@@ -679,8 +703,13 @@ class Tracker:
             # random pick from that pile is a pick from the revealed cards (also
             # the later picks of the same resolution, e.g. Draw of Fate); and a
             # card taken from the pile later on is preferably the picked one
-            # (e.g. picked before the shuffle, taken after it)
+            # (e.g. picked before the shuffle, taken after it). Only a pick by the
+            # chain link the cards were revealed for: another link picks from the
+            # whole pile (e.g. a cost revealed for one link, a random banish from the
+            # hand by the opponent's link resolving first)
             for c in m["cards"]:
+                if self._referenced_link != len(self._chain):
+                    break
                 if c["loc"] & C.LOCATION_OVERLAY:
                     continue
                 v = self._plain_var(c["con"], c["loc"], c["seq"])
@@ -700,9 +729,27 @@ class Tracker:
             deck = self.lists[m["player"]][C.LOCATION_DECK]
             idx = len(deck) - 1 - m["seq"]
             if 0 <= idx < len(deck) and m["code"]:  # (shown whatever the position says)
-                self.observe(deck[idx], m["code"])
-                if m.get("pos", 0) & C.POS_FACEUP and not any(x is deck[idx] for x in self._faceup_in_deck):
-                    self._faceup_in_deck.append(deck[idx])  # (turned face-up: its place stays public)
+                v = deck[idx]
+                self.observe(v, m["code"])
+                if m.get("pos", 0) & C.POS_FACEUP and not any(x is v for x in self._faceup_in_deck):
+                    # a card just put there (and turned face-up), or turned face-up
+                    # where it is (e.g. Grave Lure: revealed, then turned): its place
+                    # stays public. Otherwise a face-up card seen again on top (after a
+                    # shuffle, a draw, a card taken from the top): the same card
+                    same = [x for x in self._faceup_deck_cards(m["player"])
+                            if self._code(x) == m["code"] and self._descends(v, x, m["player"])]
+                    if any(x is v for x in self._deck_arrivals) or not same \
+                            or (self._prev_sig == ("CONFIRM_DECKTOP", m["player"]) and not v.faceup):
+                        self._faceup_in_deck.append(v)
+                    elif len(same) == 1:
+                        self._identify(v, same[0])
+                elif not m.get("pos", 0) & C.POS_FACEUP and v.kind == "claim":
+                    # (shown face-down, e.g. all decks turned over): none of the
+                    # face-up cards in that deck
+                    for x in self._faceup_deck_cards(m["player"]):
+                        if self._code(x) == m["code"] and x is not v and not any(x is y for y in v.not_same):
+                            v.not_same.append(x)
+                v.faceup = bool(m.get("pos", 0) & C.POS_FACEUP)
         elif t == "SWAP":
             l1, l2 = m["loc1"], m["loc2"]
             v1 = self.var_at(l1["con"], l1["loc"], l1["seq"])
@@ -818,26 +865,71 @@ class Tracker:
             self.observe(self.var_at(p["con"], p["loc"], p["seq"], p["pos"]), p["code"])
 
     @staticmethod
-    def _descends(v: Var, x: Var) -> bool:
-        """Whether `v` is `x` or a later claim on it (through the shuffles since)."""
+    def _descends(v: Var, x: Var, player: int) -> bool:
+        """Whether `v` can be `x` or a later claim on it through the shuffles of
+        `player`'s deck since. Only through those (a card that left the deck and
+        came back, e.g. through the hand whose cards came from the deck, is
+        another arrival), and not through slots known to hold another card."""
+        def code(y: Var) -> int | None:
+            return y.fixed_code if y.fixed_code is not None else y.code
+        want = code(x)
         frontier, seen = [v], set()
         while frontier:
             y = frontier.pop()
             if y is x:
                 return True
-            if y.kind != "claim" or y.pool is None or y.pool.index in seen:
+            if want is not None and code(y) is not None and code(y) != want:
+                continue
+            if y.kind != "claim" or y.pool is None or y.pool.index in seen \
+                    or (y.pool.player, y.pool.location) != (player, C.LOCATION_DECK):
                 continue
             seen.add(y.pool.index)
             frontier.extend(y.pool.members)
         return False
 
+    @staticmethod
+    def _code(x: Var) -> int | None:
+        return x.fixed_code if x.fixed_code is not None else x.code
+
+    def _left_deck(self, v: Var | None) -> None:
+        """`v` left the deck: if it is one of the face-up cards there (or was
+        identified with one), that one is gone."""
+        if v is not None and self._faceup_in_deck:
+            self._faceup_in_deck = [x for x in self._faceup_in_deck if x is not v and v.same_as is not x]
+
+    def _faceup_leaves(self, frm: dict, code: int) -> None:
+        """A face-up card leaves the deck: that one of the face-up cards there."""
+        v = self._plain_var(frm["con"], frm["loc"], frm["seq"])
+        code = code or (self._code(v) if v is not None else None)  # (e.g. Set: seen in the deck)
+        if not code:
+            # (e.g. Set from the deck since the last view of it: told later, e.g.
+            # when the card is revealed)
+            if v is not None:
+                self._faceup_left.append((v, frm["con"]))
+            return
+        self._faceup_gone(v, frm["con"], code)
+
+    def _faceup_gone(self, v: Var | None, player: int, code: int) -> None:
+        cands = [x for x in self._faceup_deck_cards(player) if self._code(x) == code]
+        # (of several face-up copies any: they are alike)
+        x = next((x for x in cands if x is v or (v is not None and v.same_as is x)), None) \
+            or (cands[0] if cands else None)
+        if x is None:
+            return
+        if v is not None and v is not x:
+            self._identify(v, x)
+        self._faceup_in_deck = [y for y in self._faceup_in_deck if y is not x]
+
     def _faceup_deck_cards(self, player: int) -> list[Var]:
-        """The face-up cards in a player's deck: those put there face-up that are
-        still there, each physical card once (a later DECK_TOP adds the same card
-        again as a claim of a later shuffle)."""
+        """The face-up cards in a player's deck: those put there face-up (or turned
+        face-up there) that are still there."""
+        pending = [(v, p) for v, p in self._faceup_left if self._code(v)]
+        if pending:
+            self._faceup_left = [(v, p) for v, p in self._faceup_left if not self._code(v)]
+            for v, p in pending:
+                self._faceup_gone(v, p, self._code(v))
         deck = self.lists[player][C.LOCATION_DECK]
-        inside = [x for x in self._faceup_in_deck if any(self._descends(v, x) for v in deck)]
-        return [x for x in inside if not any(y is not x and self._descends(y, x) for y in inside)]
+        return [x for x in self._faceup_in_deck if any(self._descends(v, x, player) for v in deck)]
 
     def _identify(self, v: Var | None, same: Var | None) -> None:
         """`v` is known to be the physical card that was `same` before the last
@@ -904,6 +996,9 @@ class Tracker:
                     shown = Counter(c.get("code") for c in cards if loc == C.LOCATION_DECK and c.get("code")
                                     and c.get("position", 0) & C.POS_FACEUP)
                     faceup_now = self._faceup_deck_cards(pl_idx) if shown else []
+                    # (the owners of deck cards show too: they tell apart only where a
+                    # card of the other player is in the deck, e.g. one shuffled in)
+                    foreign = loc == C.LOCATION_DECK and any(c.get("owner", pl_idx) != pl_idx for c in cards)
                     for v, card in zip(lst, cards):
                         self.observe(v, card.get("code", 0))
                         if loc == C.LOCATION_DECK and card.get("code") and card.get("position", 0) & C.POS_FACEUP:
@@ -918,7 +1013,7 @@ class Tracker:
                                 used.add(id(same[0]))
                                 self._identify(v, same[0])
                         v.faceup = bool(card.get("position", 0) & C.POS_FACEUP)
-                        if "owner" in card and loc == C.LOCATION_HAND:
+                        if "owner" in card and (loc == C.LOCATION_HAND or foreign):
                             self._owned(v, card["owner"])
                     if loc == C.LOCATION_HAND:
                         # (a card being activated from the hand is public too, but

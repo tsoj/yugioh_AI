@@ -401,6 +401,13 @@ class BeliefReplay:
                         v = tracker.var_at(con, loc, seq)
                         if v is not None and same[1] in byid:
                             v.not_same.append(byid[same[1]])
+                            # (a constraint: not_same alone only orders members of the
+                            # same kind, e.g. not where the two have different codes)
+                            if v.kind == "claim" and v.pool is not None \
+                                    and any(m.id == same[1] for m in v.pool.members):
+                                ids = frozenset(m.id for m in v.pool.members if m.id != same[1])
+                                if ids:
+                                    v.allowed = ids if v.allowed is None else (v.allowed & ids) or v.allowed
                         continue
                     byid = {v.id: v for v in tracker.all_vars}
                     if same in byid:
@@ -1110,7 +1117,7 @@ class BeliefReplay:
                     got = view(capture(duel), self.viewer)
                     if got != item[2]:
                         fix = self._state_copy_fix(item[2], got, duel, cp) or self._public_arrival_fix(item[2], got) \
-                            or self._stat_fix(item[2], got, duel)
+                            or self._public_hidden_fix(item[2], got) or self._stat_fix(item[2], got, duel)
                         raise Divergence(self.pos, "state mismatch: " + str(first_difference(item[2], got)),
                                          item[2], got, fix)
                     if self.depth == 0:
@@ -1239,6 +1246,13 @@ class BeliefReplay:
                 # (an effect of a card that just came into the hand, e.g. "when this card
                 # is added to your hand", the hand shuffled since: one of the arrivals)
                 fix = self._arrival_fix(exp)
+            if fix is None and exp["type"] == "CHAINING" and exp["trigger_con"] == self.opponent \
+                    and got.get("type") != "CHAINING" \
+                    and (self.opponent, exp["code"], exp["desc"]) in self._active_forces:
+                # forced and still not activated (e.g. a chain window's quick effect,
+                # "if you control a monster that mentions Junk Warrior"): its condition
+                # depends on hidden cards
+                fix = self._unavailable_fix()
             if fix is None and exp["type"] == got.get("type") and exp["type"] in ("FLIPSUMMONING", "POS_CHANGE") \
                     and exp.get("code") and exp.get("code") == got.get("code") and exp["con"] == got["con"] \
                     and exp["loc"] == got["loc"] and exp["seq"] != got["seq"] \
@@ -2094,6 +2108,19 @@ class BeliefReplay:
                     return fix
         return None
 
+    def _public_hidden_fix(self, exp: dict, got: dict) -> tuple | None:
+        """A hand card shows revealed in the replay's view but hidden in the real
+        one (e.g. "cards drawn while this card is face-up stay revealed": the
+        replay's card is the one drawn then, the real one was in the hand before):
+        the real card is another one than the hypothesis put there."""
+        for p in (self.opponent, self.viewer):
+            for i, (e, g) in enumerate(zip(exp["players"][p]["hand"], got["players"][p]["hand"])):
+                if g and g.get("is_public") and e and not e.get("is_public") and not e.get("code"):
+                    fix = self._not_this_copy_fix({"con": p, "loc": C.LOCATION_HAND, "seq": i})
+                    if fix is not None:
+                        return fix
+        return None
+
     def _arrival_fix(self, ch: dict) -> tuple | None:
         """Identifies the activating card's slot with one of the latest cards of
         the pile it was shuffled from (the latest first), each tried once."""
@@ -2641,23 +2668,30 @@ class BeliefReplay:
                 # card added to the hand by an effect, the hand shuffled since: one
                 # of the cards that came in last)
                 fix = self._arrival_fix(ch)
-            end = next((j for j in range(self.pos, len(self.items)) if self.items[j][0] == "msg"
-                        and self.items[j][1]["type"] == "CHAINED"), None)
-            if fix is None and end is not None and (self.pos, end) not in self.match_piles \
-                    and ("matchpile", (self.pos, end)) not in self._pile_dropped:
-                fix = ("matchpile", self.pos, end)
-            elif fix is None and end is not None and (self.pos, end) not in self.nomatch_piles \
-                    and ("nomatchpile", (self.pos, end)) not in self._pile_dropped:
-                # (still not: the check counts cards that do NOT fit, e.g. "if you
-                # control no monsters other than Valkyrie monsters", face-down ones too)
-                fix = ("nomatchpile", self.pos, end)
-            elif fix is None and end is not None and (self.pos, end) in self.nomatch_piles \
-                    and ("matchpile", (self.pos, end)) in self._pile_dropped:
-                # (neither helps: something else is wrong, e.g. an earlier decision;
-                # back to letting the hidden cards qualify, and on)
-                fix = ("unflip", self.pos, end)
+            if fix is None:
+                fix = self._unavailable_fix()
         if fix is not None:
             raise Divergence(self.pos, "opponent activation is not available in the replay", fix=fix)
+
+    def _unavailable_fix(self) -> tuple | None:
+        """The opponent's forced activation is still not available: a check beyond
+        its cost and target depends on hidden cards; let them qualify until it is
+        chained (then the other way round, then neither)."""
+        end = next((j for j in range(self.pos, len(self.items)) if self.items[j][0] == "msg"
+                    and self.items[j][1]["type"] == "CHAINED"), None)
+        if end is None:
+            return None
+        if (self.pos, end) not in self.match_piles and ("matchpile", (self.pos, end)) not in self._pile_dropped:
+            return ("matchpile", self.pos, end)
+        if (self.pos, end) not in self.nomatch_piles and ("nomatchpile", (self.pos, end)) not in self._pile_dropped:
+            # (still not: the check counts cards that do NOT fit, e.g. "if you
+            # control no monsters other than Valkyrie monsters", face-down ones too)
+            return ("nomatchpile", self.pos, end)
+        if (self.pos, end) in self.nomatch_piles and ("matchpile", (self.pos, end)) in self._pile_dropped:
+            # (neither helps: something else is wrong, e.g. an earlier decision;
+            # back to letting the hidden cards qualify, and on)
+            return ("unflip", self.pos, end)
+        return None
 
     def _check_assumption(self, duel: Duel, prompt: dict, up: list[dict], ids: list) -> None:
         """The opponent took a hidden card that is no valid choice in the replay."""
