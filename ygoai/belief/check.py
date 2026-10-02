@@ -64,6 +64,7 @@ class CheckResult:
     fixes: dict = field(default_factory=dict)
     details: dict = field(default_factory=dict)
     repairs: list = field(default_factory=list)  # "reason -> fix" of every restart
+    end_ignored: bool = False  # the unfinished action the game ended in was not checked
 
 
 def check_prefix(record: GameRecord, viewer: int, items: list[tuple], cut: int,
@@ -86,6 +87,23 @@ def check_prefix(record: GameRecord, viewer: int, items: list[tuple], cut: int,
     except Divergence as e:
         res.error = str(e)
         res.details = {"expected": e.expected, "got": e.got}
+        last_prompt = max((i for i, it in enumerate(prefix) if it[0] == "prompt"), default=-1)
+        if cut == len(items) and items and items[-1][0] == "msg" and items[-1][1]["type"] == "WIN" \
+                and e.pos > last_prompt + 1 and last_prompt >= 0:
+            # the game ended in the middle of an action (e.g. LP 0 or an empty deck
+            # while its costs are paid), before what identifies its card shows:
+            # check everything up to the viewer's last decision instead
+            retry = BeliefReplay(viewer, init_info(record, viewer), items[:last_prompt + 1], stopped=True,
+                                 **replay_kwargs)
+            retry.log = br.log
+            try:
+                retry.build_hypothesis()
+                retry.run().close()
+                res.ok, res.stage, res.end_ignored = True, "done", True
+                res.error, res.details = "", {}
+                br = retry
+            except (Divergence, TrackerError):
+                pass
     except TrackerError as e:
         res.error = f"TrackerError: {e}"
     except Exception as e:  # noqa: BLE001

@@ -68,7 +68,7 @@ def _replay_case(record, items, seed: int, viewer: int, frac: float, timeout: in
         return {"seed": seed, "viewer": viewer, "frac": frac, "cut": cut, "len": len(items),
                 "ok": r.ok, "error": r.error, "seconds": r.seconds,
                 "decisions": r.opponent_decisions, "probed": r.probed, "probes": r.probes,
-                "restarts": r.restarts, "fixes": r.fixes, "repairs": r.repairs}
+                "restarts": r.restarts, "fixes": r.fixes, "repairs": r.repairs, "end_ignored": r.end_ignored}
     except Timeout:
         return {"seed": seed, "viewer": viewer, "frac": frac, "cut": cut, "len": len(items),
                 "ok": False, "error": "timeout", "seconds": time.monotonic() - t0}
@@ -186,6 +186,9 @@ def main() -> int:
             by_frac[r["frac"]][1] += 1
     for frac, (k, n) in sorted(by_frac.items()):
         print(f"  cut {f'turn {-frac:.0f}' if frac < 0 else f'{frac:.2f}'}: {k}/{n}")
+    ignored = sum(1 for r in results if r.get("end_ignored"))
+    if ignored:
+        print(f"  ({ignored} consistent up to the viewer's last decision: the game ended in an unfinished action)")
     times = [r["seconds"] for r in results if r.get("seconds")]
     if times:
         times.sort()

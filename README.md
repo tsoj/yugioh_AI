@@ -209,8 +209,16 @@ at 99.79%):
 | turn 3   | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                            | 100.0%                            |
 | ~1/3     | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                            | 100.0%                            |
 | ~2/3     | 100.0%    | 100.0%    | 100.0%    | 99.90%                   | 100.0%                    | 100.0%                            | 99.95%                            |
-| full game| 100.0%    | 100.0%    | 99.90%    | 99.75%                   | 99.90%                    | 100.0%                            | 100.0%                            |
-| overall  | 100.0%    | 100.0%    | 99.98%    | 99.93%                   | 99.98%                    | 100.0%                            | 99.99%                            |
+| full game| 100.0%    | 100.0%    | 99.95%    | 99.80%                   | 100.0%                    | 100.0%                            | 100.0%                            |
+| overall  | 100.0%    | 100.0%    | 99.99%    | 99.94%                   | 100.0%                    | 100.0%                            | 99.99%                            |
+
+A game can end in the middle of an action: a player loses (LP 0, or a draw from an empty deck)
+while the action's costs are paid, before the message that identifies its card (e.g. a Tribute
+Set interrupted by Amorphous Persona's draw from an empty deck). The stream then shows only the
+costs, which depend on a card that is never shown. When the full-game reconstruction diverges
+only after the viewer's last decision in a game that ended with a win, the check is repeated up
+to that decision, and the reconstruction counts as consistent ("unfinished end ignored", reported
+separately by `check_belief.py`; 5 of the ~79,000 reconstructions in the table and the book).
 
 Fresh seeds are the honest measure: the corpus has ~164k decks, and new decks bring new card
 mechanics (the earlier ranges started between 99.3% and 99.4% when they were fresh, 7000-7999 at
