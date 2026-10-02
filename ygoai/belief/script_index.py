@@ -107,6 +107,22 @@ def proc_cards(kind: str) -> frozenset[int]:
     return frozenset(out)
 
 
+@lru_cache(maxsize=1)
+def discard_set_proc_cards() -> frozenset[int]:
+    """Cards whose own Set procedure discards cards as its cost (e.g. Infernal
+    Incinerator: "discarding your entire hand and Tributing 1 monster")."""
+    out = set()
+    for sub in ("official", "pre-release", "unofficial"):
+        for path in (CARD_SCRIPTS_DIR / sub).glob("c*.lua"):
+            text = path.read_text(errors="replace")
+            if ("EFFECT_SET_PROC" in text or "EFFECT_LIMIT_SET_PROC" in text) and "REASON_DISCARD" in text:
+                try:
+                    out.add(int(path.stem[1:]))
+                except ValueError:
+                    pass
+    return frozenset(out)
+
+
 @lru_cache(maxsize=None)
 def reveals_itself(code: int) -> bool:
     """Whether the card's own procedure reveals it together with other cards

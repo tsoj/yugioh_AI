@@ -51,7 +51,7 @@ from dataclasses import dataclass
 from .. import constants as C
 from ..actions import InvalidResponse, encode
 from ..carddb import CardDB, default_db
-from ..core import Duel, DuelConfig
+from ..core import CoreError, Duel, DuelConfig
 from ..decks import Deck
 from ..game import setup_duel
 from ..messages import parse
@@ -1247,11 +1247,13 @@ class BeliefReplay:
                 # is added to your hand", the hand shuffled since: one of the arrivals)
                 fix = self._arrival_fix(exp)
             if fix is None and exp["type"] == "CHAINING" and exp["trigger_con"] == self.opponent \
-                    and got.get("type") != "CHAINING" \
+                    and got.get("type") in ("CHAIN_SOLVING", "CHAIN_SOLVED", "CHAIN_END", "ATTACK_DISABLED",
+                                            "DAMAGE_STEP_START", "BATTLE") \
                     and (self.opponent, exp["code"], exp["desc"]) in self._active_forces:
-                # forced and still not activated (e.g. a chain window's quick effect,
-                # "if you control a monster that mentions Junk Warrior"): its condition
-                # depends on hidden cards
+                # forced and still not chained in its chain window (the replay went on
+                # past it, e.g. to resolve the chain), e.g. a quick effect "if you control
+                # a monster that mentions Junk Warrior": its condition depends on hidden
+                # cards (not an action instead of it at an idle prompt: see _check_force)
                 fix = self._unavailable_fix()
             if fix is None and exp["type"] == got.get("type") and exp["type"] in ("FLIPSUMMONING", "POS_CHANGE") \
                     and exp.get("code") and exp.get("code") == got.get("code") and exp["con"] == got["con"] \
@@ -1291,15 +1293,19 @@ class BeliefReplay:
             if fix is None and got["type"] == "CARD_HINT" and exp["type"] == "CARD_HINT":
                 fix = self._hint_swap_fix(cp, got, duel)
             if fix is None and exp["type"] == got["type"] and exp["type"] in ("SHUFFLE_HAND", "SHUFFLE_EXTRA") \
-                    and exp["codes"] == got["codes"] and exp.get("public") != got.get("public"):
+                    and exp.get("public") != got.get("public") and len(exp["codes"]) == len(got["codes"]) \
+                    and (exp["codes"] == got["codes"] or all(
+                        a == b for a, b, x, y in zip(exp["codes"], got["codes"], exp.get("public") or [],
+                                                     got.get("public") or []) if x and y)):
                 # another copy of a revealed card ended up in its place: swap the two
-                # copies at this shuffle
+                # copies at this shuffle (the hidden ones show no code: the revealed
+                # copy where the real one is hidden, and the other way round)
                 loc = C.LOCATION_HAND if exp["type"] == "SHUFFLE_HAND" else C.LOCATION_EXTRA
                 cards = duel.location_cards(exp["player"], loc)
                 ep, gp = exp.get("public") or [], got.get("public") or []
                 i = next((i for i in range(len(ep)) if ep[i] and not gp[i]), None)
                 k = next((k for k in range(len(gp)) if gp[k] and not ep[k]
-                          and i is not None and exp["codes"][k] == exp["codes"][i]), None)
+                          and i is not None and (got["codes"][k] or exp["codes"][k]) == exp["codes"][i]), None)
                 if i is not None and k is not None and k < len(cards) and i < len(cards):
                     a, b = cards[k][1], cards[i][1]
                     if (cp, a, b) not in self.failed_swaps and (cp, b, a) not in self.failed_swaps \
@@ -2809,6 +2815,8 @@ class BeliefReplay:
             if m["type"] in infer._ACTIVATION_PRELUDE or m["type"] in ("PAY_LPCOST", "FIELD_DISABLED", "DAMAGE",
                                                                          "RECOVER", "LPUPDATE"):
                 continue  # (e.g. zones a Tributed monster had disabled become usable, damage a Tribute causes)
+            if m["type"] == "SHUFFLE_HAND" and m["player"] != self.opponent:
+                continue  # (e.g. the viewer's hand no longer kept revealed once the Tributed monster left)
             if m["type"] != "SET":
                 return
             src = infer.source_of(m, up[:i])
@@ -2848,6 +2856,17 @@ class BeliefReplay:
 
                 def fits(code, _f=fits_level):
                     return _f(code) and code in script_index.proc_cards("mset")
+            # (cards of the setter's hand discarded as a cost first: a card with its
+            # own procedure, e.g. Infernal Incinerator discards the whole hand)
+            discards = kind == "msetable" and any(
+                x["type"] == "MOVE" and x["from"]["loc"] == C.LOCATION_HAND and x["from"]["con"] == src["con"]
+                and x["reason"] & C.REASON_DISCARD and x["reason"] & C.REASON_COST for x in up[:i])
+            if discards:
+                from . import script_index
+                fits_kind = fits
+
+                def fits(code, _f=fits_kind):
+                    return _f(code) and code in script_index.discard_set_proc_cards()
             usual_levels = {0: range(1, 5), 1: range(5, 7)}.get(tributes, range(7, 13)) \
                 if kind == "msetable" else None
 
@@ -2862,7 +2881,7 @@ class BeliefReplay:
             if entries and all(fits(e["code"]) and usual_fit(e["code"]) for e in entries):
                 return
             if entries and kind == "msetable" and duel is not None and src["loc"] == C.LOCATION_HAND \
-                    and not foreign:
+                    and not foreign and not discards:
                 # (its Level now, in the hand: effects can lower it, e.g. A Legendary
                 # Ocean for WATER monsters)
                 hand = capture(duel)["players"][src["con"]]["hand"]
@@ -2873,6 +2892,12 @@ class BeliefReplay:
                     return  # (lowered by an effect to fit, or a usual Level)
             usual = {0: range(1, 5), 1: range(5, 7)}.get(tributes, range(7, 13)) if kind == "msetable" else None
             codes = [e["code"] for e in prompt[kind] if fits(e["code"])]
+            if discards:
+                from . import script_index
+                seen = self._opp_seen_codes()
+                procs = script_index.discard_set_proc_cards()
+                codes = [c for c in seen if c in procs and fits(c)] + sorted(
+                    c for c in procs if c not in seen and self.db.get(c) and fits(c))
             if foreign:
                 # (an opponent's monster among the Tributes: only a card with its own
                 # procedure does that, e.g. Thestalos the Shadowfire Monarch; the
@@ -2912,8 +2937,83 @@ class BeliefReplay:
             if usual is not None:
                 # (the usual Levels for the Tributes first)
                 codes.sort(key=lambda c: self.db.get(c).level not in usual)
+            if kind == "msetable" and duel is not None and src["loc"] == C.LOCATION_HAND:
+                # (the engine's answer first: the card in that slot, its properties
+                # assumed to be the candidate's, e.g. Zombie World allows only Zombies
+                # to be Tribute Summoned)
+                ok = self._settable_as(duel, src, codes[:60], tributes)
+                if ok and not any(ok.values()):
+                    # (none of them: further cards that fit, Normal Monsters and the
+                    # races the opponent has shown first, until a few are accepted)
+                    seen_races = Counter(self.db.get(c).race for c in self._opp_seen_codes()
+                                         if self.db.get(c) and self.db.get(c).type & C.TYPE_MONSTER)
+                    pool = sorted((c.code for c in self.db.cards.values()
+                                   if c.type & C.TYPE_MONSTER and not c.alias and c.ot & 0x3 and not c.is_extra_deck
+                                   and not c.type & C.TYPE_TOKEN and c.code not in ok and fits(c.code)),
+                                  key=lambda c: (not self.db.get(c).type & C.TYPE_NORMAL,
+                                                 -seen_races[self.db.get(c).race], c))
+                    found = []
+                    for k in range(0, min(len(pool), 1600), 200):
+                        more = self._settable_as(duel, src, pool[k:k + 200], tributes)
+                        found += [c for c in pool[k:k + 200] if more.get(c)]
+                        if len(found) >= 3:
+                            break
+                    codes = found[:6] + codes
+                    ok.update({c: True for c in found[:6]})
+                codes.sort(key=lambda c: not ok.get(c, False))
+            # (first the cards the slot is known to be one of, e.g. one of the cards
+            # revealed before the opponent picked one at random)
+            known = [c for c in self._slot_codes(src) if fits(c)]
+            codes = known + [c for c in codes if c not in known]
             self._assume(src, codes, "opponent set a card the hypothesis cannot set")
             return
+
+    def _settable_as(self, duel: Duel, li: dict, codes: list[int], tributes: int) -> dict[int, bool]:
+        """Whether the player may Set the hand card at `li` if it had each
+        candidate's properties (code, type, Level, attribute, race, ATK/DEF assumed,
+        then reset): the restrictions on Setting, e.g. Zombie World allows only
+        Zombies to be Tribute Summoned (Levels and Tributes are checked apart)."""
+        out: dict[int, bool] = {}
+        sumtype = "SUMMON_TYPE_TRIBUTE" if tributes else "SUMMON_TYPE_NORMAL"
+        lines = [f"local c=Duel.GetFieldCard({li['con']},LOCATION_HAND,{li['seq']})",
+                 "if not c then return end"]
+        for code in dict.fromkeys(codes):
+            card = self.db.get(code)
+            if card is None:
+                continue
+            lines.append(
+                f"c:AssumeProperty(ASSUME_CODE,{code}) c:AssumeProperty(ASSUME_TYPE,{card.type}) "
+                f"c:AssumeProperty(ASSUME_LEVEL,{card.level}) c:AssumeProperty(ASSUME_ATTRIBUTE,{card.attribute}) "
+                f"c:AssumeProperty(ASSUME_RACE,{card.race}) c:AssumeProperty(ASSUME_ATTACK,{max(card.attack, 0)}) "
+                f"c:AssumeProperty(ASSUME_DEFENSE,{max(card.defense, 0)}) "
+                f"Debug.Message('{code} '..tostring(Duel.CanPlayerSetMonster({li['con']},{sumtype},c))) Duel.AssumeReset()")
+        try:
+            for text in duel.lua_messages("\n".join(lines)):
+                code, res = text.split()
+                out[int(code)] = res == "true"
+        except (ValueError, CoreError):
+            return {}
+        return out
+
+    def _slot_codes(self, li: dict) -> list[int]:
+        """The codes a hidden slot is known to be limited to (its claim allows only
+        some cards, all of known code), back through pools of a single card."""
+        try:
+            v = self.lockstep.var_at(li["con"], li["loc"], li["seq"])
+        except TrackerError:
+            return []
+        byid = {x.id: x for x in self.lockstep.all_vars}
+        for _ in range(16):
+            if v is None or v.kind != "claim":
+                return []
+            if v.allowed:
+                xs = [byid.get(a) for a in v.allowed]
+                codes = [x.fixed_code if x.fixed_code is not None else x.code for x in xs if x is not None]
+                return sorted(set(codes)) if codes and all(codes) and len(codes) == len(xs) else []
+            if v.pool is None or len(v.pool.members) != 1:
+                return []
+            v = v.pool.members[0]
+        return []
 
     def _check_selection_dead_end(self, prompt: dict, up: list[dict], duel: Duel, ids) -> None:
         """Cards selected one by one and then moved together (e.g. Synchro
