@@ -1234,6 +1234,11 @@ class BeliefReplay:
         if item[0] == "msg":
             exp = item[1]
             fix = self._force_fix(exp)
+            if fix is None and exp["type"] == "CHAINING" and exp["trigger_con"] == self.opponent \
+                    and exp["trigger_loc"] == C.LOCATION_HAND and got.get("type") != "CHAINING":
+                # (an effect of a card that just came into the hand, e.g. "when this card
+                # is added to your hand", the hand shuffled since: one of the arrivals)
+                fix = self._arrival_fix(exp)
             if fix is None and exp["type"] == got.get("type") and exp["type"] in ("FLIPSUMMONING", "POS_CHANGE") \
                     and exp.get("code") and exp.get("code") == got.get("code") and exp["con"] == got["con"] \
                     and exp["loc"] == got["loc"] and exp["seq"] != got["seq"] \
@@ -1255,7 +1260,7 @@ class BeliefReplay:
                 if recent:
                     fix = ("unassume", recent[-1])
             if fix is None and exp["type"] == "MOVE" and got["type"] == "MOVE" \
-                    and exp["from"]["loc"] in HIDDEN_PILES and exp != got:
+                    and exp["from"]["loc"] in (C.LOCATION_DECK, C.LOCATION_EXTRA) and exp != got:
                 # (a group taken out of hidden piles by one operation: before the
                 # per-card repairs)
                 fix = self._group_match_fix(exp, got, cp, msgs, idx)
