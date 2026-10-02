@@ -164,6 +164,8 @@ def capture(duel: Duel) -> dict:
             pl[name] = cards
         snap["players"].append(pl)
     snap.update(parse_field_query(duel.query_field_raw()))
+    for link, related in zip(snap["chain"], duel.chain_related()):
+        link["related"] = related
     return snap
 
 
@@ -205,7 +207,12 @@ def _mask_ref(li: dict | None, viewer: int) -> dict | None:
 
 def view(snap: dict, viewer: int) -> dict:
     """What `viewer` can see of a god view snapshot."""
-    chain = [{**c, "handler": _mask_ref(c["handler"], viewer)} for c in snap["chain"]]
+    # (a link's card that left its place since, e.g. shuffled into the deck, is a
+    # new object: which physical copy it is now cannot be known, even when a copy
+    # of it is back on the field)
+    chain = [{**{k: v for k, v in c.items() if k != "related"},
+              "handler": _mask_ref(c["handler"], viewer) if c.get("related", True) else None}
+             for c in snap["chain"]]
     out = {"turn": snap["turn"], "turn_player": snap["turn_player"], "phase": snap["phase"],
            "lp": list(snap["lp"]), "chain": chain, "players": []}
     for p, pl in enumerate(snap["players"]):

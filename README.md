@@ -208,9 +208,9 @@ at 99.79%):
 | turn 2   | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                            | 100.0%                            |
 | turn 3   | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                            | 100.0%                            |
 | ~1/3     | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                            | 100.0%                            |
-| ~2/3     | 100.0%    | 100.0%    | 100.0%    | 99.90%                   | 100.0%                    | 100.0%                            | 99.95%                            |
-| full game| 100.0%    | 100.0%    | 99.95%    | 99.80%                   | 100.0%                    | 100.0%                            | 100.0%                            |
-| overall  | 100.0%    | 100.0%    | 99.99%    | 99.94%                   | 100.0%                    | 100.0%                            | 99.99%                            |
+| ~2/3     | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                            | 99.95%                            |
+| full game| 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                            | 100.0%                            |
+| overall  | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                            | 99.99%                            |
 
 A game can end in the middle of an action: a player loses (LP 0, or a draw from an empty deck)
 while the action's costs are paid, before the message that identifies its card (e.g. a Tribute
@@ -278,7 +278,13 @@ canonical order, by location, and maps the chosen indices back, see
 the stale reason on every move onto the field except special summons (equipping a monster
 or moving it to another zone showed how the card had once entered the hand), and the position
 value in DECK_TOP (it showed whether the card had been returned to the deck). Conversely, a
-player now sees its own cards when it reveals them from its deck.
+player now sees its own cards when it reveals them from its deck. Two more told physical copies
+apart: the status bits of cards that Exchange of the Spirit swaps from the graveyard into the
+deck (the core's swap bypassed the reset for cards entering a hidden pile), and the chain view's
+pointer to a link's card after that card left its place (e.g. Morphing Jar #2 shuffled into
+the deck and a copy summoned back: the view showed whether it was the same physical card). A
+chain link now shows its card only while the card is still the activated object (the core's
+relation between card and chain link, `OCG_ExtChainRelated`).
 
 Card creation order: the core gives every card an id in creation order and processes groups
 (a script's loop over a group, the moves of one operation, target announcements, counters

@@ -135,6 +135,7 @@ def _load_library(path: Path) -> ct.CDLL:
         "OCG_ExtGetLocationCards": (u32, [vp, u8, u32, ct.POINTER(u32), ct.POINTER(u32), u32]),
         "OCG_ExtGetOverlayCards": (u32, [vp, u8, u32, u32, ct.POINTER(u32), ct.POINTER(u32), u32]),
         "OCG_ExtGetAllCards": (u32, [vp, ct.POINTER(u32), u32]),
+        "OCG_ExtChainRelated": (u32, [vp, ct.POINTER(u8), u32]),
         "OCG_ExtGetInfo": (None, [vp, ct.POINTER(u32)]),
         "OCG_ExtForceActivatable": (None, [vp, u8, u32, ct.c_uint64]),
         "OCG_ExtClearForceActivatable": (None, [vp]),
@@ -397,6 +398,16 @@ class Duel:
             buf = (ct.c_uint32 * (6 * n))()
             n = lib().OCG_ExtGetAllCards(self.handle, buf, n)
         return ct.string_at(buf, 24 * n)
+
+    def chain_related(self) -> list[bool]:
+        """For each current chain link: whether its card is still the activated
+        object (it has not left its place since)."""
+        buf = (ct.c_uint8 * 64)()
+        n = lib().OCG_ExtChainRelated(self.handle, buf, 64)
+        if n > 64:
+            buf = (ct.c_uint8 * n)()
+            n = lib().OCG_ExtChainRelated(self.handle, buf, n)
+        return [bool(buf[i]) for i in range(n)]
 
     def all_cards(self) -> tuple[dict, dict]:
         """Every slot of both players in one call: ({(player, location): [(code,

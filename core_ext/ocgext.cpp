@@ -547,6 +547,24 @@ OCGEXT_API uint32_t OCG_ExtGetAllCards(OCG_Duel ocg_duel, uint32_t* out, uint32_
 	return n;
 }
 
+// For each link of the current chain, whether its card is still the object that
+// was activated (it keeps its relation to the link until it leaves its place, e.g.
+// to the deck): after a trip through a hidden pile, which physical copy it is
+// cannot be known. Writes one byte per link; returns the link count.
+OCGEXT_API uint32_t OCG_ExtChainRelated(OCG_Duel ocg_duel, uint8_t* out, uint32_t cap) {
+	auto* pduel = static_cast<duel*>(ocg_duel);
+	auto& chain_list = pduel->game_field->core.current_chain;
+	uint32_t n = 0;
+	for(const auto& ch : chain_list) {
+		if(n < cap) {
+			card* handler = ch.triggering_effect ? ch.triggering_effect->get_handler() : nullptr;
+			out[n] = handler && handler->is_has_relation(ch) ? 1 : 0;
+		}
+		++n;
+	}
+	return n;
+}
+
 // Debugging: the pending trigger chains (core.new_fchain and core.new_ochain).
 // Writes 6 uint64 per entry: forced, handler code, description, handler
 // controller, handler location, handler sequence. Returns the entry count.

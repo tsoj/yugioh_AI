@@ -840,12 +840,14 @@ def infer_unselect(prompt: dict, up: list[dict], duel, ids: list | None = None) 
     near = LocMap(duel).references(selection_window(up))
     refs = LocMap(duel).references(up)
     for window, certain in ((near, True), (refs, False)):
-        for cid in window:
-            if cid in ids[:len(sel)] and cid not in unsel_ids:
-                i = ids.index(cid)
-                rest = [{"index": j} for j in range(len(sel)) if j != i]
-                fin = [{"finish": True}] if (prompt["finishable"] or prompt["cancelable"]) else []
-                return [{"index": i}] + fin + rest, certain
+        picks = [ids.index(cid) for cid in window if cid in ids[:len(sel)] and cid not in unsel_ids]
+        if picks:
+            # (the other used cards next: which one comes first can matter, e.g. the
+            # Tuner among Synchro Materials that are all sent together)
+            first = [{"index": j} for j in dict.fromkeys(picks)]
+            rest = [{"index": j} for j in range(len(sel)) if {"index": j} not in first]
+            fin = [{"finish": True}] if (prompt["finishable"] or prompt["cancelable"]) else []
+            return first[:1] + fin + first[1:] + rest, certain
     cands = []
     if prompt["finishable"] or prompt["cancelable"]:
         cands.append({"finish": True})

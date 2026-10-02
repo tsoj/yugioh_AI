@@ -141,12 +141,28 @@ def _all_responses(prompt: dict) -> list[dict]:
                                           C.POS_FACEDOWN_DEFENSE) if prompt["positions"] & p]
     if t in ("SELECT_CARD", "SELECT_TRIBUTE") and prompt["min"] <= 1 <= prompt["max"]:
         return [{"indices": [j]} for j in range(len(prompt["cards"]))]
+    if t == "SELECT_CARD" and prompt["min"] > 1:
+        # (several cards at once, e.g. "destroy 2 cards" whose choice only the
+        # next state view shows: the smallest selections, a few dozen at most)
+        import itertools
+        n = len(prompt["cards"])
+        out = []
+        for k in range(prompt["min"], min(prompt["max"], n) + 1):
+            out += [{"indices": list(sub)} for sub in itertools.islice(
+                itertools.combinations(range(n), k), _MAX_SELECTIONS - len(out))]
+            if len(out) >= _MAX_SELECTIONS:
+                break
+        return out
     if t == "SELECT_UNSELECT_CARD":
         fin = [{"finish": True}] if prompt.get("finishable") or prompt.get("cancelable") else []
         return [{"index": j} for j in range(len(prompt["select_cards"]))] + fin
     return []
 
 
+# status bits an operation in progress sets on the cards it was given (e.g. the
+# cards chosen for destruction): which cards were chosen, not their history
+_OPERATION_STATUS = C.STATUS_DESTROY_CONFIRMED | C.STATUS_LEAVE_CONFIRMED | C.STATUS_BATTLE_DESTROYED
+_MAX_SELECTIONS = 30  # multi-card selections offered beyond the inferred ones
 _DECISION_WINDOW = 10  # stream positions a decision stays a candidate for retrying
 _DECISION_TRIES = 24  # alternatives tried for one mismatch
 _PROBE_BUDGET = 48  # probes a probe of the main line may start in all (nested)
@@ -274,6 +290,8 @@ class BeliefReplay:
         # (start, end, slot): the opponent's hidden card in that slot matches no filter
         self.nomatch_cards: set[tuple] = set()
         self.nomatch_piles: set[tuple[int, int]] = set()  # ... hidden piles match nothing
+        self._pile_made: dict[tuple[int, int], int] = {}  # pile repair -> position of its divergence
+        self._pile_dropped: set[tuple] = set()  # pile repairs replaced by their opposite (not again)
         self.snapshot_cps: set[int] = set()
         self.failed_assumptions: set[tuple] = set()
         self.failed_exclusions: set[tuple] = set()
@@ -531,7 +549,7 @@ class BeliefReplay:
                 last = e
                 bt = self._state_bt
                 if bt is not None and not bt["state"] and e.fix is not None and (
-                        e.pos == bt["pos"] or e.pos < bt["pos"] and e.fix[0] in ("nomatchpile", "matchpile")) \
+                        e.pos == bt["pos"] or e.pos < bt["pos"] and e.fix[0] in ("nomatchpile", "matchpile", "unflip")) \
                         and self._add_fix(e.fix):
                     # (searching the decisions for a message mismatch: a repair at the
                     # same point applies on top of the alternative being tried)
@@ -768,18 +786,30 @@ class BeliefReplay:
             self.nomatch_cards.add(entry)
             self.stats.assumptions += 1
             return True
-        if kind == "nomatchpile":
+        if kind == "unflip":
             span = fix[1:]
-            if span in self.nomatch_piles:
+            if span not in self.nomatch_piles:
                 return False
-            self.nomatch_piles.add(span)
+            self.nomatch_piles.discard(span)
+            self._pile_dropped.add(("nomatchpile", span))
+            self.match_piles.add(span)
             self.stats.assumptions += 1
             return True
-        if kind == "matchpile":
+        if kind in ("nomatchpile", "matchpile"):
             span = fix[1:]
-            if span in self.match_piles:
+            mine, other = (self.nomatch_piles, self.match_piles) if kind == "nomatchpile" \
+                else (self.match_piles, self.nomatch_piles)
+            if span in mine or (kind, span) in self._pile_dropped:
                 return False
-            self.match_piles.add(span)
+            # the opposite repair of the same span, made for a divergence at this
+            # same point, did not get past it: it is dropped (a forced match wins
+            # over a forced mismatch; e.g. a condition that no card is NOT of an
+            # archetype needs the hidden cards to match nothing)
+            if span in other and self._pile_made.get(span) == self.pos:
+                other.discard(span)
+                self._pile_dropped.add(("matchpile" if kind == "nomatchpile" else "nomatchpile", span))
+            mine.add(span)
+            self._pile_made[span] = self.pos
             self.stats.assumptions += 1
             return True
         if kind == "nomatchid":
@@ -1974,7 +2004,8 @@ class BeliefReplay:
                     if not e or not g or not e.get("code") or e.get("code") != g.get("code"):
                         return None
                     if loc in (C.LOCATION_MZONE, C.LOCATION_SZONE) \
-                            and {k for k in set(e) | set(g) if e.get(k) != g.get(k)} == {"status"}:
+                            and {k for k in set(e) | set(g) if e.get(k) != g.get(k)} == {"status"} \
+                            and not (e["status"] ^ g["status"]) & _OPERATION_STATUS:
                         # only the card's history differs (e.g. a position change while
                         # it was in the deck): another copy from a hidden pile
                         a = live.at({"con": p, "loc": loc, "seq": i})
@@ -2241,8 +2272,19 @@ class BeliefReplay:
                 fix = self._arrival_fix(ch)
             end = next((j for j in range(self.pos, len(self.items)) if self.items[j][0] == "msg"
                         and self.items[j][1]["type"] == "CHAINED"), None)
-            if fix is None and end is not None and (self.pos, end) not in self.match_piles:
+            if fix is None and end is not None and (self.pos, end) not in self.match_piles \
+                    and ("matchpile", (self.pos, end)) not in self._pile_dropped:
                 fix = ("matchpile", self.pos, end)
+            elif fix is None and end is not None and (self.pos, end) not in self.nomatch_piles \
+                    and ("nomatchpile", (self.pos, end)) not in self._pile_dropped:
+                # (still not: the check counts cards that do NOT fit, e.g. "if you
+                # control no monsters other than Valkyrie monsters", face-down ones too)
+                fix = ("nomatchpile", self.pos, end)
+            elif fix is None and end is not None and (self.pos, end) in self.nomatch_piles \
+                    and ("matchpile", (self.pos, end)) in self._pile_dropped:
+                # (neither helps: something else is wrong, e.g. an earlier decision;
+                # back to letting the hidden cards qualify, and on)
+                fix = ("unflip", self.pos, end)
         if fix is not None:
             raise Divergence(self.pos, "opponent activation is not available in the replay", fix=fix)
 
@@ -2326,6 +2368,15 @@ class BeliefReplay:
             if code and code not in tried:
                 raise Divergence(self.pos, reason, fix=("assume", self.pos, *key, code))
 
+    def _race_stand_ins(self, race: int, fits) -> list[int]:
+        """Main deck monsters of a race that fit (the lowest codes), when no filler has it."""
+        cache = self.__dict__.setdefault("_race_cache", {})
+        if race not in cache:
+            cache[race] = sorted(c.code for c in self.db.cards.values()
+                                 if c.race == race and c.type & C.TYPE_MONSTER and not c.is_extra_deck
+                                 and not c.alias and not c.type & (C.TYPE_RITUAL | C.TYPE_TOKEN))
+        return [c for c in cache[race] if fits(c)][:2]
+
     def _opp_seen_codes(self) -> list[int]:
         """Codes of the opponent's cards the stream showed, in order of appearance."""
         if not hasattr(self, "_seen_cache"):
@@ -2387,6 +2438,19 @@ class BeliefReplay:
                 # Zombie where only Zombies may be Tributed for)
                 races = Counter(self.db.get(c).race for c in self._opp_seen_codes()
                                 if self.db.get(c).type & C.TYPE_MONSTER)
+                # (first the races the monsters on the field have now, as the last
+                # view shows them: e.g. Zombie World makes them all Zombies and allows
+                # only Zombies to be Tributed for)
+                view = next((it[2] for it in reversed(self.items[:self.pos + 1])
+                             if it[0] == "prompt" and it[2] is not None), None)
+                now = Counter(c["race"] for pl in (view or {}).get("players", ())
+                              for c in pl["mzone"] if c and c.get("race"))
+                for race, _ in now.most_common(2):
+                    found = [c for c in filler.vanillas if self.db.get(c).race == race and fits(c)][:2]
+                    found = found or [c for c in filler.settable_monsters_all
+                                      if self.db.get(c).race == race and fits(c)][:2]
+                    found = found or self._race_stand_ins(race, fits)
+                    codes += found
                 for race, _ in races.most_common(3):
                     codes += [c for c in filler.vanillas if self.db.get(c).race == race and fits(c)][:2]
             codes += [c for c in (filler.settable_monsters_all if kind == "msetable"
@@ -2396,6 +2460,34 @@ class BeliefReplay:
                 codes.sort(key=lambda c: self.db.get(c).level not in usual)
             self._assume(src, codes, "opponent set a card the hypothesis cannot set")
             return
+
+    def _check_selection_dead_end(self, prompt: dict, up: list[dict], duel: Duel, ids) -> None:
+        """Cards selected one by one and then moved together (e.g. Synchro
+        Materials): if the cards chosen so far are among them but another of them
+        cannot be chosen any more, an earlier pick went wrong (e.g. which of two
+        Tuners was the Tuner)."""
+        sel = prompt["select_cards"]
+        unsel_ids = set(ids[len(sel):]) if ids is not None else set()
+        if not unsel_ids:
+            return
+        k = next((j for j, m in enumerate(up) if m["type"] not in ("HINT", "CARD_HINT")), None)
+        if k is None or up[k]["type"] != "MOVE":
+            return
+        # (moved directly one after another, from where the offered cards are: the
+        # next selection, e.g. of an opponent's card, can follow without a message
+        # the viewer sees)
+        places = {(c["con"], c["loc"]) for c in sel + prompt["unselect_cards"]}
+        group = []
+        for m in up[k:]:
+            if m["type"] != "MOVE" or m["reason"] != up[k]["reason"] \
+                    or (m["from"]["con"], m["from"]["loc"]) not in places:
+                break
+            group.append(m)
+        used = infer.LocMap(duel).references(group)
+        if any(cid in ids[:len(sel)] for cid in used) or not unsel_ids <= set(used):
+            return
+        if any(cid not in unsel_ids for cid in used):
+            raise Divergence(self.pos, "a card used with the selected ones cannot be selected any more")
 
     def _check_summon_condition(self, duel: Duel, prompt: dict, up: list[dict]) -> None:
         """The opponent special summoned a hand card by its own procedure, which
@@ -2461,12 +2553,21 @@ class BeliefReplay:
             return [{"yes": True}, {"yes": False}], False
         if t == "SELECT_OPTION":
             return infer.infer_option(prompt, up, self.opponent)
+        extended = False
         if t in CARD_PROMPTS:
-            up = self._selection_window(up)
+            window = self._selection_window(up)
+            # (past the viewer's own decisions, the messages can be consequences of
+            # those, e.g. counters it removed so that the selected cards are not
+            # destroyed: they suggest, but do not show, the selection)
+            extended = window is not up
+            up = window
         if t in ("SELECT_CARD", "SELECT_TRIBUTE", "SELECT_SUM"):
-            return infer.infer_cards(prompt, up, duel, ids)
+            cands, certain = infer.infer_cards(prompt, up, duel, ids)
+            return cands, certain and not extended
         if t == "SELECT_UNSELECT_CARD":
-            return infer.infer_unselect(prompt, up, duel, ids)
+            self._check_selection_dead_end(prompt, up, duel, ids)
+            cands, certain = infer.infer_unselect(prompt, up, duel, ids)
+            return cands, certain and not extended
         if t in ("SELECT_PLACE", "SELECT_DISFIELD"):
             return infer.infer_place(prompt, up, self._upcoming_ext())
         if t == "SELECT_POSITION":
