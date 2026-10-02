@@ -2678,8 +2678,8 @@ class BeliefReplay:
                 encode(prompt, c)
             except (InvalidResponse, KeyError, TypeError, ValueError):
                 continue
-            if c.get("cancel") and sig in self._cancelled:
-                continue  # (cancelling it before led back here without progress)
+            if (c.get("cancel") or c.get("finish")) and sig in self._cancelled:
+                continue  # (cancelling or finishing it before led back here without progress)
             if c not in valid:
                 valid.append(c)
         if not valid:
@@ -2729,7 +2729,7 @@ class BeliefReplay:
             self._trace(prompt, resp, False, len(valid))
         else:
             resp = self._choose(duel, prompt, valid, certain)
-        if resp.get("cancel"):
+        if resp.get("cancel") or resp.get("finish"):
             self._cancelled.add(sig)
         if dkey is not None and prompt["type"] == "SELECT_CHAIN" and resp.get("index", -1) == -1 \
                 and self._leaving_phase():
