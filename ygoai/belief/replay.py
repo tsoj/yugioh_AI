@@ -990,14 +990,14 @@ class BeliefReplay:
                 continue
             if prompt is None:
                 raise Divergence(self.pos, "core awaits a response without a prompt")
+            if self.stopped and self.depth == 0 and self.pos >= len(self.items):
+                return  # (the game was stopped at this prompt, whoever answers it)
             if prompt["player"] == self.viewer and is_hidden_prompt(prompt):
                 # answered by the arbiter, not part of the viewer's stream
                 self._simlog("prompt", prompt, AUTO_RESPONSE)
                 duel.set_response(encode(prompt, AUTO_RESPONSE))
                 pending, pending_resp = prompt, AUTO_RESPONSE
                 continue
-            if self.stopped and self.depth == 0 and self.pos >= len(self.items):
-                return
             if prompt["player"] == self.viewer:
                 if self.pos >= len(self.items):
                     if self.depth > 0:
