@@ -1,6 +1,6 @@
 diff -ruN core_a/card.cpp core_b/card.cpp
 --- core_a/card.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/card.cpp	2026-10-02 13:32:40.375861857 +0200
++++ core_b/card.cpp	2026-10-02 14:40:14.314778862 +0200
 @@ -75,6 +75,19 @@
  			return c1->current.sequence < c2->current.sequence;
  	}
@@ -294,7 +294,7 @@ diff -ruN core_a/card.cpp core_b/card.cpp
  			peffect = eit->second;
 diff -ruN core_a/card.h core_b/card.h
 --- core_a/card.h	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/card.h	2026-10-02 13:32:40.376152344 +0200
++++ core_b/card.h	2026-10-02 14:40:14.315065629 +0200
 @@ -182,6 +182,13 @@
  	explicit card(duel* pd);
  	~card() = default;
@@ -311,7 +311,7 @@ diff -ruN core_a/card.h core_b/card.h
  	}
 diff -ruN core_a/duel.cpp core_b/duel.cpp
 --- core_a/duel.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/duel.cpp	2026-10-02 13:32:40.376209266 +0200
++++ core_b/duel.cpp	2026-10-02 14:40:14.315122099 +0200
 @@ -10,6 +10,7 @@
  #include "duel.h"
  #include "effect.h"
@@ -330,7 +330,7 @@ diff -ruN core_a/duel.cpp core_b/duel.cpp
  	for(auto& pgroup : groups) {
 diff -ruN core_a/duel.h core_b/duel.h
 --- core_a/duel.h	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/duel.h	2026-10-02 13:32:40.376252757 +0200
++++ core_b/duel.h	2026-10-02 14:40:14.315165479 +0200
 @@ -62,6 +62,8 @@
  	};
  	std::vector<uint8_t> buff;
@@ -342,7 +342,7 @@ diff -ruN core_a/duel.h core_b/duel.h
  	std::unordered_set<card*> cards;
 diff -ruN core_a/effect.cpp core_b/effect.cpp
 --- core_a/effect.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/effect.cpp	2026-10-02 13:32:40.376315670 +0200
++++ core_b/effect.cpp	2026-10-02 14:40:14.315243054 +0200
 @@ -10,6 +10,7 @@
  #include "effect.h"
  #include "field.h"
@@ -377,7 +377,7 @@ diff -ruN core_a/effect.cpp core_b/effect.cpp
  	pduel->game_field->restore_lp_cost();
 diff -ruN core_a/field.cpp core_b/field.cpp
 --- core_a/field.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/field.cpp	2026-10-02 13:32:48.876657421 +0200
++++ core_b/field.cpp	2026-10-02 14:40:14.315672250 +0200
 @@ -12,6 +12,7 @@
  #include "duel.h"
  #include "effect.h"
@@ -631,7 +631,7 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  				++player_counter;
 diff -ruN core_a/field.h core_b/field.h
 --- core_a/field.h	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/field.h	2026-10-02 13:32:40.376666362 +0200
++++ core_b/field.h	2026-10-02 14:40:14.316342717 +0200
 @@ -330,6 +330,8 @@
  	uint32_t last_control_changed_id;
  	uint32_t set_group_used_zones;
@@ -643,7 +643,7 @@ diff -ruN core_a/field.h core_b/field.h
  	bool to_bp;
 diff -ruN core_a/group.h core_b/group.h
 --- core_a/group.h	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/group.h	2026-10-02 13:32:40.376722333 +0200
++++ core_b/group.h	2026-10-02 14:40:14.316441311 +0200
 @@ -20,6 +20,8 @@
  public:
  	card_set container;
@@ -655,7 +655,7 @@ diff -ruN core_a/group.h core_b/group.h
  	
 diff -ruN core_a/interpreter.cpp core_b/interpreter.cpp
 --- core_a/interpreter.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/interpreter.cpp	2026-10-02 13:32:40.376790190 +0200
++++ core_b/interpreter.cpp	2026-10-02 14:40:14.316537196 +0200
 @@ -15,6 +15,7 @@
  #include "lua_obj.h"
  #include "group.h"
@@ -751,7 +751,7 @@ diff -ruN core_a/interpreter.cpp core_b/interpreter.cpp
  lua_Integer interpreter::get_operation_value(card* pcard, int32_t findex, int32_t extraargs) {
 diff -ruN core_a/libcard.cpp core_b/libcard.cpp
 --- core_a/libcard.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/libcard.cpp	2026-10-02 13:32:40.376901905 +0200
++++ core_b/libcard.cpp	2026-10-02 14:40:14.316732029 +0200
 @@ -1030,7 +1030,7 @@
  }
  LUA_FUNCTION(GetFirstCardTarget) {
@@ -763,7 +763,7 @@ diff -ruN core_a/libcard.cpp core_b/libcard.cpp
  }
 diff -ruN core_a/libduel.cpp core_b/libduel.cpp
 --- core_a/libduel.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/libduel.cpp	2026-10-02 13:32:40.377132811 +0200
++++ core_b/libduel.cpp	2026-10-02 14:40:14.317102607 +0200
 @@ -12,6 +12,7 @@
  #include "duel.h"
  #include "effect.h"
@@ -919,7 +919,7 @@ diff -ruN core_a/libduel.cpp core_b/libduel.cpp
  	return 0;
 diff -ruN core_a/libgroup.cpp core_b/libgroup.cpp
 --- core_a/libgroup.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/libgroup.cpp	2026-10-02 13:32:40.377305418 +0200
++++ core_b/libgroup.cpp	2026-10-02 14:40:14.317445307 +0200
 @@ -13,6 +13,7 @@
  #include "card.h"
  #include "duel.h"
@@ -1112,7 +1112,7 @@ diff -ruN core_a/libgroup.cpp core_b/libgroup.cpp
  	return 1;
 diff -ruN core_a/meson.build core_b/meson.build
 --- core_a/meson.build	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/meson.build	2026-10-02 13:32:40.377352434 +0200
++++ core_b/meson.build	2026-10-02 14:40:14.317563063 +0200
 @@ -31,6 +31,7 @@
  	'libeffect.cpp',
  	'libgroup.cpp',
@@ -1123,7 +1123,7 @@ diff -ruN core_a/meson.build core_b/meson.build
  	'processor.cpp',
 diff -ruN core_a/ocgapi.cpp core_b/ocgapi.cpp
 --- core_a/ocgapi.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/ocgapi.cpp	2026-10-02 13:32:40.377374252 +0200
++++ core_b/ocgapi.cpp	2026-10-02 14:40:14.317623144 +0200
 @@ -111,6 +111,7 @@
  int OCG_DuelProcess(OCG_Duel ocg_duel) {
  	auto* pduel = static_cast<duel*>(ocg_duel);
@@ -1134,7 +1134,7 @@ diff -ruN core_a/ocgapi.cpp core_b/ocgapi.cpp
  		flag = pduel->game_field->process();
 diff -ruN core_a/operations.cpp core_b/operations.cpp
 --- core_a/operations.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/operations.cpp	2026-10-02 13:32:40.377527007 +0200
++++ core_b/operations.cpp	2026-10-02 14:40:14.318077285 +0200
 @@ -14,6 +14,7 @@
  #include "duel.h"
  #include "effect.h"
@@ -2392,7 +2392,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			}
 diff -ruN core_a/processor.cpp core_b/processor.cpp
 --- core_a/processor.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/processor.cpp	2026-10-02 13:32:40.377928214 +0200
++++ core_b/processor.cpp	2026-10-02 14:41:41.341819905 +0200
 @@ -2574,7 +2574,7 @@
  	case 30: {
  		auto des = arg.cards_destroyed_by_battle;
@@ -2484,7 +2484,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  				++core.readjust_map[rcard];
  				if(core.readjust_map[rcard] > 3)
  					destroy(rcard, nullptr, REASON_RULE, PLAYER_NONE);
-@@ -4896,17 +4894,32 @@
+@@ -4896,18 +4894,35 @@
  	}
  	case 12: {
  		//shuffle check
@@ -2517,5 +2517,20 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
 -			pcard->current.position = pub ? POS_FACEUP : POS_FACEDOWN;
 +			set_hand_position(pcard, pub ? POS_FACEUP : POS_FACEDOWN);
  		}
++		if(core.check_level > 0)
++			return FALSE;  // (done when the cost, target or operation ends, see step 16)
  		if(core.shuffle_hand_check[infos.turn_player])
  			shuffle(infos.turn_player, LOCATION_HAND);
+ 		if(core.shuffle_hand_check[1 - infos.turn_player])
+@@ -4992,6 +5007,11 @@
+ 			arg.step = Processors::restart;
+ 			return FALSE;
+ 		}
++		// (inside a cost, target or operation the pending shuffles are done when it
++		// ends: whether an adjustment runs in between depends on hidden cards, e.g.
++		// Exodia's win check in the hand whenever a card is added to a hand)
++		if(core.check_level > 0)
++			return TRUE;
+ 		if(core.shuffle_hand_check[0])
+ 			shuffle(0, LOCATION_HAND);
+ 		if(core.shuffle_hand_check[1])

@@ -208,9 +208,9 @@ at 99.79%):
 | turn 2   | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                            | 100.0%                            |
 | turn 3   | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                            | 100.0%                            |
 | ~1/3     | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                            | 100.0%                            |
-| ~2/3     | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                            | 99.95%                            |
+| ~2/3     | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                            | 100.0%                            |
 | full game| 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                            | 100.0%                            |
-| overall  | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                            | 99.99%                            |
+| overall  | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                            | 100.0%                            |
 
 A game can end in the middle of an action: a player loses (LP 0, or a draw from an empty deck)
 while the action's costs are paid, before the message that identifies its card (e.g. a Tribute
@@ -284,7 +284,11 @@ deck (the core's swap bypassed the reset for cards entering a hidden pile), and 
 pointer to a link's card after that card left its place (e.g. Morphing Jar #2 shuffled into
 the deck and a copy summoned back: the view showed whether it was the same physical card). A
 chain link now shows its card only while the card is still the activated object (the core's
-relation between card and chain link, `OCG_ExtChainRelated`).
+relation between card and chain link, `OCG_ExtChainRelated`). And the timing of hand and deck
+shuffles: inside an operation they are done when it ends, unless an adjustment runs in
+between, which hidden cards can cause (Exodia the Forbidden One in the hand checks for a win
+whenever any card is added to a hand, so the opponent's search shuffled before its reveal
+instead of after it); the patched core leaves them to the end of the operation.
 
 Card creation order: the core gives every card an id in creation order and processes groups
 (a script's loop over a group, the moves of one operation, target announcements, counters

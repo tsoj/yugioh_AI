@@ -565,6 +565,18 @@ OCGEXT_API uint32_t OCG_ExtChainRelated(OCG_Duel ocg_duel, uint8_t* out, uint32_
 	return n;
 }
 
+// Debugging: the core's shuffle bookkeeping. Writes check_level, shuffle_check_disabled,
+// shuffle_hand_check[0..1], shuffle_deck_check[0..1].
+OCGEXT_API void OCG_ExtDebugShuffleState(OCG_Duel ocg_duel, int32_t* out) {
+	auto& core = static_cast<duel*>(ocg_duel)->game_field->core;
+	out[0] = static_cast<int32_t>(core.check_level);
+	out[1] = core.shuffle_check_disabled;
+	out[2] = core.shuffle_hand_check[0];
+	out[3] = core.shuffle_hand_check[1];
+	out[4] = core.shuffle_deck_check[0];
+	out[5] = core.shuffle_deck_check[1];
+}
+
 // Debugging: the pending trigger chains (core.new_fchain and core.new_ochain).
 // Writes 6 uint64 per entry: forced, handler code, description, handler
 // controller, handler location, handler sequence. Returns the entry count.
