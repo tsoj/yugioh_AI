@@ -150,10 +150,16 @@ class FlowSolver:
         def known_code(v: Var) -> int | None:
             c = v.fixed_code if v.fixed_code is not None else v.code
             return c or None
+        # (an earlier slot is the same card as a later one whose code shows, e.g. a
+        # drawn card that activates after the hand was shuffled: it has that code)
+        same_code: dict[int, int] = {}
+        for v in t.all_vars:
+            if v.same_as is not None and known_code(v):
+                same_code.setdefault(v.same_as.id, known_code(v))
         tag_of: dict[int, int] = {}  # ref var id -> its tag commodity
         tags_by_code: dict[int, list[int]] = defaultdict(list)
         for rid in sorted(refs):
-            code = known_code(refs[rid])
+            code = known_code(refs[rid]) or same_code.get(rid)
             if code is None:
                 continue
             k = com(None, ("tag", rid, code))

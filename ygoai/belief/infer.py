@@ -762,11 +762,17 @@ def infer_cards(prompt: dict, up: list[dict], duel, ids: list | None = None) -> 
         from ..actions import check_sum, random_sum_selection
         import itertools
         import random as _random
-        # smallest valid prefix first, then any valid subset of the references
+        # the cards referenced before the action ends, if they are a valid
+        # selection (e.g. a card that can be the entire requirement, used together
+        # with others); then the smallest valid prefix, then any valid subset
+        near = [ids.index(cid) for cid in LocMap(duel).references(selection_window(up)) if cid in ids]
+        if len(near) > 1 and check_sum(prompt, sorted(near)):
+            cands.append({"indices": sorted(near)})
         for k in range(1, len(chosen) + 1):
             if check_sum(prompt, sorted(chosen[:k])):
-                cands.append({"indices": sorted(chosen[:k])})
-                certain = k == len(chosen)
+                if {"indices": sorted(chosen[:k])} not in cands:
+                    cands.append({"indices": sorted(chosen[:k])})
+                certain = k == len(chosen) and len(cands) == 1
                 break
         if not cands:
             for k in range(1, min(len(chosen), 5) + 1):
@@ -803,6 +809,16 @@ def infer_cards(prompt: dict, up: list[dict], duel, ids: list | None = None) -> 
                 c = {"indices": sorted(sub)}
                 if c not in cands:
                     cands.append(c)
+    if t == "SELECT_CARD" and chosen and len(chosen) < lo <= n:
+        # (fewer cards are used later than must be selected, e.g. "choose 4, then
+        # 3 of them" where the real game had only 3 to choose from: the used ones
+        # and any others)
+        import itertools
+        others = [i for i in range(n) if i not in chosen]
+        for sub in itertools.islice(itertools.combinations(others, lo - len(chosen)), _MAX_CANDIDATES):
+            c = {"indices": sorted(chosen + list(sub))}
+            if c not in cands:
+                cands.append(c)
     if t == "SELECT_CARD" and (hi == 1 or lo == 1):
         for i in range(n):
             c = {"indices": [i]}

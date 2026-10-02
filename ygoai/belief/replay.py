@@ -522,7 +522,8 @@ class BeliefReplay:
                 duel.close()
                 last = e
                 bt = self._state_bt
-                if bt is not None and e.pos == bt["pos"] and not bt["state"] and e.fix is not None \
+                if bt is not None and not bt["state"] and e.fix is not None and (
+                        e.pos == bt["pos"] or e.pos < bt["pos"] and e.fix[0] in ("nomatchpile", "matchpile")) \
                         and self._add_fix(e.fix):
                     # (searching the decisions for a message mismatch: a repair at the
                     # same point applies on top of the alternative being tried)
@@ -537,9 +538,23 @@ class BeliefReplay:
                     # differ (or did not get past it): its next alternative, else an
                     # earlier decision (within a budget)
                     bt["tries"] += 1
+                    if e.pos <= bt["key"][0] + 1 and e.pos < bt["pos"] and not bt.get("parent") \
+                            and not bt["state"]:
+                        # (the alternative failed right at its own action: the decisions it
+                        # led to, e.g. which card after answering "yes", may not have
+                        # existed before; they come next, with the alternative kept)
+                        # (the first few alternatives each: the budget is shared)
+                        new = [(k, [j for j in range(n) if j != i][:2]) for k, n, i in reversed(self._recent)
+                               if k > bt["key"] and k not in self.overrides and n > 1]
+                        parent = (bt["key"], self.overrides.get(bt["key"]))
+                        bt["queue"][:0] = [(k, j, parent) for d in range(max((len(a) for _, a in new), default=0))
+                                           for k, a in new if d < len(a) for j in a[d:d + 1]]
                     if bt["tries"] > _DECISION_TRIES or not bt["queue"]:
                         for kk, _, _ in bt["list"]:
                             self.overrides.pop(kk, None)
+                        self.overrides.pop(bt["key"], None)
+                        if bt.get("parent"):
+                            self.overrides.pop(bt["parent"][0], None)
                         self._state_bt = None
                         if bt.get("fallback") is not None and self._add_fix(bt["fallback"]):
                             if self.log:
@@ -549,7 +564,14 @@ class BeliefReplay:
                             continue
                         raise Divergence(bt["pos"], bt["reason"], None, None)
                     self.overrides.pop(bt["key"], None)
-                    bt["key"], self.overrides[bt["key"]] = bt["queue"].pop(0)
+                    entry = bt["queue"].pop(0)
+                    parent = entry[2] if len(entry) > 2 else None
+                    if bt.get("parent") and bt["parent"] != parent:
+                        self.overrides.pop(bt["parent"][0], None)
+                    if parent:
+                        self.overrides[parent[0]] = parent[1]
+                    bt["parent"] = parent
+                    bt["key"], self.overrides[bt["key"]] = entry[0], entry[1]
                     if self.log:
                         self.log(f"restart {self.stats.restarts}: {e.reason} -> decision {bt['key']} "
                                  f"candidate {self.overrides[bt['key']]} (for the mismatch at {bt['pos']})")
@@ -648,6 +670,17 @@ class BeliefReplay:
             self.forces.add(key)
             self.stats.forces += 1
             return True
+        if kind == "forcelater":
+            # the forcing of that effect starts only after this position
+            key = fix[1:]
+            moved = False
+            for k, w in enumerate(self.force_windows):
+                if w[2] == key and w[0] <= self.pos < w[1] - 1:
+                    self.force_windows[k] = (self.pos + 1, w[1], key)
+                    moved = True
+            if moved:
+                self.stats.forces += 1
+            return moved
         if kind == "unforce":
             # (only the windows around the problem: another effect of the card with
             # the same description, e.g. desc 0, can need the forcing elsewhere)
@@ -826,7 +859,15 @@ class BeliefReplay:
                 forced_match = list(forced_match or ()) + self._hidden_ids(duel)
             if forced_match:
                 duel.set_forced_match(forced_match)
-            nomatch = self._hidden_ids(duel) if any(a <= cp[0] <= b for a, b in self.nomatch_piles) else []
+            nomatch = []
+            spans = [(a, b) for a, b in self.nomatch_piles if a <= cp[0] <= b]
+            if spans:
+                # (except the hidden cards the stream shows being used before the
+                # span ends: they did fit, e.g. picked among the fillers that did not)
+                end = max(b for _, b in spans)
+                used = set(infer.LocMap(duel).references(
+                    [it[1] for it in self.items[self.pos:end + 1] if it[0] == "msg"]))
+                nomatch = [cid for cid in self._hidden_ids(duel) if cid not in used]
             nomatch = nomatch + [cid for a, b, cid in self.nomatch_id_spans if a <= cp[0] <= b]
             if self.nomatch_cards:
                 lm = None
@@ -939,6 +980,19 @@ class BeliefReplay:
                 fp = filter_prompt(prompt, self.viewer)
                 if item[0] != "prompt" or item[1] != fp:
                     fix = self._force_fix(item[1]) if item[0] == "msg" else None
+                    if fix is None and item[0] == "msg" and item[1]["type"] == "CHAINING" \
+                            and item[1]["trigger_con"] == self.opponent:
+                        # the opponent's trigger did not come in the replay: its event can
+                        # depend on hidden cards (e.g. raised only if the deck holds a
+                        # fitting card): let them qualify since the action began
+                        start = self._prev_chain_start() or self._action_start()
+                        if (start, self.pos) not in self.match_piles and (start, self.pos) not in self.nomatch_piles:
+                            fix = ("matchpile", start, self.pos)
+                    if fix is None and item[0] == "msg" and fp["type"] == "SELECT_EFFECTYN":
+                        # an optional effect of the viewer's card the real game did not
+                        # offer: another copy of it can differ in hidden history (e.g. a
+                        # label a script left on the card on an earlier trip)
+                        fix = self._viewer_copy_fix(fp, duel, cp)
                     if fix is None and item[0] == "prompt":
                         fix = self._prompt_copy_fix(item[1], fp, duel, cp) \
                             or self._hidden_candidates_fix(item[1], fp, duel) \
@@ -1132,8 +1186,8 @@ class BeliefReplay:
                 # took none from there (e.g. "each player adds a Normal Monster from
                 # their Deck" with none in the real Deck): none of them fits
                 start = self._chain_start()
-                span = (min(self._link_start(), start if start is not None else self.pos), self.pos)
-                if span not in self.nomatch_piles and span not in self.match_piles:
+                span = self._nomatch_span(start)
+                if span is not None:
                     fix = ("nomatchpile", *span)
                 else:
                     fix = self._nomatch_card_fix(got["from"], duel, got["to"])
@@ -1225,8 +1279,15 @@ class BeliefReplay:
                 # effect found a fitting card among the hidden filler cards that
                 # the real deck does not have): let the hidden cards match nothing
                 start = self._chain_start()
-                span = (min(self._link_start(), start if start is not None else self.pos), self.pos)
-                if span not in self.nomatch_piles and span not in self.match_piles:
+                span = self._nomatch_span(start)
+                if span is not None:
+                    fix = ("nomatchpile", *span)
+            if fix is None and got["type"] == "CARD_SELECTED" and exp["type"] != "CARD_SELECTED":
+                # the replay announced a selection the real game did not make (it had
+                # nothing to choose from, e.g. "if you control another copy, show the
+                # one used"): hidden (filler) cards fit, so let them match nothing
+                span = self._nomatch_span(self._chain_start())
+                if span is not None:
                     fix = ("nomatchpile", *span)
             if fix is None and exp["type"] == got["type"] == "HINT" and exp["hint_type"] == got["hint_type"] \
                     == C.HINT_SELECTMSG and exp["player"] == got["player"] == self.viewer and exp["data"] != got["data"]:
@@ -1251,8 +1312,8 @@ class BeliefReplay:
                 # game did not (it had only one option): hidden (filler) cards
                 # satisfy a condition of the others, so let them match nothing
                 start = self._chain_start()
-                span = (min(self._link_start(), start if start is not None else self.pos), self.pos)
-                if span not in self.nomatch_piles and span not in self.match_piles:
+                span = self._nomatch_span(start)
+                if span is not None:
                     fix = ("nomatchpile", *span)
             if fix is None and exp["type"] == "BECOME_TARGET" and exp["cards"] \
                     and (got["type"] != "BECOME_TARGET" or got["cards"] != exp["cards"]):
@@ -1292,6 +1353,11 @@ class BeliefReplay:
                 # whose size depends on fitting cards in the deck): let the hidden
                 # cards qualify
                 start = self._chain_start()
+                if start is None and exp["type"] == "CHAINING" and exp["trigger_con"] == self.opponent:
+                    # (a trigger of the opponent that the replay did not raise: its
+                    # event can lie in the chain that just ended, e.g. a summon whose
+                    # trigger is raised only if the deck holds a fitting card)
+                    start = self._prev_chain_start()
                 if start is not None and (start, self.pos) not in self.match_piles \
                         and (start, self.pos) not in self.nomatch_piles:
                     fix = ("matchpile", start, self.pos)
@@ -1506,6 +1572,56 @@ class BeliefReplay:
         if not entries or entries[0] in self.failed_identities:
             return None
         return ("identify_all", *entries)
+
+    def _viewer_copy_fix(self, li: dict, duel: Duel, cp) -> tuple | None:
+        """Swaps the viewer's card at `li` with another copy of it (one whose
+        history could differ: in a hidden pile or in the GY)."""
+        live = infer.LocMap(duel)
+        a = live.at(li)
+        code = live.codes.get(a) if a else None
+        if not code:
+            return None
+        for loc in (C.LOCATION_HAND, C.LOCATION_DECK, C.LOCATION_GRAVE, C.LOCATION_REMOVED):
+            for c, b in duel.location_cards(self.viewer, loc):
+                if c == code and b != a:
+                    fix = self._history_swap(a, b, cp)
+                    if fix is not None:
+                        return fix
+        return None
+
+    def _arrival_fix(self, ch: dict) -> tuple | None:
+        """Identifies the activating card's slot with one of the latest cards of
+        the pile it was shuffled from (the latest first), each tried once."""
+        slot = (ch["trigger_con"], ch["trigger_loc"], ch["trigger_seq"])
+        try:
+            v = self.lockstep.var_at(*slot)
+        except TrackerError:
+            return None
+        if v is None or v.kind != "claim" or v.pool is None:
+            return None
+        # (only cards that came into that pile just before: since the start of the
+        # chain that ended right before, or of the phase)
+        arrived = 0
+        for j in range(self.pos - 1, max(-1, self.pos - 60), -1):
+            it = self.items[j]
+            if it[0] != "msg":
+                continue
+            m = it[1]
+            if m["type"] in ("NEW_PHASE", "NEW_TURN"):
+                break
+            if m["type"] == "DRAW" and m["player"] == slot[0] and slot[1] == C.LOCATION_HAND:
+                arrived += len(m["cards"])
+            elif m["type"] == "MOVE" and (m["to"]["con"], m["to"]["loc"]) == slot[:2] \
+                    and (m["from"]["con"], m["from"]["loc"]) != slot[:2]:
+                arrived += 1
+        for m in list(reversed(v.pool.members))[:min(arrived, 4)]:
+            known = m.fixed_code if m.fixed_code is not None else m.code
+            if known is not None and known != ch["code"]:
+                continue
+            entry = (self.pos, slot, m.id)
+            if entry not in self.identities and entry not in self.failed_identities:
+                return ("identify", *entry)
+        return None
 
     def _identify_fix(self, le: dict, lg: dict) -> tuple | None:
         solved = getattr(self, "_solved", None)
@@ -1756,9 +1872,11 @@ class BeliefReplay:
             return None
 
         def hidden(c):
+            # (a field card whose code is masked is face-down: some prompts, e.g.
+            # SELECT_TRIBUTE, list no positions)
             return c["con"] == self.opponent and not c.get("code") and (
                 c["loc"] in HIDDEN_PILES or (c["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE)
-                                             and c.get("pos", 0) & C.POS_FACEDOWN))
+                                             and c.get("pos", C.POS_FACEDOWN) & C.POS_FACEDOWN))
         want = {(c["con"], c["loc"], c["seq"]) for c in exp[key] if hidden(c)}
         have = {(c["con"], c["loc"], c["seq"]) for c in got[key] if hidden(c)}
         if want == have:
@@ -1937,8 +2055,12 @@ class BeliefReplay:
                 for o in prompt["chains"]:
                     key = (self.opponent, o["code"], o["desc"])
                     if key in self._active_forces:
+                        # (first only from later on: e.g. a quick effect forced from the
+                        # start of the End Phase joins the phase's own mandatory effects,
+                        # which the real game applied before the effect was activated)
+                        later = any(w[2] == key and w[0] <= self.pos < w[1] - 1 for w in self.force_windows)
                         raise Divergence(self.pos, "a forced effect became mandatory",
-                                         fix=("unforce", *key))
+                                         fix=("forcelater", *key) if later else ("unforce", *key))
         if ch is None or ch["trigger_con"] != self.opponent:
             return
         if t == "SELECT_EFFECTYN":
@@ -1957,9 +2079,14 @@ class BeliefReplay:
             # a check beyond its cost and target
             # depends on hidden cards (e.g. "can be activated the turn it was Set"
             # if the deck has a fitting card); let them qualify until it is chained
+            if ch["trigger_loc"] == C.LOCATION_HAND:
+                # (or the card in that slot is the wrong copy, e.g. a trigger of a
+                # card added to the hand by an effect, the hand shuffled since: one
+                # of the cards that came in last)
+                fix = self._arrival_fix(ch)
             end = next((j for j in range(self.pos, len(self.items)) if self.items[j][0] == "msg"
                         and self.items[j][1]["type"] == "CHAINED"), None)
-            if end is not None and (self.pos, end) not in self.match_piles:
+            if fix is None and end is not None and (self.pos, end) not in self.match_piles:
                 fix = ("matchpile", self.pos, end)
         if fix is not None:
             raise Divergence(self.pos, "opponent activation is not available in the replay", fix=fix)
@@ -2066,8 +2193,8 @@ class BeliefReplay:
     def _check_idle_assumption(self, prompt: dict, up: list[dict]) -> None:
         """The opponent set a hidden hand card that has the wrong kind in the hypothesis."""
         for i, m in enumerate(up):
-            if m["type"] in infer._ACTIVATION_PRELUDE or m["type"] in ("PAY_LPCOST",):
-                continue
+            if m["type"] in infer._ACTIVATION_PRELUDE or m["type"] in ("PAY_LPCOST", "FIELD_DISABLED"):
+                continue  # (e.g. zones a Tributed monster had disabled become usable)
             if m["type"] != "SET":
                 return
             src = infer.source_of(m, up[:i])
@@ -2224,6 +2351,43 @@ class BeliefReplay:
             if it[0] == "msg" and it[1]["type"] == "CHAINING":
                 return j if it[1]["trigger_con"] == self.opponent else None
         return None
+
+    def _action_start(self) -> int:
+        """Stream position after the latest chain end or phase start."""
+        for j in range(self.pos - 1, max(-1, self.pos - 40), -1):
+            it = self.items[j]
+            if it[0] == "msg" and it[1]["type"] in ("CHAIN_END", "CHAIN_SOLVED", "NEW_PHASE", "NEW_TURN"):
+                return j + 1
+        return max(0, self.pos - 40)
+
+    def _nomatch_span(self, start: int | None) -> tuple[int, int] | None:
+        """The first untried span over which hidden cards may match nothing: the
+        chain link being resolved alone (other links resolved before it need
+        their own cards, e.g. an earlier Fusion with the same spell), then from
+        the opponent's activation `start` on."""
+        link = self._link_start()
+        spans = []
+        if link < self.pos and self.items[link][1]["type"] == "CHAIN_SOLVING" and (start is None or link > start):
+            spans.append((link, self.pos))
+        spans.append((min(link, start if start is not None else self.pos), self.pos))
+        return next((sp for sp in spans if sp not in self.nomatch_piles and sp not in self.match_piles), None)
+
+    def _prev_chain_start(self) -> int | None:
+        """Stream position of the first CHAINING of the chain that ended just
+        before (only hints and phase messages after its end)."""
+        j = self.pos - 1
+        while j >= 0 and self.items[j][0] == "msg" and self.items[j][1]["type"] in ("HINT", "PLAYER_HINT", "CARD_HINT"):
+            j -= 1
+        if j < 0 or self.items[j][0] != "msg" or self.items[j][1]["type"] != "CHAIN_END":
+            return None
+        first = None
+        for k in range(j - 1, max(-1, j - 80), -1):
+            it = self.items[k]
+            if it[0] == "msg" and it[1]["type"] in ("CHAIN_END", "NEW_PHASE", "NEW_TURN"):
+                break
+            if it[0] == "msg" and it[1]["type"] == "CHAINING":
+                first = k
+        return first
 
     def _link_start(self) -> int:
         """Stream position where the chain link being built or resolved began
@@ -2402,8 +2566,8 @@ class BeliefReplay:
                     start = next((j for j in range(self.pos - 1, max(-1, self.pos - 12), -1)
                                   if self.items[j][0] == "msg" and self.items[j][1]["type"] == "CHAINING"
                                   and self.items[j][1]["trigger_con"] == self.opponent), None)
-                span = (min(self._link_start(), start if start is not None else self.pos), self.pos)
-                if span not in self.nomatch_piles and span not in self.match_piles:
+                span = self._nomatch_span(start)
+                if span is not None:
                     fix = ("nomatchpile", *span)
             raise Divergence(self.pos, f"no candidate response for opponent {prompt['type']}", fix=fix)
         dkey = self._dkey if self.depth == 0 else None
@@ -2522,8 +2686,8 @@ class BeliefReplay:
             # script offers just the available ones), the replay has more because
             # hidden (filler) cards satisfy a condition: let them match nothing
             start = self._chain_start()
-            span = (min(self._link_start(), start if start is not None else self.pos), self.pos)
-            if span not in self.nomatch_piles and span not in self.match_piles:
+            span = self._nomatch_span(start)
+            if span is not None:
                 fix = ("nomatchpile", *span)
         cards = prompt.get("cards") or prompt.get("select_cards") or []
         if fix is None and prompt["type"] in CARD_PROMPTS and cards and all(
@@ -2534,8 +2698,8 @@ class BeliefReplay:
             # replay's hidden (filler) cards fit the selection (e.g. "each player
             # adds a Normal Monster from their Deck" with none in that Deck)
             start = self._chain_start()
-            span = (min(self._link_start(), start if start is not None else self.pos), self.pos)
-            if span not in self.nomatch_piles and span not in self.match_piles:
+            span = self._nomatch_span(start)
+            if span is not None:
                 fix = ("nomatchpile", *span)
         d = Divergence(self.pos, f"no candidate for opponent {prompt['type']} survived probing",
                        None, prompt, fix)

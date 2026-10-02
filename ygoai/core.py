@@ -11,7 +11,7 @@ from pathlib import Path
 
 from . import constants as C
 from .carddb import CardDB, default_db
-from .paths import CARD_SCRIPTS_DIR, CORE_LIB, OVERRIDE_SCRIPTS
+from .paths import CARD_SCRIPTS_DIR, CORE_LIB, FIXED_CARD_SCRIPTS_DIR, OVERRIDE_SCRIPTS
 
 _ALL_LOCS = (C.LOCATION_DECK, C.LOCATION_HAND, C.LOCATION_MZONE, C.LOCATION_SZONE,
              C.LOCATION_GRAVE, C.LOCATION_REMOVED, C.LOCATION_EXTRA)
@@ -183,7 +183,8 @@ def _find_script(name: str) -> bytes | None:
         return data
     candidates = []
     if base.startswith("c") and base[1:-4].isdigit():
-        candidates = [CARD_SCRIPTS_DIR / "official" / base, CARD_SCRIPTS_DIR / "pre-release" / base,
+        candidates = [] if os.environ.get("YGOAI_NO_OVERRIDES") else [FIXED_CARD_SCRIPTS_DIR / base]
+        candidates += [CARD_SCRIPTS_DIR / "official" / base, CARD_SCRIPTS_DIR / "pre-release" / base,
                       CARD_SCRIPTS_DIR / "pre-errata" / base, CARD_SCRIPTS_DIR / "goat" / base]
     candidates.append(CARD_SCRIPTS_DIR / base)
     data = None

@@ -205,11 +205,11 @@ all of them have been used while developing (5000-6999 started out fresh, at 99.
 |----------|-----------|-----------|-----------|--------------------------|---------------------------|-----------------------------------------|
 | turn 1   | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                                  |
 | turn 2   | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                                  |
-| turn 3   | 99.92%    | 100.0%    | 100.0%    | 99.92%                   | 99.84%                    | 100.0%                                  |
-| ~1/3     | 100.0%    | 100.0%    | 100.0%    | 99.85%                   | 99.95%                    | 99.85%                                  |
-| ~2/3     | 100.0%    | 100.0%    | 100.0%    | 99.75%                   | 99.90%                    | 99.90%                                  |
-| full game| 100.0%    | 100.0%    | 99.85%    | 99.65%                   | 99.75%                    | 99.75%                                  |
-| overall  | 99.99%    | 100.0%    | 99.97%    | 99.84%                   | 99.90%                    | 99.90%                                  |
+| turn 3   | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                                  |
+| ~1/3     | 100.0%    | 100.0%    | 100.0%    | 99.90%                   | 100.0%                    | 100.0%                                  |
+| ~2/3     | 100.0%    | 100.0%    | 100.0%    | 99.80%                   | 100.0%                    | 100.0%                                  |
+| full game| 100.0%    | 100.0%    | 99.90%    | 99.70%                   | 99.90%                    | 99.90%                                  |
+| overall  | 100.0%    | 100.0%    | 99.98%    | 99.88%                   | 99.98%                    | 99.98%                                  |
 
 Fresh seeds are the honest measure: the corpus has ~164k decks, and new decks bring new card
 mechanics (every range so far started between 99.3% and 99.4% when it was fresh). About 97% of
@@ -313,6 +313,9 @@ filters in a canonical form (and ANNOUNCE_NUMBER options sorted).
   `YGOAI_NO_OVERRIDES=1` loads the original helpers: 780 games compared (seeds 1000-1099,
   5000-5099, 6000-6099, 6900-6999 and the whole opening book) are identical, except one game
   from the point where the original ran into the budget.
+* `core_ext/lua/cards/`: corrected copies of card scripts with bugs, used instead of the
+  CardScripts originals (e.g. Oracle of the Herald imposed a chain limit when its activation
+  was only checked, so a set copy kept the opponent from responding to unrelated events).
 * A card entering the hand, deck or Extra Deck forgets its position and activation history
   (JUST_POS, CONTINUOUS_POS, ATTACK_CANCELED, ACT_FROM_HAND status bits): it is a new object by
   the rules, and the stale bits made physical copies distinguishable.
