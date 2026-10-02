@@ -928,7 +928,7 @@ def _infer_deck_sort(prompt: dict, up: list[dict]) -> list[int] | None:
     return [tc.index(seqs[i]) for i in range(count)]
 
 
-def _sort_by_events(cards: list[dict], up: list[dict]) -> list[int] | None:
+def _sort_by_events(cards: list[dict], up: list[dict]) -> list[list[int]]:
     """Effects that are no chain links (e.g. attack costs: "send a card", "pay
     500 LP") applied in the chosen order: each shows as one event, and copies of a
     card as the same kind of event. Match the cards' codes to the kinds of the next
@@ -940,27 +940,31 @@ def _sort_by_events(cards: list[dict], up: list[dict]) -> list[int] | None:
             continue
         if len(events) == len(cards):
             break
-        events.append(m["type"])
+        # (a move by where it comes from: e.g. "banish a card from your hand" and
+        # "send the top card of your deck" are different kinds)
+        events.append(("MOVE", m["from"]["loc"]) if m["type"] == "MOVE" else m["type"])
     if len(events) != len(cards):
-        return None
+        return []
     codes = sorted({c["code"] for c in cards})
-    kinds = sorted(set(events))
+    kinds = sorted(set(events), key=str)
     count = {c: sum(1 for x in cards if x["code"] == c) for c in codes}
     fits = []
-    for assign in itertools.product(kinds, repeat=len(codes)):
-        if len(fits) > 1:
+    for assign in itertools.islice(itertools.product(kinds, repeat=len(codes)), 4096):
+        if len(fits) > 4:
             break
         f = dict(zip(codes, assign))
         if all(sum(count[c] for c in codes if f[c] == t) == events.count(t) for t in kinds):
             fits.append(f)
-    if len(fits) != 1:
-        return None  # (no or several ways: the events do not tell)
-    f = fits[0]
-    order = [None] * len(cards)
-    for k, t in enumerate(events):
-        i = next(i for i, c in enumerate(cards) if order[i] is None and f[c["code"]] == t)
-        order[i] = k
-    return order
+    # (every way the counts allow, e.g. two cards with one event each: which
+    # one is the LP payment does not show; the candidates are probed)
+    orders = []
+    for f in fits[:4]:
+        order = [None] * len(cards)
+        for k, t in enumerate(events):
+            i = next(i for i, c in enumerate(cards) if order[i] is None and f[c["code"]] == t)
+            order[i] = k
+        orders.append(order)
+    return orders
 
 
 def infer_sort(prompt: dict, up: list[dict]) -> tuple[list[dict], bool]:
@@ -989,9 +993,7 @@ def infer_sort(prompt: dict, up: list[dict]) -> tuple[list[dict], bool]:
             if k == n:
                 return cands, True
         else:
-            order = _sort_by_events(prompt["cards"], up)
-            if order is not None:
-                cands.append({"order": order})
+            cands += [{"order": order} for order in _sort_by_events(prompt["cards"], up)]
     if prompt["type"] == "SORT_CARD":
         order = _infer_deck_sort(prompt, up)
         if order is not None:

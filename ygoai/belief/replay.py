@@ -1339,6 +1339,18 @@ class BeliefReplay:
                 span = self._nomatch_span(start)
                 if span is not None:
                     fix = ("nomatchpile", *span)
+            if fix is None and exp["type"] == "WIN" and got["type"] != "WIN":
+                # the real game ended where the replay went on: the real one stopped
+                # at a prompt (the win is checked then), e.g. "if an excavated card
+                # fits, you can ...": let the hidden cards qualify, else match nothing
+                start = self._chain_start()
+                if start is not None:
+                    # (first only the last step: what came before matched the stream)
+                    for a in (max(start, self.pos - 1), start):
+                        for kind in ("matchpile", "nomatchpile"):
+                            if fix is None and (a, self.pos) not in self.match_piles \
+                                    and (a, self.pos) not in self.nomatch_piles:
+                                fix = (kind, a, self.pos)
             if fix is None and got["type"] == "DECK_TOP" and exp["type"] != "DECK_TOP":
                 # the replay's shuffled deck has a face-up card on top that the real
                 # one did not announce (e.g. a card that turned itself face-up in the
@@ -2802,6 +2814,7 @@ class BeliefReplay:
         # without contradicting the stream comes after those.
         best = None  # (reached, repairable, candidate)
         unrefuted = None
+        failures = []  # (reached) of the candidates that failed
         for k, c in enumerate(valid[:self.max_probes]):
             if k >= n_inferred and (best is not None or unrefuted is not None):
                 break  # (the answers inference left out only when its own all failed)
@@ -2820,7 +2833,15 @@ class BeliefReplay:
                     best = (*key, c)
             if outcome == PROBE_TIMEOUT and unrefuted is None:
                 unrefuted = c
+            if outcome == PROBE_FAILED:
+                failures.append(reached)
         choice = best[2] if best is not None else unrefuted
+        if choice is None and self.depth == 0 and len(failures) == len(valid) > 1 \
+                and len(set(failures)) == 1 and failures[0] >= self.pos:
+            # every answer failed at the same later point: what failed does not
+            # depend on this decision (e.g. a later "one more?" that the probes
+            # could not explore in turn): go on, the later decision is probed then
+            choice = valid[0]
         if choice is not None:
             self._trace(prompt, choice, False, len(valid))
             return choice
