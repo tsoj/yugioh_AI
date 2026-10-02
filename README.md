@@ -222,7 +222,11 @@ separately by `check_belief.py`; 5 of the ~79,000 reconstructions in the table a
 
 Fresh seeds are the honest measure: the corpus has ~164k decks, and new decks bring new card
 mechanics (the earlier ranges started between 99.3% and 99.4% when they were fresh, 7000-7999 at
-99.79%). About 97-98% of all reconstructions need no repair restart at all.
+99.79%). About 97-98% of all reconstructions need no repair restart at all. The latest fresh
+test (seeds never used in development: 10000-13999 with all deck and agent variants, all 381
+book openings twice with new shuffles, 300 `belief_mc` games; ~50,000 reconstructions) started
+at 99.92-100% and is at 99.98-100% after the fixes it prompted; what remains is the class below
+(hidden deck contents with a specific property) and one 93-turn game over the time limit.
 
 For broad tests, `scripts/make_book.py` builds an opening book whose 762 decks (381 openings)
 together contain every card of the usable corpus decks (13,869); `--book build/book.jsonl` plays
@@ -237,6 +241,12 @@ greedy rollouts, vanilla deck completion) against `greedy`, 40 openings with swa
 +52 =0 -28, Elo +107 +/- 67.
 
 Open design questions (from the remaining failures):
+
+* **Hidden deck contents with a specific property.** Forcing hidden cards to match a filter
+  covers "the deck holds a fitting card", but not checks over a property of several cards, e.g.
+  two Pendulum Scales that differ (Solfachord Happiness) or an Xyz monster a given number of Ranks
+  higher in the Extra Deck (Rank-Up-Magic) that was never revealed. That needs stand-ins chosen
+  from cards with the property (or the opponent's seen cards) instead of inert fillers.
 
 * **Physical identity in the solver.** The flow model reasons about codes; identity facts enter
   it only where they imply code facts, and the per-shuffle matching applies the rest. An exact
@@ -288,7 +298,14 @@ relation between card and chain link, `OCG_ExtChainRelated`). And the timing of 
 shuffles: inside an operation they are done when it ends, unless an adjustment runs in
 between, which hidden cards can cause (Exodia the Forbidden One in the hand checks for a win
 whenever any card is added to a hand, so the opponent's search shuffled before its reveal
-instead of after it); the patched core leaves them to the end of the operation.
+instead of after it); the patched core leaves them to the end of the operation. The order in
+which continuous effects apply: an effect with a condition got a new id (its "timestamp")
+whenever its condition was evaluated and found true again, but conditions are evaluated lazily,
+whenever something asks (e.g. a hidden card's activation check reading Levels), so a Level that
+"becomes 2" before or after a "+2 in the Main Phase" depended on the opponent's hidden cards; the
+patched core keeps the registration order. And conversely, a card kept revealed in the hand now
+stays visible through hand shuffles (the shuffle message marks face-up cards), as it would at the
+table.
 
 Card creation order: the core gives every card an id in creation order and processes groups
 (a script's loop over a group, the moves of one operation, target announcements, counters

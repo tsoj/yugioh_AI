@@ -564,8 +564,15 @@ class Tracker:
             pool = self._shuffle(p, C.LOCATION_HAND)
             if len(m["codes"]) != len(pool.claims):
                 raise TrackerError("hand size mismatch on shuffle")
-            for v, code in zip(pool.claims, m["codes"]):
+            for v, code, pub in zip(pool.claims, m["codes"], m.get("public") or [False] * len(m["codes"])):
+                v.faceup = pub
                 self.observe(v, code)
+                if pub:
+                    # (a revealed card stays the same physical card: the one that
+                    # was face-up in the hand before, if only one with its code was)
+                    before = [x for x in pool.members if x.faceup and (x.code or x.fixed_code) == code]
+                    if len(before) == 1:
+                        self._identify(v, before[0])
         elif t == "SHUFFLE_EXTRA":
             p = m["player"]
             pool = self._shuffle(p, C.LOCATION_EXTRA)

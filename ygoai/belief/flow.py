@@ -524,6 +524,13 @@ class FlowSolver:
                 need = _wild_need(commodities[vcom[a.id]][1])
                 cands = [c for c in comp.stand_ins(need) if counts[self._base(c)] < 3
                          and c not in excluded.get(a.id, ())]
+                if self.db is not None and need[0] == "mset" \
+                        and excluded.get(a.id, set()) & set(comp.stand_ins(need)):
+                    # (once a stand-in was ruled out, e.g. it could be attacked where the
+                    # real card could not: the races of the player's known monsters first)
+                    races = Counter(self.db.get(r).race for r in counts if self.db.get(r)
+                                    and self.db.get(r).type & C.TYPE_MONSTER)
+                    cands.sort(key=lambda c: -races[self.db.get(c).race] if self.db.get(c) else 0)
                 if not cands:
                     raise TrackerError(f"no stand-in for a hidden card of kind {need}")
                 a.resolved = cands[0]

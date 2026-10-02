@@ -11,8 +11,9 @@ from ..carddb import CardDB, default_db
 def tribute_levels_any(tributes: int) -> range:
     """Levels a monster Set (or Normal Summoned) with that many Tributes can have at
     all: effects can lower the Tributes a monster needs (e.g. a Level 7 Set with
-    one Tribute), so only a lower bound."""
-    return {0: range(0, 5), 1: range(5, 13)}.get(tributes, range(7, 13))
+    one Tribute, or a Level 5 WATER monster without any under A Legendary Ocean,
+    which lowers the Levels in the hand), so only a lower bound."""
+    return {0: range(0, 13), 1: range(5, 13)}.get(tributes, range(7, 13))
 
 
 def tribute_levels(tributes: int) -> range:
@@ -124,6 +125,15 @@ class VanillaCompletion(DeckCompletion):
         self.settable_monsters_all = []
         for levels in (range(1, 5), range(5, 7), range(7, 13)):
             self.settable_monsters_all += [c for c in vanillas if self.db.get(c).level in levels][:6]
+        # (then one of each race and Level band: a hidden monster's race can matter,
+        # e.g. "cannot be attacked while you control another Fiend")
+        for levels in (range(1, 5), range(5, 7), range(7, 13)):
+            seen_races = set()
+            for c in vanillas:
+                card = self.db.get(c)
+                if card.level in levels and card.race not in seen_races and c not in self.settable_monsters_all:
+                    seen_races.add(card.race)
+                    self.settable_monsters_all.append(c)
         normal_st = sorted(c.code for c in cards if c.type in (C.TYPE_SPELL, C.TYPE_TRAP)
                            and not c.alias and c.ot & 0x3)
         # the lowest codes, plus some spread over the whole range (the code

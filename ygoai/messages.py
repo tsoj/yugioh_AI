@@ -240,7 +240,10 @@ def _p_player(r):
 
 def _p_shuffle_codes(r):
     d = {"player": r.u8()}
-    d["codes"] = _list(r, lambda r: r.u32())
+    raw = _list(r, lambda r: r.u32())
+    # (the patched core marks face-up cards with the top bit)
+    d["codes"] = [c & 0x7fffffff for c in raw]
+    d["public"] = [bool(c & 0x80000000) for c in raw]
     return d
 
 

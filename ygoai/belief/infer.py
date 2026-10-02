@@ -33,10 +33,13 @@ def prelude_fits(before: list[dict], ch: dict) -> bool:
     replaces leaves), or an LP cost of activating is paid (e.g. imposed by a
     continuous effect). Anything else is an earlier, different action. (An LP
     payment can also be another effect's maintenance cost: see infer_chain.)"""
+    replaced = False  # (a field spell left for the activated one)
     for m in before:
         t = m["type"]
         if t == "PAY_LPCOST" and m["player"] == ch["trigger_con"]:
             continue
+        if t == "POS_CHANGE" and replaced and m["prev_pos"] & C.POS_FACEUP and m["pos"] & C.POS_FACEUP:
+            continue  # (forced by the rules once the old field spell's effects end)
         if t == "HINT" and m["hint_type"] == C.HINT_EVENT:
             return False  # a timing event starts a new chain window: a later one
         if t in ("HINT", "CARD_HINT"):
@@ -46,6 +49,7 @@ def prelude_fits(before: list[dict], ch: dict) -> bool:
             continue  # (a change between face-up positions is a separate command)
         if t == "MOVE" and ((same_loc(m["to"], ch) and m["to"]["loc"] == C.LOCATION_SZONE)
                             or (m["from"]["loc"] == C.LOCATION_SZONE and m["from"]["seq"] == 5)):
+            replaced = replaced or m["from"]["loc"] == C.LOCATION_SZONE and m["from"]["seq"] == 5
             continue  # (a card is placed to be activated only in the spell/trap zone)
         return False
     return True
@@ -171,6 +175,10 @@ def infer_idle(prompt: dict, up: list[dict], up_ext: list[dict] | None = None) -
                      and any(same_loc(e, c) for c in m["cards"])]
             if cands:
                 return [{"kind": "spsummon", "index": j} for j in cands], len(cands) == 1
+        if t == "POS_CHANGE" and m["prev_pos"] & C.POS_FACEUP and m["pos"] & C.POS_FACEUP and any(
+                x["type"] == "MOVE" and x["from"]["loc"] == C.LOCATION_SZONE and x["from"]["seq"] == 5
+                for x in before):
+            continue  # (forced once a field spell left, e.g. replaced by an activated one)
         if t == "POS_CHANGE" and m["loc"] == C.LOCATION_MZONE:
             cands = [j for j, e in enumerate(prompt["repositionable"]) if same_loc(e, m)]
             if cands:
@@ -708,9 +716,10 @@ def selection_window(up: list[dict]) -> list[dict]:
     for i, m in enumerate(up):
         if m["type"] in _WINDOW_END:
             return up[:i]
-        if m["type"] == "BECOME_TARGET" and any(x["type"] not in ("HINT", "CARD_HINT") for x in up[:i]):
-            # (targets chosen after other consequences, e.g. after the cost's moves,
-            # belong to a later selection)
+        if m["type"] in ("BECOME_TARGET", "CARD_SELECTED") \
+                and any(x["type"] not in ("HINT", "CARD_HINT") for x in up[:i]):
+            # (targets chosen, or cards announced, after other consequences, e.g.
+            # after the cost's moves, belong to a later selection)
             return up[:i]
     return up
 

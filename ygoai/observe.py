@@ -355,7 +355,9 @@ def _filter_message(msg: dict, viewer: int) -> dict | None:
     if t in ("SHUFFLE_HAND", "SHUFFLE_EXTRA"):
         if msg["player"] == viewer:
             return msg
-        return {**msg, "codes": [0] * len(msg["codes"])}
+        # (a face-up card, e.g. one kept revealed in the hand, stays visible)
+        public = msg.get("public") or [False] * len(msg["codes"])
+        return {**msg, "codes": [c if pub else 0 for c, pub in zip(msg["codes"], public)]}
     if t == "SET":
         if msg["con"] == viewer:
             return msg
