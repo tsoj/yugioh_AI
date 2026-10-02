@@ -232,8 +232,8 @@ class BeliefReplay:
         # "unforce" repairs the rare case where that makes a mandatory effect
         # activate when it did not.
         self.forces: set[tuple[int, int, int]] = {
-            (self.opponent, it[1]["code"], it[1]["desc"]) for it in self.items
-            if it[0] == "msg" and it[1]["type"] == "CHAINING" and it[1]["trigger_con"] == self.opponent}
+            (self.opponent, it[1]["code"], it[1]["desc"]) for j, it in enumerate(self.items)
+            if it[0] == "msg" and it[1]["type"] == "CHAINING" and self._opp_activates(j)}
         self.unforced: set[tuple[int, int, int]] = set()
         self.unforced_windows: set[tuple] = set()  # force windows switched off by "unforce"
         # the forcing applies only around the activation: from the start of its
@@ -248,7 +248,7 @@ class BeliefReplay:
             m = it[1]
             if m["type"] in ("NEW_PHASE", "NEW_TURN"):
                 start = i
-            elif m["type"] == "CHAINING" and m["trigger_con"] == self.opponent:
+            elif m["type"] == "CHAINING" and self._opp_activates(i):
                 chaining = m["code"]
                 self.force_windows.append((start, i + 1, (self.opponent, m["code"], m["desc"])))
             elif m["type"] == "CHAINED":
@@ -287,6 +287,7 @@ class BeliefReplay:
         # selection changed to include a card that later shows to have been in it)
         self.forced_resp: dict[tuple[int, int], dict] = {}
         self.tried_resp: set[tuple] = set()
+        self.tried_silent: set[tuple] = set()  # (decision, answer) tried for silent choices
         self._last_hyp_fix: str | None = None
         # opponent decisions of earlier attempts: (pos, prompt) -> response
         self.memo: dict[tuple, tuple] = {}  # -> (answer, (candidates, index) for the decision search)
@@ -341,6 +342,7 @@ class BeliefReplay:
         self._card_decisions: dict[tuple, dict[int, int]] = {}  # decision -> card id -> answer index
         self._window_choices: list[tuple] = []  # (decision, activation answer) passed in leave windows
         self._hidden_picks: list[tuple] = []  # (position, span) of opponent choices among its hidden cards
+        self._silent_choices: list[tuple] = []  # (decision, card ids, candidates, index) nothing revealed
         self._multi_decisions: dict[tuple, tuple] = {}  # decision -> (card ids, chosen response)
         self._roll_dirty = True  # whether a card may have moved since that snapshot
         self.lockstep = Tracker(self.viewer, self.init)
@@ -1027,6 +1029,24 @@ class BeliefReplay:
                 duel.set_response(encode(prompt, resp))
                 pending_resp = resp
 
+    def _opp_activates(self, j: int) -> bool:
+        """Whether the CHAINING at stream position j is the opponent's activation:
+        its controller, or (an effect either player may use, e.g. of a field
+        spell) the opponent picks its option or pays its cost while it is built."""
+        m = self.items[j][1]
+        if m["trigger_con"] == self.opponent:
+            return True
+        for it in self.items[j + 1:j + 12]:
+            if it[0] != "msg":
+                continue
+            x = it[1]
+            if x["type"] == "CHAINED":
+                break
+            if (x["type"] == "PAY_LPCOST" or x["type"] == "HINT" and x["hint_type"] == C.HINT_OPSELECTED) \
+                    and x["player"] == self.opponent:
+                return True
+        return False
+
     def _apply_forces(self, duel: Duel) -> None:
         active = frozenset(k for start, end, k in self.force_windows
                            if start <= self.pos <= end and k in self.forces
@@ -1381,10 +1401,34 @@ class BeliefReplay:
             if fallback is not None and not any(k[0] > at and n > 1 for k, n, _ in self._recent):
                 # (no later decision could explain the consequences instead)
                 fix, fallback = fallback, None
+        if fix is None and fallback is None and got.get("type") == "MOVE":
+            # (last resort) a card moved that an earlier choice of the opponent may
+            # have singled out without anything showing it then (another card was
+            # the one, e.g. "it returns to the hand during the End Phase")
+            fallback = self._silent_choice_fix(infer.LocMap(duel).at(got["to"]) if got["to"]["loc"] else None)
         what = item[1].get("type") if item[0] == "msg" else item[0]
         d = Divergence(self.pos, f"message mismatch [{what} vs {got.get('type')}]", item, got, fix)
         d.fallback = fallback
         return d
+
+    def _note_silent(self, duel: Duel, up: list[dict], dkey: tuple, ids: list, valid: list, i: int) -> None:
+        if len(valid) > 1 and not set(infer.LocMap(duel).references(infer.selection_window(up))) & set(ids):
+            # (nothing shows which card was chosen before the action ends: its
+            # consequence can come much later, e.g. "it returns to the hand during
+            # the End Phase")
+            self._silent_choices.append((dkey, ids, len(valid), i))
+
+    def _silent_choice_fix(self, cid: int | None) -> tuple | None:
+        if not cid:
+            return None
+        for dkey, ids, n, i in reversed(self._silent_choices):
+            # (older than the decision search's window: nearer ones are its business)
+            if cid in ids and dkey[0] < self.pos - _DECISION_WINDOW:
+                for k in range(n):
+                    if k != i and (dkey, k) not in self.tried_silent:
+                        self.tried_silent.add((dkey, k))
+                        return ("decide", dkey, k)
+        return None
 
     def _hidden_pick_fallback(self) -> tuple[tuple | None, int]:
         """(Last resort, once the decision search found nothing.) The opponent
@@ -2061,7 +2105,11 @@ class BeliefReplay:
                         later = any(w[2] == key and w[0] <= self.pos < w[1] - 1 for w in self.force_windows)
                         raise Divergence(self.pos, "a forced effect became mandatory",
                                          fix=("forcelater", *key) if later else ("unforce", *key))
-        if ch is None or ch["trigger_con"] != self.opponent:
+        if ch is None:
+            return
+        j = next((k for k in range(self.pos, min(len(self.items), self.pos + 40)) if self.items[k][0] == "msg"
+                  and self.items[k][1] is ch), None)
+        if ch["trigger_con"] != self.opponent and (j is None or not self._opp_activates(j)):
             return
         if t == "SELECT_EFFECTYN":
             options = [prompt]
@@ -2349,7 +2397,7 @@ class BeliefReplay:
             if it[0] == "msg" and it[1]["type"] in ("CHAIN_END", "NEW_PHASE", "NEW_TURN"):
                 return None  # (no chain is being built or resolved)
             if it[0] == "msg" and it[1]["type"] == "CHAINING":
-                return j if it[1]["trigger_con"] == self.opponent else None
+                return j if self._opp_activates(j) else None
         return None
 
     def _action_start(self) -> int:
@@ -2590,6 +2638,8 @@ class BeliefReplay:
                 return r
         if dkey is not None and dkey in self.overrides and self.overrides[dkey] < len(valid):
             i = self.overrides[dkey]
+            if ids is not None and valid[i].get("indices"):
+                self._note_silent(duel, up, dkey, ids, valid, i)
             self._recent.append((dkey, len(valid), i))
             self._since_state.append((dkey, len(valid), i))
             self._trace(prompt, valid[i], False, len(valid))
@@ -2611,6 +2661,7 @@ class BeliefReplay:
                 self._window_choices.append((dkey, act))
         if dkey is not None and ids is not None and resp.get("indices"):
             self._multi_decisions[dkey] = (ids, resp)
+            self._note_silent(duel, up, dkey, ids, valid, valid.index(resp))
         if dkey is not None and prompt["type"] in CARD_PROMPTS and any(
                 c["con"] == self.opponent and c["loc"] & (C.LOCATION_DECK | C.LOCATION_HAND | C.LOCATION_EXTRA)
                 for c in prompt.get("cards") or prompt.get("select_cards") or []):
