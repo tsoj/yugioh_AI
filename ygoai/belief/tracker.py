@@ -136,6 +136,7 @@ class Tracker:
         # shuffles them back and then moves cards of the same names moves the same
         # physical cards as far as anything shows (it keeps them in a group)
         self._referenced: list[Var] = []
+        self._own_picks: list[tuple[Var, int]] = []  # (card, code) the viewer picked from its deck
         self._referenced_piles: set[tuple[int, int]] = set()  # (con, loc) they were revealed in
         self._picked: list[Var] = []  # of those, the ones picked at random
         self._referenced_in_chain = False  # revealed while a chain was built or resolved
@@ -472,7 +473,7 @@ class Tracker:
             # Burial: it counts for the Level of a Set monster)
             self._releases += 1
         elif t not in ("MOVE", "HINT", "CARD_HINT", "PLAYER_HINT", "MISSED_EFFECT", "SET", "SPSUMMONING",
-                       "ADD_COUNTER", "REMOVE_COUNTER"):
+                       "ADD_COUNTER", "REMOVE_COUNTER", "FIELD_DISABLED"):
             # (a counter placed because of the Tribute is a consequence, not a new
             # action; neither is a notice, e.g. a trigger missed because of a Tribute)
             self._releases = 0
@@ -491,6 +492,14 @@ class Tracker:
                 v = self._new(to["con"], "created")
             else:
                 v = self._take(frm)
+                if self._own_picks and v.kind == "claim" and v.pool is not None \
+                        and frm["con"] == self.viewer and frm["loc"] == C.LOCATION_DECK:
+                    picked = [x for x, code in self._own_picks if code == m["code"]
+                              and any(x is y for y in v.pool.members)]
+                    if picked:
+                        ids = frozenset(x.id for x in picked)
+                        v.allowed = ids if v.allowed is None else (v.allowed & ids) or v.allowed
+                        self._own_picks = [(x, c) for x, c in self._own_picks if x is not picked[0]]
                 if v.kind == "claim" and v.pool is not None and self._referenced and not v.prefer \
                         and (frm["con"], frm["loc"]) in self._referenced_piles:
                     # (the first move out of the shuffled pile)
@@ -683,6 +692,17 @@ class Tracker:
         summons, sets or activates is the one that moves to the field next
         (even if the hand is shuffled in between, e.g. after a reveal)."""
         p = self._last_prompt
+        if p is not None and p["type"] == "SELECT_CARD" and r.get("indices"):
+            # the viewer picked cards of its own deck: a card of that code that
+            # leaves the deck after it was shuffled is one of the picked ones (e.g.
+            # "shuffle the deck, then place it on top")
+            for i in r["indices"]:
+                c = p["cards"][i] if i < len(p["cards"]) else None
+                if c and c["con"] == self.viewer and c["loc"] == C.LOCATION_DECK and c.get("code"):
+                    v = self._plain_var(c["con"], c["loc"], c["seq"])
+                    if v is not None:
+                        self._own_picks.append((v, c["code"]))
+            return
         if p is None or p["type"] != "SELECT_IDLECMD" or r.get("kind") not in self._COMMAND_LISTS:
             return
         entries = p.get(self._COMMAND_LISTS[r["kind"]], ())
@@ -706,6 +726,7 @@ class Tracker:
                         v.allowed = ids if v.allowed is None else (v.allowed & ids) or v.allowed
         if p["type"] in ("SELECT_IDLECMD", "SELECT_BATTLECMD"):
             self._chosen = None
+            self._own_picks = []  # (the action that picked them is over)
         self._releases = 0
         # (option lists are shown in a canonical order: their order carries no
         # information, see observe.option_order)

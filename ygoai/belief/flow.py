@@ -77,9 +77,9 @@ class FlowSolver:
         card = self.db.get(code) if self.db is not None else None
         return bool(card is not None and card.is_extra_deck)
 
-    def _fits(self, code: int, need: tuple) -> bool:
+    def _fits(self, code: int, need: tuple, usual: bool = True) -> bool:
         from .completion import fits_need
-        return self.db is not None and fits_need(self.db.get(code), need)
+        return self.db is not None and fits_need(self.db.get(code), need, usual)
 
     # -- model ----------------------------------------------------------------------
     def solve(self) -> Hypothesis:
@@ -212,7 +212,7 @@ class FlowSolver:
                 ok_wilds = set(_need_wilds(v.need))
                 dom = [k for k in dom if isinstance(commodities[k][1], str) and commodities[k][1] in ok_wilds] + \
                       [k for k in dom if not isinstance(commodities[k][1], str)
-                       and self._fits(commodities[k][1], v.need)]
+                       and self._fits(commodities[k][1], v.need, usual=False)]
             if v.excluded:
                 dom = [k for k in dom if commodities[k][1] not in v.excluded]
             return dom
@@ -268,8 +268,12 @@ class FlowSolver:
                 what = commodities[k][1]
                 # prefer unknown cards to extra copies of known ones, and plain
                 # unknown cards to ones of a specific kind
-                cost.append(0.0 if not opp_atom else 1.0 if not isinstance(what, str)
-                            else 0.0 if what in (WILD_MAIN, WILD_EXTRA) else 0.01)
+                cost.append((0.0 if not opp_atom else 1.0 if not isinstance(what, str)
+                             else 0.0 if what in (WILD_MAIN, WILD_EXTRA) else 0.01)
+                            # (a known card whose Level needs fewer Tributes than usual,
+                            # e.g. through an effect: only if nothing else fits)
+                            + (2.0 if vs[0].need is not None and not isinstance(what, str)
+                               and not self._fits(what, vs[0].need) else 0.0))
         colmap: dict[tuple[int, int], int] = {c: j for j, c in enumerate(cols)}
         ncol = len(cols)
         rows, colsi, vals, rlo, rhi = [], [], [], [], []

@@ -191,6 +191,11 @@ def _strip_prompt(msg: dict, viewer: int) -> dict:
         _strip_prompt_cards(m["attackable"], viewer, has_pos=False)
     elif t == "SELECT_CHAIN":
         _strip_prompt_cards(m["chains"], viewer)
+        # (the core's timing hints for the client's auto-pass: what happened since
+        # the windows were last passed, including windows only the opponent's
+        # hidden cards opened, e.g. a hand trap's; a player at a table sees none)
+        m.pop("hint_timing", None)
+        m.pop("hint_timing_other", None)
     elif t == "SELECT_EFFECTYN":
         if m["con"] != viewer and not loc_visible(m, viewer):
             m["code"] = 0

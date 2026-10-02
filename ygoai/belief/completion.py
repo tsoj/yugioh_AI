@@ -8,6 +8,13 @@ from .. import constants as C
 from ..carddb import CardDB, default_db
 
 
+def tribute_levels_any(tributes: int) -> range:
+    """Levels a monster Set (or Normal Summoned) with that many Tributes can have at
+    all: effects can lower the Tributes a monster needs (e.g. a Level 7 Set with
+    one Tribute), so only a lower bound."""
+    return {0: range(0, 5), 1: range(5, 13)}.get(tributes, range(7, 13))
+
+
 def tribute_levels(tributes: int) -> range:
     return {0: range(0, 5), 1: range(5, 7)}.get(tributes, range(7, 13))
 
@@ -39,7 +46,7 @@ def monster_sset_codes() -> set[int]:
     return _monster_sset
 
 
-def fits_need(card, need: tuple) -> bool:
+def fits_need(card, need: tuple, usual: bool = True) -> bool:
     """Whether a card can be the hidden card with requirement `need`:
     ("st",) Set in a spell/trap zone, ("field",) Set in the field zone,
     ("mset", tributes) Set in a monster zone, ("monster",) summoned face-down."""
@@ -55,7 +62,7 @@ def fits_need(card, need: tuple) -> bool:
     if kind in ("mset", "monster"):
         if not card.type & C.TYPE_MONSTER or card.is_extra_deck:
             return False
-        return kind == "monster" or card.level in tribute_levels(need[1])
+        return kind == "monster" or card.level in (tribute_levels if usual else tribute_levels_any)(need[1])
     raise ValueError(f"unknown requirement {need}")
 
 
