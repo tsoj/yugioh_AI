@@ -121,13 +121,18 @@ class FlowSolver:
             return cindex[k]
 
         wilds = [WILD_MAIN, WILD_EXTRA, "st", "field", "monster", "mset0", "mset1", "mset2"]
-        main_codes, extra_codes, token_codes = [], [], []
+        # known codes: one commodity per owner (a card keeps its owner wherever it
+        # goes, and state views show the owner of hidden cards in the hand)
+        main_codes: dict[int, list[int]] = {0: [], 1: []}
+        extra_codes: dict[int, list[int]] = {0: [], 1: []}
+        token_codes: dict[int, list[int]] = {0: [], 1: []}
         for code in sorted(known):
             card = self.db.get(code) if self.db is not None else None
-            if card is not None and card.type & C.TYPE_TOKEN:
-                token_codes.append(com(None, code))
-            else:
-                (extra_codes if self._is_extra(code) else main_codes).append(com(None, code))
+            for p in (0, 1):
+                if card is not None and card.type & C.TYPE_TOKEN:
+                    token_codes[p].append(com(p, code))
+                else:
+                    (extra_codes if self._is_extra(code) else main_codes)[p].append(com(p, code))
         opp = 1 - viewer
         main_wilds = [com(opp, w) for w in wilds if w != WILD_EXTRA]
         extra_wilds = [com(opp, WILD_EXTRA)]
@@ -185,29 +190,50 @@ class FlowSolver:
             for c in pool.claims:
                 owners[c.id] = ow
 
+        def tag_owner(k: int) -> int | None:
+            # (the owner of the physical card a tag stands for, if it is known)
+            ref = refs[commodities[k][1][1]]
+            ow = owners.get(ref.id, frozenset((ref.owner,)))
+            if ref.seen_owner is not None:
+                return ref.seen_owner
+            return next(iter(ow)) if len(ow) == 1 else None
+
         def domain(v: Var) -> list[int]:
             if v.id in ref_tags:
                 return list(ref_tags[v.id])
             dom = plain_domain(v)
-            extra = [q for k in dom if not isinstance(commodities[k][1], (str, tuple))
-                     for q in tags_by_code.get(commodities[k][1], ())]
+            ows = slot_owners(v)
+            extra = list(dict.fromkeys(q for k in dom if not isinstance(commodities[k][1], (str, tuple))
+                                       for q in tags_by_code.get(commodities[k][1], ())
+                                       if tag_owner(q) is None or tag_owner(q) in ows))
             return dom + extra
 
+        def slot_owners(v: Var) -> list[int]:
+            ow = owners.get(v.id, frozenset((v.owner,)))
+            if v.seen_owner is not None:
+                # (shown by a state view)
+                ow = (ow & {v.seen_owner}) or frozenset((v.seen_owner,))
+            return sorted(ow)
+
         def plain_domain(v: Var) -> list[int]:
+            ows = slot_owners(v)
             code = v.fixed_code if v.fixed_code is not None else v.code
             if code:
-                return [com(None, code)]
-            opp_ok = opp in owners.get(v.id, frozenset((v.owner,)))
+                return [com(p, code) for p in ows]
+            opp_ok = opp in ows
+            mains = [k for p in ows for k in main_codes[p]]
+            extras = [k for p in ows for k in extra_codes[p]]
+            tokens = [k for p in ows for k in token_codes[p]]
             if v.kind == "main":
-                dom = main_codes + main_wilds
+                dom = mains + main_wilds
             elif v.kind == "extra":
-                dom = extra_codes + extra_wilds
+                dom = extras + extra_wilds
             elif v.pool is not None and v.pool.location in (C.LOCATION_DECK, C.LOCATION_HAND):
-                dom = main_codes + (main_wilds if opp_ok else [])
+                dom = mains + (main_wilds if opp_ok else [])
             elif v.pool is not None and v.pool.location == C.LOCATION_EXTRA:
-                dom = extra_codes + (extra_wilds if opp_ok else [])
+                dom = extras + (extra_wilds if opp_ok else [])
             else:
-                dom = main_codes + extra_codes + token_codes + (main_wilds + extra_wilds if opp_ok else [])
+                dom = mains + extras + tokens + (main_wilds + extra_wilds if opp_ok else [])
             if v.need is not None:
                 ok_wilds = set(_need_wilds(v.need))
                 dom = [k for k in dom if isinstance(commodities[k][1], str) and commodities[k][1] in ok_wilds] + \
@@ -239,8 +265,9 @@ class FlowSolver:
             cons = ("pool", consumer[v.id]) if v.id in consumer else ("sink",)
             constrained = (v.code is not None or v.need is not None or v.excluded
                            or v.fixed_code is not None or v.kind == "created" or v.id in linked)
+            # (slots grouped only with slots of the same seen owner: their domains differ)
             key = (producer(v), cons, v.id if constrained else None, v.owner,
-                   None if constrained else (v.kind, v.pool.location if v.pool else None))
+                   None if constrained else (v.kind, v.pool.location if v.pool else None, v.seen_owner))
             edges[key].append(v)
         edge_keys = list(edges)
 
@@ -260,6 +287,8 @@ class FlowSolver:
                 codes = Counter(v.fixed_code for v in vs)
                 fixed_counts[ei] = codes
                 dom = [k for k in dom if code_of(k) in codes]
+            v0 = vs[0]
+            holder = v0.pool.player if v0.kind == "claim" and v0.pool is not None else v0.owner
             for k in dom:
                 cols.append((ei, k))
                 lo.append(0)
@@ -273,7 +302,11 @@ class FlowSolver:
                             # (a known card whose Level needs fewer Tributes than usual,
                             # e.g. through an effect: only if nothing else fits)
                             + (2.0 if vs[0].need is not None and not isinstance(what, str)
-                               and not self._fits(what, vs[0].need) else 0.0))
+                               and not self._fits(what, vs[0].need) else 0.0)
+                            # (a card a player holds is their own unless something shows
+                            # otherwise: the other player's copy only if needed)
+                            + (0.05 if commodities[k][0] is not None
+                               and commodities[k][0] != holder else 0.0))
         colmap: dict[tuple[int, int], int] = {c: j for j, c in enumerate(cols)}
         ncol = len(cols)
         rows, colsi, vals, rlo, rhi = [], [], [], [], []

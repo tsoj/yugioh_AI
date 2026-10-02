@@ -199,21 +199,22 @@ Seeds 1000-4999 use random corpus deck pairs (20% mirror matches); 5000-6999 use
 ordered for card variety (`--decks diverse`). Agents: random and greedy, or (marked "other
 agents") the `setter` and `mixed` agents against each other and the others (`--pairs
 setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter`). By now
-all of them have been used while developing (5000-6999 started out fresh, at 99.43% / 99.32%):
+all of them have been used while developing (5000-6999 started out fresh, at 99.43% / 99.32%; 7000-7999
+at 99.79%):
 
-| cut      | 1000-1999 | 2000-2999 | 3000-3999 | 4000-4999 (other agents) | 5000-5999 (diverse decks) | 6000-6999 (diverse decks, other agents) |
-|----------|-----------|-----------|-----------|--------------------------|---------------------------|-----------------------------------------|
-| turn 1   | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                                  |
-| turn 2   | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                                  |
-| turn 3   | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                                  |
-| ~1/3     | 100.0%    | 100.0%    | 100.0%    | 99.90%                   | 100.0%                    | 100.0%                                  |
-| ~2/3     | 100.0%    | 100.0%    | 100.0%    | 99.80%                   | 100.0%                    | 100.0%                                  |
-| full game| 100.0%    | 100.0%    | 99.90%    | 99.70%                   | 99.90%                    | 99.90%                                  |
-| overall  | 100.0%    | 100.0%    | 99.98%    | 99.88%                   | 99.98%                    | 99.98%                                  |
+| cut      | 1000-1999 | 2000-2999 | 3000-3999 | 4000-4999 (other agents) | 5000-5999 (diverse decks) | 6000-6999 (diverse, other agents) | 7000-7999 (diverse, other agents) |
+|----------|-----------|-----------|-----------|--------------------------|---------------------------|-----------------------------------|-----------------------------------|
+| turn 1   | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                            | 100.0%                            |
+| turn 2   | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                            | 100.0%                            |
+| turn 3   | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                            | 100.0%                            |
+| ~1/3     | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                            | 99.95%                            |
+| ~2/3     | 100.0%    | 100.0%    | 100.0%    | 99.90%                   | 100.0%                    | 100.0%                            | 99.95%                            |
+| full game| 100.0%    | 100.0%    | 99.90%    | 99.70%                   | 99.90%                    | 99.95%                            | 99.90%                            |
+| overall  | 100.0%    | 100.0%    | 99.98%    | 99.92%                   | 99.98%                    | 99.99%                            | 99.96%                            |
 
 Fresh seeds are the honest measure: the corpus has ~164k decks, and new decks bring new card
-mechanics (every range so far started between 99.3% and 99.4% when it was fresh). About 97% of
-all reconstructions need no repair restart at all.
+mechanics (the earlier ranges started between 99.3% and 99.4% when they were fresh, 7000-7999 at
+99.79%). About 97-98% of all reconstructions need no repair restart at all.
 
 For broad tests, `scripts/make_book.py` builds an opening book whose 762 decks (381 openings)
 together contain every card of the usable corpus decks (13,869); `--book build/book.jsonl` plays

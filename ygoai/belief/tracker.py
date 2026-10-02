@@ -137,6 +137,9 @@ class Tracker:
         # physical cards as far as anything shows (it keeps them in a group)
         self._referenced: list[Var] = []
         self._own_picks: list[tuple[Var, int]] = []  # (card, code) the viewer picked from its deck
+        self._confirmed_locs: list[tuple[int, int]] = []
+        self._confirmed_shuffled = False
+        self._confirmed_moves = 0
         self._referenced_piles: set[tuple[int, int]] = set()  # (con, loc) they were revealed in
         self._picked: list[Var] = []  # of those, the ones picked at random
         self._referenced_in_chain = False  # revealed while a chain was built or resolved
@@ -451,9 +454,26 @@ class Tracker:
                         and to["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE):
                     self._identify(v, self._chosen[0])
                     self._chosen = None
-        if t not in ("CONFIRM_CARDS", "CONFIRM_DECKTOP", "CONFIRM_EXTRATOP", "SHUFFLE_DECK", "SHUFFLE_HAND",
-                     "SHUFFLE_EXTRA", "HINT", "CARD_HINT", "RANDOM_SELECTED"):
+        confirmed_move = t == "MOVE" and self._confirmed and self._confirmed_shuffled \
+            and m["from"]["loc"] == C.LOCATION_DECK \
+            and all(x == (m["from"]["con"], C.LOCATION_DECK) for x in self._confirmed_locs)
+        if confirmed_move:
+            # revealed, shuffled back and then taken out of that pile, card after
+            # card (e.g. "reveal 3, shuffle, your opponent picks 1 to add, the rest
+            # go to the GY"): each card taken is one of the revealed ones
+            v = self._plain_var(m["from"]["con"], m["from"]["loc"], m["from"]["seq"])
+            if v is not None and v.kind == "claim" and v.pool is not None:
+                ids = frozenset(x.id for x in v.pool.members if any(x is y for y in self._confirmed))
+                if ids:
+                    v.allowed = ids if v.allowed is None else (v.allowed & ids) or v.allowed
+            self._confirmed_moves += 1
+            if self._confirmed_moves >= len(self._confirmed):
+                self._confirmed = []
+        elif t not in ("CONFIRM_CARDS", "CONFIRM_DECKTOP", "CONFIRM_EXTRATOP", "SHUFFLE_DECK", "SHUFFLE_HAND",
+                       "SHUFFLE_EXTRA", "HINT", "CARD_HINT", "RANDOM_SELECTED"):
             self._confirmed = []  # only "reveal, shuffle back, pick one at random" counts
+        if t == "SHUFFLE_DECK" and self._confirmed:
+            self._confirmed_shuffled = True
         if t in ("CARD_HINT", "PLAYER_HINT") and m.get("value", 0) >> 20 \
                 and m["hint_type"] in (C.CHINT_DESC_ADD, C.CHINT_DESC_REMOVE):  # (= PHINT_DESC_*)
             # a hint text names the card whose script it comes from (e.g. a global
@@ -492,6 +512,15 @@ class Tracker:
                 v = self._new(to["con"], "created")
             else:
                 v = self._take(frm)
+                if frm["loc"] == C.LOCATION_HAND and frm.get("pos", 0) & C.POS_FACEUP and not m["code"] \
+                        and v.kind == "claim" and v.pool is not None and v.code is None:
+                    # (not if it was revealed since the shuffle: then it shows itself)
+                    # a card leaves the hand face-up (revealed, e.g. kept public by its
+                    # own effect) though its code is hidden now: one of the cards that
+                    # were revealed in the hand before it was shuffled
+                    ids = frozenset(x.id for x in v.pool.members if x.faceup)
+                    if ids:
+                        v.allowed = ids if v.allowed is None else (v.allowed & ids) or v.allowed
                 if self._own_picks and v.kind == "claim" and v.pool is not None \
                         and frm["con"] == self.viewer and frm["loc"] == C.LOCATION_DECK:
                     picked = [x for x, code in self._own_picks if code == m["code"]
@@ -593,6 +622,9 @@ class Tracker:
             self.observe(v, m["code"])
         elif t in ("CONFIRM_CARDS", "CONFIRM_DECKTOP", "CONFIRM_EXTRATOP"):
             self._confirmed = []
+            self._confirmed_locs = [(c["con"], c["loc"]) for c in m["cards"]] if t == "CONFIRM_CARDS" else [None]
+            self._confirmed_shuffled = False
+            self._confirmed_moves = 0
             for c in m["cards"]:
                 v = self.var_at(c["con"], c["loc"], c["seq"])
                 if v is not None:
@@ -793,6 +825,9 @@ class Tracker:
                         if card is None:
                             continue
                         self.observe(v, card.get("code", 0))
+                        if "owner" in card and not card.get("code"):
+                            # (a face-down card's owner shows too)
+                            self._owned(v, card["owner"])
                         overlays = card.get("overlays", [])
                         if len(overlays) != len(v.overlays):
                             raise TrackerError(f"overlay count mismatch P{pl_idx} {name}{seq}")
@@ -1156,8 +1191,20 @@ class Solver:
                 extra_orders.append(extra)  # (the viewer's own extra deck, in its order)
             else:
                 extra_orders.append([final(c) for c in t.initial_pools[ei].claims])
+        def owner_list(vs: list[Var]) -> list[int] | None:
+            # (whose deck list each card is from: e.g. a card taken from the other
+            # player's deck into a hand)
+            out = []
+            for v in vs:
+                a = atom(v)
+                if a is None:
+                    return None
+                out.append(a.owner)
+            return out
+
         shuffles = [{"player": pool.player, "location": pool.location,
-                     "codes": [final(c) for c in pool.claims], "ranks": rank_list(pool.claims)}
+                     "codes": [final(c) for c in pool.claims], "ranks": rank_list(pool.claims),
+                     "owners": owner_list(pool.claims)}
                     for pool in t.shuffle_events]
         set_shuffles = [[final(c) for c in pool.claims] for pool in t.set_shuffle_events]
         for v in t.exclusions:
