@@ -161,10 +161,11 @@ def game_decks(seed: int, mirror_prob: float = 0.2, decks: str = "random", book:
         _deck_pool = DeckPool(default_db())
     rng = random.Random(seed)
     if decks == "cards":
-        from ..decks import random_card_deck
+        from ..decks import RANDOM_DECK_STYLES, random_card_deck
         db = default_db()
-        d0 = random_card_deck(db, rng, f"random cards {seed}a")
-        return d0, d0 if rng.random() < mirror_prob else random_card_deck(db, rng, f"random cards {seed}b")
+        d0 = random_card_deck(db, rng, f"random cards {seed}a", rng.choice(RANDOM_DECK_STYLES))
+        return d0, d0 if rng.random() < mirror_prob else random_card_deck(
+            db, rng, f"random cards {seed}b", rng.choice(RANDOM_DECK_STYLES))
     if decks == "diverse":
         d0 = _deck_pool.diverse(2 * seed)
         return d0, d0 if rng.random() < mirror_prob else _deck_pool.diverse(2 * seed + 1)

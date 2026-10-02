@@ -86,3 +86,32 @@ def candidates(code: int, db) -> list[int]:
         if c.code in names or (series and any(is_set_card(c.setcodes, s) for s in series)):
             out.append(c.code)
     return sorted(out)
+
+
+@lru_cache(maxsize=None)
+def proc_cards(kind: str) -> frozenset[int]:
+    """Cards whose scripts give them their own Normal Summon ("summon") or Set
+    ("mset") procedure that can Tribute the opponent's monsters (e.g. Thestalos
+    the Shadowfire Monarch: 1 monster the opponent controls and 1 Tribute
+    Summoned monster)."""
+    code_name = {"summon": "EFFECT_SUMMON_PROC", "mset": "EFFECT_SET_PROC"}[kind]
+    out = set()
+    for sub in ("official", "pre-release", "unofficial"):
+        for path in (CARD_SCRIPTS_DIR / sub).glob("c*.lua"):
+            text = path.read_text(errors="replace")
+            if code_name in text and "1-tp" in text and ("Release" in text or "RELEASE" in text):
+                try:
+                    out.add(int(path.stem[1:]))
+                except ValueError:
+                    pass
+    return frozenset(out)
+
+
+@lru_cache(maxsize=None)
+def reveals_itself(code: int) -> bool:
+    """Whether the card's own procedure reveals it together with other cards
+    (e.g. Evil Dragon Cards: "revealing 3 LIGHT monsters in your hand, including
+    this card"), as opposed to revealing other cards only (Crimson Nova the Dark
+    Cubic Lord: 3 other Cubic cards)."""
+    text = _script_text(code)
+    return bool(re.search(r"Group\.FromCards\(c\)|:IsContains\(c\)", text))

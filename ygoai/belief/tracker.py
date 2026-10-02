@@ -146,6 +146,9 @@ class Tracker:
         self._chain: list[Var | None] = []  # the card of each chain link, by the time it chained
         self._chain_from_hand: list[bool] = []
         self._left_hand: list[Var] = []  # cards that left a hand while the current link resolves
+        # cards Tributed into the hand (e.g. by Fantastic Striborg's summon): not the
+        # monster whose summon Tributed them
+        self._tributed_to_hand: list[Var] = []
         self._solved: tuple | None = None  # (card, player, left_hand) of a link just solved
         self._last_sig: tuple | None = None  # the latest message that is not a hint
         self.turn_player = 0
@@ -435,6 +438,8 @@ class Tracker:
                 for v in left:
                     if v is not var and v.kind == "claim":
                         v.not_same.append(var)
+        if t in ("SUMMONING", "SPSUMMONING", "NEW_PHASE", "CHAINING"):
+            self._tributed_to_hand = []
         if t == "NEW_TURN":
             self.turn_player = m["player"]
         if t in ("CHAIN_SOLVED", "CHAIN_END", "NEW_PHASE", "NEW_TURN") \
@@ -522,7 +527,9 @@ class Tracker:
                     if ids:
                         v.allowed = ids if v.allowed is None else (v.allowed & ids) or v.allowed
                 if self._own_picks and v.kind == "claim" and v.pool is not None \
-                        and frm["con"] == self.viewer and frm["loc"] == C.LOCATION_DECK:
+                        and frm["con"] == self.viewer and frm["loc"] == C.LOCATION_DECK \
+                        and v.pool.location == C.LOCATION_DECK:  # (a card of the shuffled deck, not
+                    # one put into it since, e.g. from the hand)
                     picked = [x for x, code in self._own_picks if code == m["code"]
                               and any(x is y for y in v.pool.members)]
                     if picked:
@@ -534,14 +541,27 @@ class Tracker:
                     # (the first move out of the shuffled pile)
                     if not self._referenced_in_chain and to["loc"] == C.LOCATION_MZONE:
                         # cards revealed outside a chain are the cost of a summon
-                        # procedure (e.g. Crimson Nova the Dark Cubic Lord reveals 3
-                        # other Cubic cards): the summoned card is another one
-                        v.not_same.extend(x for x in self._referenced if x is not v)
+                        # procedure: the summoned card is most likely another one
+                        # (e.g. Crimson Nova the Dark Cubic Lord reveals 3 other Cubic
+                        # cards), but can be among them (e.g. Evil Dragon Cards reveal
+                        # 3 LIGHT monsters including the card itself)
+                        from .script_index import reveals_itself
+                        if m.get("code") and reveals_itself(m["code"]):
+                            others = [x for x in v.pool.members if not any(x is y for y in self._referenced)]
+                            if others:
+                                v.prefer = others
+                        else:
+                            v.not_same.extend(x for x in self._referenced if x is not v)
                         # (the reveal was that procedure's cost: it says nothing more)
                         self._referenced, self._referenced_piles, self._picked = [], set(), []
                     else:
                         pool = self._picked if any(x is not v for x in self._picked) else self._referenced
                         v.prefer = [x for x in pool if x is not v]
+            if to["loc"] == C.LOCATION_MZONE and frm["loc"] == C.LOCATION_HAND and self._tributed_to_hand \
+                    and v is not None and v.kind == "claim":
+                v.not_same.extend(x for x in self._tributed_to_hand if x is not v)
+            if v is not None and to["loc"] == C.LOCATION_HAND and m.get("reason", 0) & C.REASON_RELEASE:
+                self._tributed_to_hand.append(v)
             if to["loc"]:
                 self._put(v, to)
             self.observe(v, m["code"])
@@ -765,6 +785,7 @@ class Tracker:
                         v.allowed = ids if v.allowed is None else (v.allowed & ids) or v.allowed
         if p["type"] in ("SELECT_IDLECMD", "SELECT_BATTLECMD"):
             self._chosen = None
+            self._tributed_to_hand = []
             self._own_picks = []  # (the action that picked them is over)
         self._releases = 0
         # (option lists are shown in a canonical order: their order carries no
@@ -844,13 +865,21 @@ class Tracker:
                     lst = self.lists[pl_idx][loc]
                     if len(cards) != len(lst):
                         raise TrackerError(f"size mismatch P{pl_idx} {name}: {len(cards)} vs {len(lst)}")
+                    used: set[int] = set()
+                    shown = Counter(c.get("code") for c in cards if loc == C.LOCATION_DECK and c.get("code")
+                                    and c.get("position", 0) & C.POS_FACEUP)
                     for v, card in zip(lst, cards):
                         self.observe(v, card.get("code", 0))
                         if loc == C.LOCATION_DECK and card.get("code") and card.get("position", 0) & C.POS_FACEUP:
-                            # a face-up card in the deck: the one put there face-up
-                            same = [x for x in self._faceup_in_deck
-                                    if (x.fixed_code if x.fixed_code is not None else x.code) == card["code"]]
-                            if len(same) == 1:
+                            # a face-up card in the deck: one put there face-up (of several
+                            # such copies any, each once: they are alike)
+                            known = [x for x in self._faceup_in_deck
+                                     if (x.fixed_code if x.fixed_code is not None else x.code) == card["code"]]
+                            same = [x for x in known if id(x) not in used]
+                            # (only if the shown copies are exactly the known ones: another
+                            # copy can have been turned face-up unseen)
+                            if same and len(known) == shown[card["code"]]:
+                                used.add(id(same[0]))
                                 self._identify(v, same[0])
                         v.faceup = bool(card.get("position", 0) & C.POS_FACEUP)
                         if "owner" in card and loc == C.LOCATION_HAND:

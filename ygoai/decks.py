@@ -189,9 +189,16 @@ def diverse_order(pool: DeckPool, cache: Path | None = None, seed: int = 0) -> l
 _random_card_pools: dict = {}
 
 
-def random_card_deck(db: CardDB, rng: random.Random, name: str = "random cards") -> Deck:
-    """A deck of random legal cards (1-3 copies each): 40 main, 15 extra. No
-    structure at all, unlike human decks: for edge cases of rarely combined cards."""
+RANDOM_DECK_STYLES = ("uniform", "threes", "only_threes", "singleton")
+
+
+def random_card_deck(db: CardDB, rng: random.Random, name: str = "random cards",
+                     style: str = "uniform") -> Deck:
+    """A deck of random legal cards: 40 main, 15 extra. No structure at all, unlike
+    human decks: for edge cases of rarely combined cards. Copies per card by style:
+    "uniform" 1-3, "threes" mostly 3, "only_threes" always 3 (as far as the count
+    allows), "singleton" always 1 (many identical copies, or none at all: the
+    source of copy identity questions in shuffles, hints and histories)."""
     key = id(db)
     if key not in _random_card_pools:
         codes = sorted(c.code for c in db.cards.values()
@@ -200,11 +207,20 @@ def random_card_deck(db: CardDB, rng: random.Random, name: str = "random cards")
                                    [c for c in codes if db.get(c).is_extra_deck])
     main_pool, extra_pool = _random_card_pools[key]
 
+    def copies() -> int:
+        if style == "singleton":
+            return 1
+        if style == "only_threes":
+            return 3
+        if style == "threes":
+            return 3 if rng.random() < 0.6 else rng.randint(1, 2)
+        return rng.randint(1, 3)
+
     def fill(pool, n):
         out: list[int] = []
         while len(out) < n:
             code = rng.choice(pool)
-            if out.count(code) < 3:
-                out += [code] * min(rng.randint(1, 3), 3 - out.count(code), n - len(out))
+            if code not in out:
+                out += [code] * min(copies(), n - len(out))
         return out
-    return Deck(main=fill(main_pool, 40), extra=fill(extra_pool, 15), name=name)
+    return Deck(main=fill(main_pool, 40), extra=fill(extra_pool, 15), name=f"{name} ({style})")

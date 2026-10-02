@@ -54,8 +54,9 @@ python3 scripts/check_belief.py -n 1000 --start 5000 --decks diverse -o runs/c.j
 # ... or an opening book covering every card of the corpus (see below)
 python3 scripts/make_book.py -o build/book.jsonl
 python3 scripts/check_belief.py -n 1143 --start 7000 --book build/book.jsonl -o runs/c.jsonl
-# decks of random legal cards (no human deck structure: edge cases)
-python3 scripts/check_belief.py -n 1000 --start 30000 --decks cards -o runs/r.jsonl
+# decks of random legal cards (no human deck structure: edge cases); each deck gets a
+# style: 1-3 copies uniformly, mostly 3, only 3, or singleton
+python3 scripts/check_belief.py -n 1000 --start 40000 --decks cards -o runs/r.jsonl
 python3 scripts/card_coverage.py -n 1143 --start 7000 --book build/book.jsonl
 
 # quick iteration: rerun only what failed before, then diff the two runs

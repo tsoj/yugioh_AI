@@ -409,6 +409,16 @@ class Duel:
             n = lib().OCG_ExtChainRelated(self.handle, buf, n)
         return [bool(buf[i]) for i in range(n)]
 
+    def lua_messages(self, code: str) -> list[str]:
+        """Runs a Lua chunk in the duel and returns what it printed with
+        Debug.Message (for read-only questions to the scripts' view of a card)."""
+        before = len(self.logs)
+        data = code.encode()
+        lib().OCG_LoadScript(self.handle, data, len(data), b"ygoai_query.lua")
+        out = [text for _, text in self.logs[before:]]
+        del self.logs[before:]
+        return out
+
     def all_cards(self) -> tuple[dict, dict]:
         """Every slot of both players in one call: ({(player, location): [(code,
         card id), ...]}, {(player, location, sequence): materials as (code, id)})."""

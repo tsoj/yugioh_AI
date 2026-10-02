@@ -852,6 +852,17 @@ class BeliefReplay:
             lst.append(cid)
             self.stats.assumptions += 1
             return True
+        if kind == "matchset":
+            _, (a, b), taken, rest = fix
+            if fix in self.__dict__.setdefault("_matchsets", set()):
+                return False
+            self._matchsets.add(fix)
+            for at in range(a, b + 1):
+                lst = self.matches.setdefault(at, [])
+                lst.extend(c for c in taken if c not in lst)
+            self.nomatch_id_spans |= {(a, b, c) for c in rest}
+            self.stats.assumptions += 1
+            return True
         if kind == "snapshot":
             if fix[1] in self.snapshot_cps:
                 return False
@@ -1220,6 +1231,19 @@ class BeliefReplay:
         if item[0] == "msg":
             exp = item[1]
             fix = self._force_fix(exp)
+            if fix is None and exp["type"] == "MOVE":
+                # (a card assumed for this very action, e.g. which monster the opponent
+                # Set, whose consequences differ, e.g. what it may Tribute: first
+                # another candidate)
+                recent = [a for a in self.assumptions if self.pos - 2 <= a[0] <= self.pos
+                          and a[2] not in (C.LOCATION_DECK, C.LOCATION_EXTRA)]
+                if recent:
+                    fix = ("unassume", recent[-1])
+            if fix is None and exp["type"] == "MOVE" and got["type"] == "MOVE" \
+                    and exp["from"]["loc"] in HIDDEN_PILES and exp != got:
+                # (a group taken out of hidden piles by one operation: before the
+                # per-card repairs)
+                fix = self._group_match_fix(exp, got, cp, msgs, idx)
             if fix is None and exp["type"] in infer._ACTIVATION_PRELUDE:
                 # the start of an activation (the card placed or flipped face-up):
                 # the replay did not activate it (the core may not even have offered
@@ -1749,6 +1773,61 @@ class BeliefReplay:
             return None
         return ("match", cp, cid)
 
+    def _group_match_fix(self, exp: dict, got: dict, cp, msgs: list[dict], idx: int) -> tuple | None:
+        """A group of cards taken out of hidden piles by one operation (e.g. "banish
+        all monsters from both Decks"): the stream shows where they were, the
+        replay's piles hold fitting cards elsewhere. From the operation's chain link
+        on, the cards at the stream's positions match its filter, the other cards
+        of those piles do not."""
+        def key(m):
+            return (m["from"]["loc"], m["to"]["loc"], m["reason"])
+        if key(exp) != key(got) or exp["from"]["con"] != got["from"]["con"]:
+            return None
+        if exp.get("code") and exp.get("code") == got.get("code"):
+            return None  # (two copies of one card: a copy swap)
+        # the run of such moves in the stream around this one
+        g0 = self.pos
+        while g0 > 0 and self.items[g0 - 1][0] == "msg" and self.items[g0 - 1][1]["type"] == "MOVE" \
+                and key(self.items[g0 - 1][1]) == key(exp):
+            g0 -= 1
+        g1 = self.pos
+        while g1 + 1 < len(self.items) and self.items[g1 + 1][0] == "msg" \
+                and self.items[g1 + 1][1]["type"] == "MOVE" and key(self.items[g1 + 1][1]) == key(exp):
+            g1 += 1
+        if g1 - g0 < 1:
+            return None  # (a single card: the per-card repairs)
+        # (the moves before this one matched: those cards are at their destinations;
+        # the rest are mapped from the piles as they were before the replay's move)
+        if cp not in self.snapshots:
+            return None if cp in self.snapshot_cps else ("snapshot", cp)
+        lm = copy.deepcopy(self.snapshots[cp])
+        lm.references(msgs[:idx])
+        taken = []
+        for j in range(g0, self.pos):
+            cid = lm.at(self.items[j][1]["to"])
+            if not cid:
+                return None
+            taken.append(cid)
+        loc = exp["from"]["loc"]
+        players = sorted({self.items[j][1]["from"]["con"] for j in range(g0, g1 + 1)})
+        pile = set()
+        for p in players:
+            lm._load(p, loc)
+            pile |= set(lm.lists.get((p, loc), ()))
+        for j in range(self.pos, g1 + 1):
+            m = self.items[j][1]
+            cid = lm.at(m["from"])
+            if not cid:
+                return None
+            taken.append(cid)
+            lm.move(m)
+        rest = sorted(pile - set(taken))
+        a = self._link_start()
+        fix = ("matchset", (min(a, g0), self.pos), tuple(taken), tuple(rest))
+        if fix in self.__dict__.setdefault("_matchsets", set()):
+            return None
+        return fix
+
     def _note_field_arrivals(self, cp, msgs: list[dict], duel: Duel) -> None:
         """Remembers when cards went from a pile to the field (for copy swaps)."""
         for m in msgs:
@@ -1829,6 +1908,25 @@ class BeliefReplay:
             return None
         f = m["from"]
         entry = (j, (f["con"], f["loc"], f["seq"]), ("not", member.id))
+        if entry in self.identities or entry in self.failed_identities:
+            return None
+        return ("identify", *entry)
+
+    def _not_this_copy_fix(self, slot: dict) -> tuple | None:
+        """The card in a hidden slot is another copy than the one the hypothesis
+        put there (identity "not that card", at the current position)."""
+        solved = getattr(self, "_solved", None)
+        if solved is None:
+            return None
+        try:
+            v = self.lockstep.var_at(slot["con"], slot["loc"], slot["seq"])
+        except TrackerError:
+            return None
+        sv = next((x for x in solved.all_vars if v is not None and x.id == v.id), None)
+        member = sv.assigned if sv is not None and sv.kind == "claim" else None
+        if member is None:
+            return None
+        entry = (self.pos, (slot["con"], slot["loc"], slot["seq"]), ("not", member.id))
         if entry in self.identities or entry in self.failed_identities:
             return None
         return ("identify", *entry)
@@ -2440,7 +2538,7 @@ class BeliefReplay:
                 return None
         return None
 
-    def _check_force(self, prompt: dict, up: list[dict]) -> None:
+    def _check_force(self, prompt: dict, up: list[dict], duel: Duel | None = None) -> None:
         """Raises a force fix if the opponent's next activation is not available."""
         t = prompt["type"]
         if t not in ("SELECT_IDLECMD", "SELECT_BATTLECMD", "SELECT_CHAIN", "SELECT_EFFECTYN"):
@@ -2481,7 +2579,31 @@ class BeliefReplay:
             # a check beyond its cost and target
             # depends on hidden cards (e.g. "can be activated the turn it was Set"
             # if the deck has a fitting card); let them qualify until it is chained
-            if ch["trigger_loc"] == C.LOCATION_HAND:
+            # (the hand slot it was activated from: a spell is placed in its zone first)
+            placed = next((m["from"] for m in up if m["type"] == "MOVE" and infer.same_loc(m["to"], {
+                "con": ch["trigger_con"], "loc": ch["trigger_loc"], "seq": ch["trigger_seq"]})
+                and m["from"]["loc"] == C.LOCATION_HAND), None)
+            slot = placed if placed is not None else (
+                {"con": ch["trigger_con"], "loc": C.LOCATION_HAND, "seq": ch["trigger_seq"]}
+                if ch["trigger_loc"] == C.LOCATION_HAND else None)
+            if slot is not None and duel is not None:
+                # (another copy of it in the same hand can differ in history, e.g.
+                # the one returned from the GY "cannot be activated this turn": the
+                # copies are the other way round)
+                live = infer.LocMap(duel)
+                a = live.at(slot)
+                if a and live.codes.get(a) == ch["code"]:
+                    for code, b in duel.location_cards(slot["con"], C.LOCATION_HAND):
+                        if b != a and code == ch["code"]:
+                            fix = self._history_swap(a, b, (self.pos, 0))
+                            if fix is not None:
+                                break
+                    if fix is None:
+                        # (no other copy in the replay's hand: the activated card is not
+                        # the one the hypothesis has there, e.g. not the copy returned
+                        # from the GY, which the real game shows elsewhere)
+                        fix = self._not_this_copy_fix(slot)
+            if fix is None and ch["trigger_loc"] == C.LOCATION_HAND:
                 # (or the card in that slot is the wrong copy, e.g. a trigger of a
                 # card added to the hand by an effect, the hand shuffled since: one
                 # of the cards that came in last)
@@ -2617,8 +2739,9 @@ class BeliefReplay:
     def _check_idle_assumption(self, prompt: dict, up: list[dict], duel: Duel | None = None) -> None:
         """The opponent set a hidden hand card that has the wrong kind in the hypothesis."""
         for i, m in enumerate(up):
-            if m["type"] in infer._ACTIVATION_PRELUDE or m["type"] in ("PAY_LPCOST", "FIELD_DISABLED"):
-                continue  # (e.g. zones a Tributed monster had disabled become usable)
+            if m["type"] in infer._ACTIVATION_PRELUDE or m["type"] in ("PAY_LPCOST", "FIELD_DISABLED", "DAMAGE",
+                                                                         "RECOVER", "LPUPDATE"):
+                continue  # (e.g. zones a Tributed monster had disabled become usable, damage a Tribute causes)
             if m["type"] != "SET":
                 return
             src = infer.source_of(m, up[:i])
@@ -2642,9 +2765,22 @@ class BeliefReplay:
                     card = self.db.get(code)
                     return card is not None and bool(card.type & C.TYPE_FIELD) == field_zone
             entries = [e for e in prompt[kind] if infer.same_loc(e, src)]
+            foreign_moves = [x for x in up[:i] if kind == "msetable" and x["type"] == "MOVE"
+                             and x["reason"] & C.REASON_RELEASE and x["from"]["con"] != src["con"]]
+            # (unless an effect allows Tributing the opponent's monsters for any
+            # Tribute Summon, e.g. The Monarchs Stormforth: then any card can do it)
+            foreign = bool(foreign_moves) and not (duel is not None and all(
+                self._extra_release(duel, x["from"]) for x in foreign_moves))
+            if foreign:
+                from . import script_index
+                fits_level = fits
+
+                def fits(code, _f=fits_level):
+                    return _f(code) and code in script_index.proc_cards("mset")
             if entries and all(fits(e["code"]) for e in entries):
                 return
-            if entries and kind == "msetable" and duel is not None and src["loc"] == C.LOCATION_HAND:
+            if entries and kind == "msetable" and duel is not None and src["loc"] == C.LOCATION_HAND \
+                    and not foreign:
                 # (its Level now, in the hand: effects can lower it, e.g. A Legendary
                 # Ocean for WATER monsters)
                 hand = capture(duel)["players"][src["con"]]["hand"]
@@ -2653,6 +2789,15 @@ class BeliefReplay:
                     return
             usual = {0: range(1, 5), 1: range(5, 7)}.get(tributes, range(7, 13)) if kind == "msetable" else None
             codes = [e["code"] for e in prompt[kind] if fits(e["code"])]
+            if foreign:
+                # (an opponent's monster among the Tributes: only a card with its own
+                # procedure does that, e.g. Thestalos the Shadowfire Monarch; the
+                # opponent's seen ones first)
+                from . import script_index
+                procs = script_index.proc_cards("mset")
+                seen = self._opp_seen_codes()
+                codes = [c for c in seen if c in procs and fits(c)] + sorted(
+                    c for c in procs if c not in seen and self.db.get(c) and fits(c))
             # (most likely a copy of a card the opponent has shown, e.g. one whose
             # Tribute the field allows: then the generic stand-ins)
             want = C.TYPE_MONSTER if kind == "msetable" else C.TYPE_SPELL | C.TYPE_TRAP
@@ -2713,6 +2858,15 @@ class BeliefReplay:
             return
         if any(cid not in unsel_ids for cid in used):
             raise Divergence(self.pos, "a card used with the selected ones cannot be selected any more")
+
+    def _extra_release(self, duel: Duel, li: dict) -> bool:
+        """Whether the monster at `li` may be Tributed by the other player for any
+        Tribute Summon (EFFECT_EXTRA_RELEASE(_SUM), e.g. The Monarchs Stormforth)."""
+        out = duel.lua_messages(
+            f"local c=Duel.GetFieldCard({li['con']},LOCATION_MZONE,{li['seq']}) "
+            "Debug.Message((c and (c:IsHasEffect(EFFECT_EXTRA_RELEASE_SUM) or "
+            "c:IsHasEffect(EFFECT_EXTRA_RELEASE))) and 'yes' or 'no')")
+        return out[-1:] == ["yes"]
 
     def _check_summon_condition(self, duel: Duel, prompt: dict, up: list[dict]) -> None:
         """The opponent special summoned a hand card by its own procedure, which
@@ -2960,7 +3114,7 @@ class BeliefReplay:
         duel.shuffle_plan = [(sh["player"], sh["location"], ids) for sh, ids in
                              zip(self.hypothesis.shuffles[self._shuffle_count:],
                                  self._shuffle_ids[self._shuffle_count:])]
-        self._check_force(prompt, up)
+        self._check_force(prompt, up, duel)
         if prompt["type"] == "SELECT_IDLECMD":
             self._check_idle_assumption(prompt, up, duel)
             self._check_summon_condition(duel, prompt, up)
