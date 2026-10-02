@@ -998,6 +998,9 @@ class BeliefReplay:
             pending = prompt if status == STATUS_AWAITING else None
             pending_resp = None
             for idx, m in enumerate(msgs):
+                if m["type"] == "SHUFFLE_SET_CARD" and m["old"]:
+                    # (face-down cards shuffled in their zones: copies trade places there)
+                    self.last_shuffle_cp[(m["old"][0]["con"], m["location"])] = cp
                 if m["type"] in _SHUFFLE_LOCS:
                     self.last_shuffle_cp[(m["player"], _SHUFFLE_LOCS[m["type"]])] = cp
                     if m["type"] in ("SHUFFLE_DECK", "SHUFFLE_HAND"):
@@ -1231,6 +1234,18 @@ class BeliefReplay:
         if item[0] == "msg":
             exp = item[1]
             fix = self._force_fix(exp)
+            if fix is None and exp["type"] == got.get("type") and exp["type"] in ("FLIPSUMMONING", "POS_CHANGE") \
+                    and exp.get("code") and exp.get("code") == got.get("code") and exp["con"] == got["con"] \
+                    and exp["loc"] == got["loc"] and exp["seq"] != got["seq"] \
+                    and (exp["con"], exp["loc"]) in self.last_shuffle_cp:
+                # another face-down copy, the copies shuffled in their zones since:
+                # they trade places before the prompt that chose one
+                live = infer.LocMap(duel)
+                a, b = live.at(got), live.at(exp)
+                at = self.prompt_cp
+                if a and b and a != b and (at, a, b) not in self.failed_swaps and (at, b, a) not in self.failed_swaps \
+                        and (a, b) not in self.swaps.get(at, ()) and (b, a) not in self.swaps.get(at, ()):
+                    fix = ("swap", at, a, b)
             if fix is None and exp["type"] == "MOVE":
                 # (a card assumed for this very action, e.g. which monster the opponent
                 # Set, whose consequences differ, e.g. what it may Tribute: first
@@ -1781,8 +1796,8 @@ class BeliefReplay:
         of those piles do not."""
         def key(m):
             return (m["from"]["loc"], m["to"]["loc"], m["reason"])
-        if key(exp) != key(got) or exp["from"]["con"] != got["from"]["con"]:
-            return None
+        if key(exp) != key(got) or exp["from"]["con"] != got["from"]["con"] or exp["from"]["loc"] == exp["to"]["loc"]:
+            return None  # (moves within a pile, e.g. cards put on the bottom, select nothing)
         if exp.get("code") and exp.get("code") == got.get("code"):
             return None  # (two copies of one card: a copy swap)
         # the run of such moves in the stream around this one
@@ -2275,6 +2290,12 @@ class BeliefReplay:
             if not a or not b or live.codes.get(a) != live.codes.get(b):
                 return None
             if g["loc"] in (C.LOCATION_MZONE, C.LOCATION_SZONE):
+                if (g["con"], g["loc"]) in self.last_shuffle_cp and (cp, a, b) not in self.failed_swaps \
+                        and (cp, b, a) not in self.failed_swaps \
+                        and (a, b) not in self.swaps.get(cp, ()) and (b, a) not in self.swaps.get(cp, ()):
+                    # (shuffled face-down in their zones since: the copies trade places
+                    # before this prompt)
+                    return ("swap", cp, a, b)
                 return self._field_copy_fix(a, b)
             if g["loc"] in (C.LOCATION_GRAVE, C.LOCATION_REMOVED) and self._role_swap_is_new(a, b):
                 # the positions and histories of public cards show: exchange the
@@ -2323,6 +2344,13 @@ class BeliefReplay:
                         # only the card's history differs (e.g. a position change while
                         # it was in the deck): another copy from a hidden pile
                         a = live.at({"con": p, "loc": loc, "seq": i})
+                        if a and (p, loc) in self.last_shuffle_cp:
+                            # (or another face-down copy in these zones: they were
+                            # shuffled in place since, e.g. by Wandering Mummy)
+                            for b in [cid for code, cid in duel.location_cards(p, loc) if code == e["code"]]:
+                                if b != a and (cp, a, b) not in self.failed_swaps and (cp, b, a) not in self.failed_swaps \
+                                        and (a, b) not in self.swaps.get(cp, ()) and (b, a) not in self.swaps.get(cp, ()):
+                                    return ("swap", cp, a, b)
                         for hloc in (C.LOCATION_DECK, C.LOCATION_HAND, C.LOCATION_EXTRA):
                             for code, b in duel.location_cards(p, hloc):
                                 if code == e["code"] and a and b != a:
@@ -2750,9 +2778,13 @@ class BeliefReplay:
             kind = "msetable" if m["loc"] == C.LOCATION_MZONE else "ssetable"
             filler = self._filler()
             if kind == "msetable":
-                tributes = sum(1 for x in up[:i] if x["type"] == "MOVE"
+                tributes = sum(1 for x in up[:i] if x["type"] == "MOVE" and x["from"]["loc"] != C.LOCATION_HAND
+                               and not x["reason"] & C.REASON_DESTROY
                                and (x["reason"] & (C.REASON_RELEASE | C.REASON_COST)
                                     or tracker_mod._leaves_field(x)))
+                # (Tributed, or used instead of a Tribute, e.g. sent to the GY by an
+                # alternative procedure; not a discarded hand, nor a card destroyed, e.g.
+                # an Equip Spell lost with its monster)
                 levels = {0: range(1, 5), 1: range(5, 13)}.get(tributes, range(7, 13))
 
                 def fits(code):
@@ -2777,7 +2809,18 @@ class BeliefReplay:
 
                 def fits(code, _f=fits_level):
                     return _f(code) and code in script_index.proc_cards("mset")
-            if entries and all(fits(e["code"]) for e in entries):
+            usual_levels = {0: range(1, 5), 1: range(5, 7)}.get(tributes, range(7, 13)) \
+                if kind == "msetable" else None
+
+            filler_codes = set(filler.vanillas) | set(filler.settable_monsters_all)
+
+            def usual_fit(code):
+                # (an inert stand-in should need exactly the Tributes seen; another
+                # card, e.g. one the opponent showed, may have an effect that lowers them)
+                card = self.db.get(code)
+                return kind != "msetable" or card is None or card.level in usual_levels \
+                    or code not in filler_codes or not tributes  # (without Tributes: whatever allowed it)
+            if entries and all(fits(e["code"]) and usual_fit(e["code"]) for e in entries):
                 return
             if entries and kind == "msetable" and duel is not None and src["loc"] == C.LOCATION_HAND \
                     and not foreign:
@@ -2785,8 +2828,10 @@ class BeliefReplay:
                 # Ocean for WATER monsters)
                 hand = capture(duel)["players"][src["con"]]["hand"]
                 now = hand[src["seq"]] if src["seq"] < len(hand) else None
-                if now and now.get("level") in levels:
-                    return
+                if now and now.get("level") in levels and (now.get("level") in usual_levels
+                                                            or now.get("level") != self.db.get(now["code"]).level
+                                                            or now["code"] not in filler_codes or not tributes):
+                    return  # (lowered by an effect to fit, or a usual Level)
             usual = {0: range(1, 5), 1: range(5, 7)}.get(tributes, range(7, 13)) if kind == "msetable" else None
             codes = [e["code"] for e in prompt[kind] if fits(e["code"])]
             if foreign:

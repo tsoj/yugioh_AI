@@ -475,7 +475,9 @@ class Tracker:
             if self._confirmed_moves >= len(self._confirmed):
                 self._confirmed = []
         elif t not in ("CONFIRM_CARDS", "CONFIRM_DECKTOP", "CONFIRM_EXTRATOP", "SHUFFLE_DECK", "SHUFFLE_HAND",
-                       "SHUFFLE_EXTRA", "HINT", "CARD_HINT", "RANDOM_SELECTED"):
+                       "SHUFFLE_EXTRA", "HINT", "CARD_HINT", "RANDOM_SELECTED",
+                       # (the picked card being summoned: the others are taken out next)
+                       "SPSUMMONING", "SPSUMMONED", "SUMMONING", "SUMMONED"):
             self._confirmed = []  # only "reveal, shuffle back, pick one at random" counts
         if t == "SHUFFLE_DECK" and self._confirmed:
             self._confirmed_shuffled = True
@@ -647,6 +649,17 @@ class Tracker:
             if v is not None:
                 v.faceup = bool(m["pos"] & C.POS_FACEUP)
             self.observe(v, m["code"])
+        elif t in ("CONFIRM_CARDS", "CONFIRM_DECKTOP", "CONFIRM_EXTRATOP") and t == "CONFIRM_CARDS" \
+                and self._confirmed and self._confirmed_shuffled \
+                and all((c["con"], c["loc"]) in self._confirmed_locs for c in m["cards"]) \
+                and Counter(c["code"] for c in m["cards"]) <= Counter(
+                    x.fixed_code if x.fixed_code is not None else x.code for x in self._confirmed):
+            # (one of the revealed and shuffled-back cards revealed again, e.g. the one
+            # picked at random: the revealed ones stay the ones taken out next)
+            for c in m["cards"]:
+                v = self.var_at(c["con"], c["loc"], c["seq"])
+                if c["code"]:
+                    self.observe(v, c["code"])
         elif t in ("CONFIRM_CARDS", "CONFIRM_DECKTOP", "CONFIRM_EXTRATOP"):
             self._confirmed = []
             self._confirmed_locs = [(c["con"], c["loc"]) for c in m["cards"]] if t == "CONFIRM_CARDS" else [None]

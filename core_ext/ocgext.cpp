@@ -411,6 +411,21 @@ OCGEXT_API int OCG_ExtSwapCards(OCG_Duel ocg_duel, uint32_t id_a, uint32_t id_b)
 	if(a->owner != b->owner || a->current.controler != b->current.controler || a->current.location != b->current.location)
 		return 0;
 	auto loc = a->current.location;
+	if(loc & (LOCATION_MZONE | LOCATION_SZONE)) {
+		// two face-down cards in their zones (e.g. after Duel.ShuffleSetCard): they
+		// trade zones, as the shuffle could have placed them
+		if(!a->is_position(POS_FACEDOWN) || !b->is_position(POS_FACEDOWN)
+		   || a->equiping_target || b->equiping_target || !a->equiping_cards.empty() || !b->equiping_cards.empty())
+			return 0;
+		auto& p = pduel->game_field->player[a->current.controler];
+		auto& zones = (loc & LOCATION_MZONE) ? p.list_mzone : p.list_szone;
+		auto sa = a->current.sequence, sb = b->current.sequence;
+		if(sa >= zones.size() || sb >= zones.size() || zones[sa] != a || zones[sb] != b)
+			return 0;
+		std::swap(zones[sa], zones[sb]);
+		std::swap(a->current.sequence, b->current.sequence);
+		return 1;
+	}
 	if(!is_sequenced_list(loc))
 		return 0;
 	auto* list = location_list(pduel, a->current.controler, loc);
