@@ -342,7 +342,7 @@ diff -ruN core_a/duel.h core_b/duel.h
  	std::unordered_set<card*> cards;
 diff -ruN core_a/effect.cpp core_b/effect.cpp
 --- core_a/effect.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/effect.cpp	2026-10-02 15:53:59.063571630 +0200
++++ core_b/effect.cpp	2026-10-02 22:26:24.943076466 +0200
 @@ -10,6 +10,7 @@
  #include "effect.h"
  #include "field.h"
@@ -351,24 +351,25 @@ diff -ruN core_a/effect.cpp core_b/effect.cpp
  
  bool effect_sort_id(const effect* e1, const effect* e2) {
  	return e1->id < e2->id;
-@@ -112,9 +113,14 @@
+@@ -112,6 +113,17 @@
  		return TRUE;
  	pduel->lua->add_param<LuaParam::EFFECT>(this);
  	int32_t res = pduel->lua->check_condition(condition, 1);
-+	if(pduel->querying)
-+		return res;  // (the game itself updates the status when it next checks)
-+	// (no new id when the condition holds again: conditions are evaluated lazily,
++	// An effect whose condition holds again starts applying anew: it gets a new id
++	// (its timestamp, the order in which effects apply, e.g. a "+2 Level during the
++	// Main Phase" after a "Level becomes 2"). Conditions are evaluated lazily,
 +	// whenever something happens to ask, e.g. a hidden card's activation check, so
-+	// a renewed id, and the global id counter, would depend on hidden cards and
-+	// change the order in which effects apply, e.g. a Level that "becomes 2" before
-+	// or after a "+2" that only applies in the Main Phase)
++	// the status is only updated by the check at fixed points of the game
++	// (field::refresh_effect_conditions), never by the lazy evaluations: otherwise
++	// the ids, and the global id counter, would depend on hidden cards. (Nor by the
++	// evaluations nested in another effect's condition: a hidden card's condition
++	// can ask for a public card's Level.)
++	if(pduel->game_field->core.refreshing_condition != this)
++		return res;
  	if(res) {
--		if(!(status & EFFECT_STATUS_AVAILABLE))
--			id = pduel->game_field->infos.field_id++;
- 		status |= EFFECT_STATUS_AVAILABLE;
- 	} else
- 		status &= ~EFFECT_STATUS_AVAILABLE;
-@@ -295,8 +301,13 @@
+ 		if(!(status & EFFECT_STATUS_AVAILABLE))
+ 			id = pduel->game_field->infos.field_id++;
+@@ -295,8 +307,13 @@
  	int32_t result = TRUE;
  	if(!(type & EFFECT_TYPE_CONTINUOUS))
  		result = is_action_check(playerid);
@@ -644,8 +645,16 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  				++player_counter;
 diff -ruN core_a/field.h core_b/field.h
 --- core_a/field.h	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/field.h	2026-10-02 15:53:59.036081755 +0200
-@@ -330,6 +330,8 @@
++++ core_b/field.h	2026-10-02 22:26:24.942992137 +0200
+@@ -301,6 +301,7 @@
+ 	uint8_t win_player{ 5 };
+ 	uint8_t win_reason;
+ 	bool re_adjust;
++	effect* refreshing_condition{nullptr};  // (see field::refresh_effect_conditions)
+ 	effect* reason_effect;
+ 	uint8_t reason_player{ PLAYER_NONE };
+ 	card* summoning_card;
+@@ -330,6 +331,8 @@
  	uint32_t last_control_changed_id;
  	uint32_t set_group_used_zones;
  	uint8_t set_group_seq[7];
@@ -654,6 +663,14 @@ diff -ruN core_a/field.h core_b/field.h
  	std::vector<uint8_t> dice_results;
  	std::vector<bool> coin_results;
  	bool to_bp;
+@@ -579,6 +582,7 @@
+ 	void calculate_battle_damage(effect** pdamchange, card** preason_card, std::array<bool, 2>* battle_destroyed);
+ 	int32_t break_effect(bool clear_sent = true);
+ 	void adjust_instant();
++	void refresh_effect_conditions();
+ 	void adjust_all();
+ 	void refresh_location_info_instant();
+ 	void solve_continuous(uint8_t playerid, effect* peffect, const tevent& e);
 diff -ruN core_a/group.h core_b/group.h
 --- core_a/group.h	2026-09-29 02:25:58.000000000 +0200
 +++ core_b/group.h	2026-10-02 15:53:59.036190457 +0200
@@ -2405,7 +2422,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			}
 diff -ruN core_a/processor.cpp core_b/processor.cpp
 --- core_a/processor.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/processor.cpp	2026-10-02 15:53:59.040028094 +0200
++++ core_b/processor.cpp	2026-10-02 22:26:24.943561680 +0200
 @@ -2574,7 +2574,7 @@
  	case 30: {
  		auto des = arg.cards_destroyed_by_battle;
@@ -2488,7 +2505,56 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  		}
  		if(core.leave_confirmed.size())
  			send_to(core.leave_confirmed, nullptr, REASON_RULE, PLAYER_NONE, PLAYER_NONE, LOCATION_GRAVE, 0, POS_FACEUP);
-@@ -4783,7 +4781,7 @@
+@@ -4434,8 +4432,40 @@
+ 	}
+ 	return 0;
+ }
++// The conditions of continuous effects, checked at fixed points of the game (every
++// adjustment) in id order: an effect whose condition holds again starts applying
++// anew and gets a new id (effect::is_available). The lazy evaluations in between
++// change nothing, so the ids do not depend on which checks happened to ask, e.g.
++// for hidden cards.
++void field::refresh_effect_conditions() {
++	if(pduel->querying || core.refreshing_condition)
++		return;
++	std::vector<effect*> conditional;
++	auto add = [&](const effect_container& effs) {
++		for(const auto& it : effs) {
++			if(it.second->condition)
++				conditional.push_back(it.second);
++		}
++	};
++	add(effects.aura_effect);
++	for(auto* pcard : pduel->cards) {
++		add(pcard->single_effect);
++		add(pcard->field_effect);
++		add(pcard->equip_effect);
++		add(pcard->target_effect);
++		add(pcard->xmaterial_effect);
++	}
++	std::sort(conditional.begin(), conditional.end(), effect_sort_id);
++	conditional.erase(std::unique(conditional.begin(), conditional.end()), conditional.end());
++	for(auto* peffect : conditional) {
++		core.refreshing_condition = peffect;
++		peffect->is_available();
++	}
++	core.refreshing_condition = nullptr;
++}
+ void field::adjust_instant() {
+ 	++infos.event_id;
++	refresh_effect_conditions();
+ 	adjust_disable_check_list();
+ 	adjust_self_destroy_set();
+ }
+@@ -4650,6 +4680,7 @@
+ 	switch(arg.step) {
+ 	case 0: {
+ 		core.re_adjust = false;
++		refresh_effect_conditions();
+ 		return FALSE;
+ 	}
+ 	case 1: {
+@@ -4783,7 +4814,7 @@
  			core.re_adjust = true;
  			get_control(core.control_adjust_set[1 - infos.turn_player], nullptr, PLAYER_NONE, infos.turn_player, 0, 0, 0xff);
  			get_control(core.control_adjust_set[infos.turn_player], nullptr, PLAYER_NONE, 1 - infos.turn_player, 0, 0, 0xff);
@@ -2497,7 +2563,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  				++core.readjust_map[rcard];
  				if(core.readjust_map[rcard] > 3)
  					destroy(rcard, nullptr, REASON_RULE, PLAYER_NONE);
-@@ -4896,18 +4894,35 @@
+@@ -4896,18 +4927,35 @@
  	}
  	case 12: {
  		//shuffle check
@@ -2535,7 +2601,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  		if(core.shuffle_hand_check[infos.turn_player])
  			shuffle(infos.turn_player, LOCATION_HAND);
  		if(core.shuffle_hand_check[1 - infos.turn_player])
-@@ -4992,6 +5007,11 @@
+@@ -4992,6 +5040,11 @@
  			arg.step = Processors::restart;
  			return FALSE;
  		}

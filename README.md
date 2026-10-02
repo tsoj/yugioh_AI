@@ -308,8 +308,10 @@ instead of after it); the patched core leaves them to the end of the operation. 
 which continuous effects apply: an effect with a condition got a new id (its "timestamp")
 whenever its condition was evaluated and found true again, but conditions are evaluated lazily,
 whenever something asks (e.g. a hidden card's activation check reading Levels), so a Level that
-"becomes 2" before or after a "+2 in the Main Phase" depended on the opponent's hidden cards; the
-patched core keeps the registration order. And conversely, a card kept revealed in the hand now
+"becomes 2" before or after a "+2 in the Main Phase" depended on the opponent's hidden cards. The
+patched core checks the conditions at fixed points instead (every adjustment, in id order, see
+`field::refresh_effect_conditions`); only these checks give new timestamps, as the official rules
+do when an effect starts applying anew (`tests/test_core_rules.py`). And conversely, a card kept revealed in the hand now
 stays visible through hand shuffles (the shuffle message marks face-up cards), as it would at the
 table.
 
@@ -376,11 +378,12 @@ filters in a canonical form (and ANNOUNCE_NUMBER options sorted).
   core named the player who Sets it as the one who looks (pointless); the EDOPro server makes
   up for it by showing every confirmation of cards outside the Deck to both players, which
   would also show a player's private look at its own face-down card to the opponent.
-* Queries do not change the duel. Evaluating an effect's condition gives the effect a new
-  timestamp when the condition has become true (`effect::is_available`), and the timestamps
+* Queries do not change the duel. Evaluating an effect's condition gave the effect a new
+  timestamp when the condition had become true (`effect::is_available`), and the timestamps
   order continuous effects; a state query (e.g. of a card's level) evaluated conditions at other
   moments than the game itself, so observing the state could change what happened next (about
-  1 in 25 games with the upstream core diverged when every prompt queried levels).
+  1 in 25 games with the upstream core diverged when every prompt queried levels). Now only the
+  checks at fixed points give new timestamps (see the information leaks above).
 * A step that runs more than 10^9 Lua instructions raises a script error instead of never
   returning: some scripts take exponential time in rare situations (e.g.
   `aux.SelectUnselectGroup` over 24 cards whose condition no subset can meet any more), which
