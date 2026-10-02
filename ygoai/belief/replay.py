@@ -1041,8 +1041,9 @@ class BeliefReplay:
                 if (self.check_state or self.pos == self.probe_state_at) and item[2] is not None:
                     got = view(capture(duel), self.viewer)
                     if got != item[2]:
+                        fix = self._state_copy_fix(item[2], got, duel, cp) or self._public_arrival_fix(item[2], got)
                         raise Divergence(self.pos, "state mismatch: " + str(first_difference(item[2], got)),
-                                         item[2], got, self._state_copy_fix(item[2], got, duel, cp))
+                                         item[2], got, fix)
                     if self.depth == 0:
                         self._since_state = []
                 self._advance()
@@ -1712,6 +1713,20 @@ class BeliefReplay:
         if entry in self.identities or entry in self.failed_identities:
             return None
         return ("identify", *entry)
+
+    def _public_arrival_fix(self, exp: dict, got: dict) -> tuple | None:
+        """A hidden hand card of the opponent shows revealed in the real view but
+        not in the replay's, without any reveal message (e.g. kept revealed because
+        it was drawn this turn): it is one of the cards that came in last."""
+        p = self.opponent
+        eh, gh = exp["players"][p]["hand"], got["players"][p]["hand"]
+        for i, (e, g) in enumerate(zip(eh, gh)):
+            if e and e.get("is_public") and e.get("code") and not (g and g.get("is_public")):
+                fix = self._arrival_fix({"trigger_con": p, "trigger_loc": C.LOCATION_HAND, "trigger_seq": i,
+                                         "code": e["code"]})
+                if fix is not None:
+                    return fix
+        return None
 
     def _arrival_fix(self, ch: dict) -> tuple | None:
         """Identifies the activating card's slot with one of the latest cards of
