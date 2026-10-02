@@ -158,6 +158,7 @@ class Tracker:
         self._deck_arrivals: list[Var] = []  # cards moved into a deck since its last shuffle
         self._faceup_left: list[tuple[Var, int]] = []  # face-up cards that left a deck, code unknown yet
         self._prev_sig: tuple | None = None  # the message before the latest one (not hints)
+        self._last_move_to: tuple | None = None  # (con, loc, seq) the latest MOVE put a card at
         self._top_check: int | None = None  # a deck just shuffled (whose top may be announced)
         own = init["deck"]
         opp_main, opp_extra = init["opponent_deck_size"], init["opponent_extra_size"]
@@ -454,6 +455,8 @@ class Tracker:
             self._referenced_piles = set()
             self._picked = []
             self._referenced_in_chain = False
+        if t == "MOVE":
+            self._last_move_to = (m["to"]["con"], m["to"]["loc"], m["to"]["seq"])
         if t == "MOVE" and m["from"]["loc"] and not m["from"]["loc"] & C.LOCATION_OVERLAY:
             frm, to = m["from"], m["to"]
             v = self._plain_var(frm["con"], frm["loc"], frm["seq"])
@@ -674,7 +677,8 @@ class Tracker:
             self.observe(v, m["code"])
         elif t in ("CONFIRM_CARDS", "CONFIRM_DECKTOP", "CONFIRM_EXTRATOP") and t == "CONFIRM_CARDS" \
                 and self._confirmed and self._confirmed_shuffled \
-                and all((c["con"], c["loc"]) in self._confirmed_locs for c in m["cards"]) \
+                and all((c["con"], c["loc"]) in self._confirmed_locs
+                        or (c["con"], c["loc"], c["seq"]) == self._last_move_to for c in m["cards"]) \
                 and Counter(c["code"] for c in m["cards"]) <= Counter(
                     x.fixed_code if x.fixed_code is not None else x.code for x in self._confirmed):
             # (one of the revealed and shuffled-back cards revealed again, e.g. the one

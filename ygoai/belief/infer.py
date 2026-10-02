@@ -197,7 +197,7 @@ def infer_idle(prompt: dict, up: list[dict], up_ext: list[dict] | None = None) -
         if t in ("MOVE", "HINT", "CARD_HINT", "POS_CHANGE", "PAY_LPCOST", "CONFIRM_CARDS",
                  "SHUFFLE_HAND", "SHUFFLE_DECK", "LPUPDATE", "DAMAGE", "RECOVER", "BECOME_TARGET",
                  "CARD_SELECTED", "RANDOM_SELECTED", "REMOVE_COUNTER", "ADD_COUNTER",
-                 "FIELD_DISABLED", "TOSS_COIN", "TOSS_DICE", "PLAYER_HINT", "CHAIN_SOLVING"):
+                 "FIELD_DISABLED", "TOSS_COIN", "TOSS_DICE", "PLAYER_HINT", "CHAIN_SOLVING", "DRAW"):
             continue
         break
     phase = next_phase(up_ext or [])

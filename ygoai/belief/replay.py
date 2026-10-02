@@ -1275,6 +1275,21 @@ class BeliefReplay:
                           and a[2] not in (C.LOCATION_DECK, C.LOCATION_EXTRA)]
                 if recent:
                     fix = ("unassume", recent[-1])
+            if fix is None and exp["type"] == "MOVE":
+                fix = self._hidden_monster_fix(exp, got)
+            if fix is None and exp["type"] == "MOVE" and exp["reason"] & C.REASON_RELEASE \
+                    and exp["from"]["con"] == self.opponent and got.get("type") == "MOVE" \
+                    and got["from"]["con"] == self.opponent and got["from"]["loc"] == C.LOCATION_HAND \
+                    and got["to"]["loc"] == C.LOCATION_MZONE and not got["code"]:
+                # (the hidden card is summoned or Set with fewer Tributes than the real
+                # one takes, e.g. a Level 7 that needs only 1 by its own procedure:
+                # another card)
+                live = infer.LocMap(duel)
+                cid = live.at(got["to"])
+                code = live.codes.get(cid) if cid else None
+                key = (self.pos, got["from"]["con"], C.LOCATION_HAND, (got["from"]["seq"],), code)
+                if code and key not in self.exclusions and key not in self.failed_exclusions:
+                    fix = ("exclude", *key)
             if fix is None and exp["type"] == "MOVE" and got["type"] == "MOVE" \
                     and exp["from"]["loc"] in (C.LOCATION_DECK, C.LOCATION_EXTRA) and exp != got:
                 # (a group taken out of hidden piles by one operation: before the
@@ -2741,10 +2756,23 @@ class BeliefReplay:
             codes = [c["code"] for x in up[mi + 1:mi + 8] if x["type"] == "CONFIRM_CARDS"
                      for c in x["cards"] if c["code"] and (c["con"], c["loc"]) == (m["to"]["con"], m["to"]["loc"])]
             codes = list(dict.fromkeys(codes))
+            offered = []
             for c in cards:
                 if c["con"] == f["con"] and c["loc"] == f["loc"] and c["code"] and c["code"] not in codes \
                         and self._fits_destination(c["code"], m["to"]):
-                    codes.append(c["code"])
+                    offered.append(c["code"])
+            # (then cards of the opponent's that the stream shows, of the kind all the
+            # offered ones have, e.g. Normal Monsters: the hypothesis may have none of
+            # the real card in that pile)
+            common = None
+            for code in offered:
+                card = self.db.get(code)
+                if card is not None:
+                    common = card.type if common is None else common & card.type
+            seen = [c for c in self._opp_seen_codes() if common and c not in codes and c not in offered
+                    and self.db.get(c) and self.db.get(c).type & common == common
+                    and not self.db.get(c).is_extra_deck and self._fits_destination(c, m["to"])][:4]
+            codes += seen + offered
             # (the slot as it is now, before the earlier moves shifted the pile)
             src = dict(f)
             for e in reversed(earlier[:-1]):
@@ -2767,19 +2795,47 @@ class BeliefReplay:
 
     def _assume(self, li: dict, codes: list[int], reason: str) -> None:
         """Raises an "assume" fix for the first untried code, if the slot is free."""
+        fix = self._assume_fix(li, codes)
+        if fix is not None:
+            raise Divergence(self.pos, reason, fix=fix)
+
+    def _assume_fix(self, li: dict, codes: list[int]) -> tuple | None:
+        """An "assume" fix for the first untried code, if the slot is free."""
         try:
             var = self.lockstep.var_at(li["con"], li["loc"], li["seq"])
         except TrackerError:
-            return
+            return None
         key = (li["con"], li["loc"], li["seq"])
         if var is None or (var.id in self.hypothesis.observed
                            and not any(a[:4] == (self.pos, *key) for a in self.assumptions)):
-            return  # (observed, other than by an assumption at this slot and point)
+            return None  # (observed, other than by an assumption at this slot and point)
         tried = {a[4] for a in self.assumptions if a[1:4] == key} | {
             a[4] for a in self.failed_assumptions if a[1:4] == key}
         for code in codes:
             if code and code not in tried:
-                raise Divergence(self.pos, reason, fix=("assume", self.pos, *key, code))
+                return ("assume", self.pos, *key, code)
+        return None
+
+    def _hidden_monster_fix(self, exp: dict, got: dict) -> tuple | None:
+        """The opponent puts a hidden hand card on the field as a monster (e.g. Set
+        by an effect, "Normal Summon or Set 1 Gemini monster") and the replay does
+        not: the hypothesis's card there is no such monster. A monster first that
+        the opponent has shown, then stand-ins (Level 4 or lower: no Tributes seen)."""
+        frm = exp["from"]
+        if frm["con"] != self.opponent or frm["loc"] != C.LOCATION_HAND or exp["code"] \
+                or exp["to"]["loc"] != C.LOCATION_MZONE:
+            return None
+        if got.get("type") == "MOVE" and infer.same_loc(got["from"], frm):
+            return None
+
+        def fits(code):
+            card = self.db.get(code)
+            return card is not None and card.type & C.TYPE_MONSTER and not card.is_extra_deck \
+                and not card.type & C.TYPE_TOKEN and 1 <= card.level <= 4
+        filler = self._filler()
+        codes = [c for c in self._opp_seen_codes() if fits(c)]
+        codes += [c for c in list(filler.vanillas) + list(filler.settable_monsters_all) if fits(c) and c not in codes]
+        return self._assume_fix(frm, codes[:12])
 
     def _race_stand_ins(self, race: int, fits) -> list[int]:
         """Main deck monsters of a race that fit (the lowest codes), when no filler has it."""
@@ -2817,6 +2873,8 @@ class BeliefReplay:
                 continue  # (e.g. zones a Tributed monster had disabled become usable, damage a Tribute causes)
             if m["type"] == "SHUFFLE_HAND" and m["player"] != self.opponent:
                 continue  # (e.g. the viewer's hand no longer kept revealed once the Tributed monster left)
+            if m["type"] == "DRAW":
+                continue  # (e.g. drawn when a Tribute leaves the field, before the Set itself)
             if m["type"] != "SET":
                 return
             src = infer.source_of(m, up[:i])
@@ -2856,6 +2914,14 @@ class BeliefReplay:
 
                 def fits(code, _f=fits_level):
                     return _f(code) and code in script_index.proc_cards("mset")
+            if kind == "msetable" and tributes >= 3:
+                # (more Tributes than any Level asks for: a card whose own procedure
+                # takes them, e.g. The Wicked Avatar)
+                from . import script_index
+                fits_level3 = fits
+
+                def fits(code, _f=fits_level3):
+                    return _f(code) and code in script_index.set_proc_tribute_cards(tributes)
             # (cards of the setter's hand discarded as a cost first: a card with its
             # own procedure, e.g. Infernal Incinerator discards the whole hand)
             discards = kind == "msetable" and any(
@@ -2881,7 +2947,7 @@ class BeliefReplay:
             if entries and all(fits(e["code"]) and usual_fit(e["code"]) for e in entries):
                 return
             if entries and kind == "msetable" and duel is not None and src["loc"] == C.LOCATION_HAND \
-                    and not foreign and not discards:
+                    and not foreign and not discards and tributes < 3:
                 # (its Level now, in the hand: effects can lower it, e.g. A Legendary
                 # Ocean for WATER monsters)
                 hand = capture(duel)["players"][src["con"]]["hand"]
@@ -2892,6 +2958,11 @@ class BeliefReplay:
                     return  # (lowered by an effect to fit, or a usual Level)
             usual = {0: range(1, 5), 1: range(5, 7)}.get(tributes, range(7, 13)) if kind == "msetable" else None
             codes = [e["code"] for e in prompt[kind] if fits(e["code"])]
+            if kind == "msetable" and tributes >= 3 and not discards:
+                from . import script_index
+                procs = script_index.set_proc_tribute_cards(tributes)
+                codes = [c for c in self._opp_seen_codes() if c in procs and fits(c)] + sorted(
+                    c for c in procs if self.db.get(c) and fits(c))
             if discards:
                 from . import script_index
                 seen = self._opp_seen_codes()

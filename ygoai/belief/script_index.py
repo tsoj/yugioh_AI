@@ -123,6 +123,26 @@ def discard_set_proc_cards() -> frozenset[int]:
     return frozenset(out)
 
 
+_SET_PROC = re.compile(r"AddNormalSetProcedure\(\s*c\s*,[^,]*,[^,]*,\s*(\d+)\s*,\s*(\d+)")
+
+
+@lru_cache(maxsize=None)
+def set_proc_tribute_cards(n: int) -> frozenset[int]:
+    """Cards whose own Set procedure Tributes `n` monsters (e.g. The Wicked
+    Avatar: 3; no Level asks for more than 2)."""
+    out = set()
+    for sub in ("official", "pre-release", "unofficial"):
+        for path in (CARD_SCRIPTS_DIR / sub).glob("c*.lua"):
+            text = path.read_text(errors="replace")
+            for lo, hi in _SET_PROC.findall(text):
+                if int(lo) <= n <= int(hi):
+                    try:
+                        out.add(int(path.stem[1:]))
+                    except ValueError:
+                        pass
+    return frozenset(out)
+
+
 @lru_cache(maxsize=None)
 def reveals_itself(code: int) -> bool:
     """Whether the card's own procedure reveals it together with other cards
