@@ -877,7 +877,17 @@ def infer_unselect(prompt: dict, up: list[dict], duel, ids: list | None = None) 
     unsel_ids = set(ids[len(sel):])
     near = LocMap(duel).references(selection_window(up))
     refs = LocMap(duel).references(up)
-    for window, certain in ((near, True), (refs, False)):
+    # (cards the selection then moves as one group, e.g. Xyz Materials attached
+    # together, move in the engine's order of the group, not in the order picked)
+    lm, moved = LocMap(duel), []
+    for m in selection_window(up):
+        if m["type"] == "MOVE":
+            moved.append((lm.at(m["from"]), m.get("reason", 0), m["to"]["loc"]))
+            lm.move(m)
+    sel_ids = set(ids[:len(sel)]) - unsel_ids
+    group = [(r, loc) for cid, r, loc in moved if cid in sel_ids]
+    grouped = len(group) > 1 and len(set(group)) == 1
+    for window, certain in ((near, not grouped), (refs, False)):
         picks = [ids.index(cid) for cid in window if cid in ids[:len(sel)] and cid not in unsel_ids]
         if picks:
             # (the other used cards next: which one comes first can matter, e.g. the

@@ -1322,6 +1322,14 @@ class BeliefReplay:
         if item[0] == "msg":
             exp = item[1]
             fix = self._force_fix(exp)
+            if fix is None and exp["type"] == got.get("type") == "CHAINING" and exp.get("code") == got.get("code") \
+                    and exp.get("desc") == got.get("desc") \
+                    and all(exp.get(k) == got.get(k) for k in ("con", "loc", "seq", "trigger_con", "trigger_loc")) \
+                    and exp["trigger_loc"] == C.LOCATION_HAND and exp.get("trigger_seq") != got.get("trigger_seq"):
+                # the activated hand card shows where it was when the chain options
+                # were last computed, e.g. before a hand shuffle since: it is the card
+                # that was at that position before the latest shuffle of the hand
+                fix = self._stale_trigger_fix(exp)
             if fix is None and exp["type"] == "CHAINING" and exp["trigger_con"] == self.opponent \
                     and exp["trigger_loc"] == C.LOCATION_HAND and got.get("type") != "CHAINING":
                 # (an effect of a card that just came into the hand, e.g. "when this card
@@ -2318,6 +2326,19 @@ class BeliefReplay:
         if member is None:
             return None
         entry = (self.pos, (le["con"], le["loc"], le["seq"]), member.id)
+        if entry in self.identities or entry in self.failed_identities:
+            return None
+        return ("identify", *entry)
+
+    def _stale_trigger_fix(self, ch: dict) -> tuple | None:
+        try:
+            v = self.lockstep.var_at(ch["con"], ch["loc"], ch["seq"])
+        except TrackerError:
+            return None
+        if v is None or v.kind != "claim" or v.same_as is not None or v.pool is None \
+                or v.pool.location != C.LOCATION_HAND or not 0 <= ch["trigger_seq"] < len(v.pool.members):
+            return None
+        entry = (self.pos, (ch["con"], ch["loc"], ch["seq"]), v.pool.members[ch["trigger_seq"]].id)
         if entry in self.identities or entry in self.failed_identities:
             return None
         return ("identify", *entry)
