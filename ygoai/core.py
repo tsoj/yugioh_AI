@@ -138,6 +138,7 @@ def _load_library(path: Path) -> ct.CDLL:
         "OCG_ExtGetAllCards": (u32, [vp, ct.POINTER(u32), u32]),
         "OCG_ExtChainRelated": (u32, [vp, ct.POINTER(u8), u32]),
         "OCG_ExtReadLog": (u32, [vp, u32, ct.POINTER(u32), u32]),
+        "OCG_ExtCompileScript": (u32, [ct.c_char_p, u32, ct.c_char_p, ct.POINTER(ct.c_uint8), u32]),
         "OCG_ExtGetInfo": (None, [vp, ct.POINTER(u32)]),
         "OCG_ExtForceActivatable": (None, [vp, u8, u32, ct.c_uint64]),
         "OCG_ExtClearForceActivatable": (None, [vp]),
@@ -182,7 +183,7 @@ def _find_script(name: str) -> bytes | None:
         return _script_cache[name]
     base = Path(name).name
     if base == OVERRIDE_SCRIPTS.name:
-        data = _script_cache[name] = OVERRIDE_SCRIPTS.read_bytes()
+        data = _script_cache[name] = _compiled(name, OVERRIDE_SCRIPTS.read_bytes())
         return data
     candidates = []
     if base.startswith("c") and base[1:-4].isdigit():
@@ -193,10 +194,28 @@ def _find_script(name: str) -> bytes | None:
     data = None
     for path in candidates:
         if path.exists():
-            data = path.read_bytes()
+            data = _compiled(name, path.read_bytes())
             break
     _script_cache[name] = data
     return data
+
+
+def _compiled(name: str, source: bytes) -> bytes:
+    """The script as a Lua binary chunk (compiled once per process: every duel
+    loads it again, and compiling is most of a duel's setup), or the source if it
+    does not compile (the duel then reports the error as before)."""
+    if os.environ.get("YGOAI_NO_BYTECODE"):
+        return source
+    cap = 4 * len(source) + 4096
+    for _ in range(2):
+        buf = (ct.c_uint8 * cap)()
+        n = lib().OCG_ExtCompileScript(source, len(source), name.encode(), buf, cap)
+        if n == 0:
+            return source
+        if n <= cap:
+            return ct.string_at(buf, n)
+        cap = n
+    return source
 
 
 @DataReader

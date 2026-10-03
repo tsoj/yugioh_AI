@@ -56,7 +56,7 @@ from ..decks import Deck
 from ..game import setup_duel
 from ..messages import parse
 from ..observe import AUTO_RESPONSE, filter_message, filter_prompt, is_hidden_prompt, to_core_response
-from ..state import LOCATIONS, capture, view
+from ..state import LOCATIONS, capture, view, viewer_view
 from . import infer
 from .completion import DeckCompletion, VanillaCompletion, _vanilla
 from . import tracker as tracker_mod
@@ -1171,7 +1171,7 @@ class BeliefReplay:
                     what = item[1].get("type") if item[0] == "prompt" else item[1].get("type", item[0])
                     raise Divergence(self.pos, f"prompt mismatch [{what} vs {fp['type']}]", item, fp, fix)
                 if (self.check_state or self.pos == self.probe_state_at) and item[2] is not None:
-                    got = view(capture(duel), self.viewer)
+                    got = viewer_view(duel, self.viewer)
                     if got != item[2]:
                         fix = self._state_copy_fix(item[2], got, duel, cp) or self._public_arrival_fix(item[2], got) \
                             or self._public_hidden_fix(item[2], got) or self._stat_fix(item[2], got, duel)

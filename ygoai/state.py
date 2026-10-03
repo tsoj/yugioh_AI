@@ -185,6 +185,37 @@ HIDDEN_FIELDS = ("position", "owner", "counters", "equip_card", "target_cards", 
 PRIVATE_STATUS = C.STATUS_ATTACK_CANCELED
 
 
+# viewed locations by (raw query bytes, player, location, viewer): most locations
+# are unchanged between two state checks
+_viewed: dict[tuple, list] = {}
+
+
+def viewer_view(duel: Duel, viewer: int) -> dict:
+    """view(capture(duel), viewer), computed per location from the core's raw query
+    (unchanged locations come from a cache; the card ids, which the view leaves
+    out, are not looked up). The lists and dicts are shared: do not modify."""
+    info = duel.info()
+    snap = {"turn": info["turn"], "turn_player": info["turn_player"], "phase": info["phase"],
+            "lp": info["lp"]}
+    snap.update(parse_field_query(duel.query_field_raw()))
+    for link, related in zip(snap["chain"], duel.chain_related()):
+        link["related"] = related
+    out = _view_header(snap, viewer)
+    for p in (0, 1):
+        vp = {}
+        for name, loc in LOCATIONS:
+            raw = duel.query_location_raw(p, loc, QUERY_BASIC if loc == C.LOCATION_DECK else QUERY_ALL)
+            key = (raw, p, loc, viewer)
+            cards = _viewed.get(key)
+            if cards is None:
+                if len(_viewed) > 20000:
+                    _viewed.clear()
+                cards = _viewed[key] = _view_location(parse_location_query(raw), p, loc, viewer)
+            vp[name] = cards
+        out["players"].append(vp)
+    return out
+
+
 def card_visible(card: dict, controller: int, location: int, viewer: int) -> bool:
     if location & (C.LOCATION_GRAVE | C.LOCATION_OVERLAY):
         return True
@@ -207,52 +238,58 @@ def _mask_ref(li: dict | None, viewer: int) -> dict | None:
 
 def view(snap: dict, viewer: int) -> dict:
     """What `viewer` can see of a god view snapshot."""
+    out = _view_header(snap, viewer)
+    for p, pl in enumerate(snap["players"]):
+        out["players"].append({name: _view_location(pl[name], p, loc, viewer) for name, loc in LOCATIONS})
+    return out
+
+
+def _view_header(snap: dict, viewer: int) -> dict:
     # (a link's card that left its place since, e.g. shuffled into the deck, is a
     # new object: which physical copy it is now cannot be known, even when a copy
     # of it is back on the field)
     chain = [{**{k: v for k, v in c.items() if k != "related"},
               "handler": _mask_ref(c["handler"], viewer) if c.get("related", True) else None}
              for c in snap["chain"]]
-    out = {"turn": snap["turn"], "turn_player": snap["turn_player"], "phase": snap["phase"],
-           "lp": list(snap["lp"]), "chain": chain, "players": []}
-    for p, pl in enumerate(snap["players"]):
-        vp = {}
-        for name, loc in LOCATIONS:
-            cards = []
-            for card in pl[name]:
-                if card is None:
-                    cards.append(None)
-                    continue
-                if card_visible(card, p, loc, viewer):
-                    shown = {k: card[k] for k in PUBLIC_FIELDS if k in card}
-                    if not loc & (C.LOCATION_GRAVE | C.LOCATION_REMOVED):
-                        # cards in the hand or on the field keep the stale reason of
-                        # how they got there earlier; it would reveal hidden history
-                        # and make identical copies distinguishable
-                        shown.pop("reason", None)
-                    if not loc & (C.LOCATION_MZONE | C.LOCATION_SZONE):
-                        # status bits of cards in piles are stale leftovers from
-                        # earlier trips to the field; they would make identical
-                        # copies distinguishable after a shuffle
-                        shown.pop("status", None)
-                    elif "status" in shown:
-                        shown["status"] &= ~PRIVATE_STATUS
-                    # (reason_card is left out entirely: it points at whichever copy
-                    # caused the move, wherever that copy is hidden now)
-                    if "equip_card" in shown:
-                        shown["equip_card"] = _mask_ref(shown["equip_card"], viewer)
-                    if "target_cards" in shown:
-                        shown["target_cards"] = [_mask_ref(t, viewer) for t in shown["target_cards"]]
-                    cards.append(shown)
-                else:
-                    hidden = {k: card[k] for k in HIDDEN_FIELDS if k in card}
-                    if "position" in hidden:
-                        hidden["position"] = canon_pos(loc, hidden["position"])
-                    if "equip_card" in hidden:
-                        hidden["equip_card"] = _mask_ref(hidden["equip_card"], viewer)
-                    if "target_cards" in hidden:
-                        hidden["target_cards"] = [_mask_ref(t, viewer) for t in hidden["target_cards"]]
-                    cards.append(hidden)
-            vp[name] = cards
-        out["players"].append(vp)
-    return out
+    return {"turn": snap["turn"], "turn_player": snap["turn_player"], "phase": snap["phase"],
+            "lp": list(snap["lp"]), "chain": chain, "players": []}
+
+
+def _view_location(pile: list, p: int, loc: int, viewer: int) -> list:
+    """What `viewer` can see of player `p`'s cards in location `loc`."""
+    cards = []
+    for card in pile:
+        if card is None:
+            cards.append(None)
+            continue
+        if card_visible(card, p, loc, viewer):
+            shown = {k: card[k] for k in PUBLIC_FIELDS if k in card}
+            if not loc & (C.LOCATION_GRAVE | C.LOCATION_REMOVED):
+                # cards in the hand or on the field keep the stale reason of
+                # how they got there earlier; it would reveal hidden history
+                # and make identical copies distinguishable
+                shown.pop("reason", None)
+            if not loc & (C.LOCATION_MZONE | C.LOCATION_SZONE):
+                # status bits of cards in piles are stale leftovers from
+                # earlier trips to the field; they would make identical
+                # copies distinguishable after a shuffle
+                shown.pop("status", None)
+            elif "status" in shown:
+                shown["status"] &= ~PRIVATE_STATUS
+            # (reason_card is left out entirely: it points at whichever copy
+            # caused the move, wherever that copy is hidden now)
+            if "equip_card" in shown:
+                shown["equip_card"] = _mask_ref(shown["equip_card"], viewer)
+            if "target_cards" in shown:
+                shown["target_cards"] = [_mask_ref(t, viewer) for t in shown["target_cards"]]
+            cards.append(shown)
+        else:
+            hidden = {k: card[k] for k in HIDDEN_FIELDS if k in card}
+            if "position" in hidden:
+                hidden["position"] = canon_pos(loc, hidden["position"])
+            if "equip_card" in hidden:
+                hidden["equip_card"] = _mask_ref(hidden["equip_card"], viewer)
+            if "target_cards" in hidden:
+                hidden["target_cards"] = [_mask_ref(t, viewer) for t in hidden["target_cards"]]
+            cards.append(hidden)
+    return cards

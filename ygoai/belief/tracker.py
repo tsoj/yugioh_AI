@@ -132,6 +132,8 @@ class Tracker:
         self._owners_seen = 0
         self._owned_at: dict[int, int] = {}
         self._owners_memo: dict[int, tuple[int, set[int]]] = {}
+        self._leaves_memo: dict[tuple, tuple[list, list]] = {}
+        self._pool_owners_memo: dict[tuple, list] = {}  # (pool, owners seen) -> possible owners per member  # (pool, owner, limit, owners seen) -> leaves
         self._confirmed: list[Var] = []  # the cards of the latest CONFIRM_* message
         # cards revealed in the current resolution: a script that reveals cards,
         # shuffles them back and then moves cards of the same names moves the same
@@ -334,8 +336,11 @@ class Tracker:
         todo, seen = [v], set()
         while todo and len(out) < 2:
             x = todo.pop()
+            known = self._owners_memo.get(x.id) if x is not v else None
             if x.seen_owner is not None:
                 out.add(x.seen_owner)  # (shown by a state view: no need to look further)
+            elif known is not None and (known[0] == self._owners_seen or len(known[1]) == 1):
+                out |= known[1]  # (an earlier slot's answer, still valid)
             elif x.kind != "claim" or x.pool is None:
                 out.add(x.owner)
             elif x.pool.index not in seen:
@@ -347,6 +352,17 @@ class Tracker:
     def _owner_leaves(self, v: Var, owner: int, limit: int = 200) -> tuple[list[Var], list[Var]]:
         """The cards (slots of a single possible owner) the shuffles before slot `v`
         mixed: those of `owner` and those of the other player."""
+        # (the same for every slot of v's shuffle: the search starts at its members)
+        key = (v.pool.index, owner, limit, self._owners_seen) if v.kind == "claim" and v.pool is not None else None
+        hit = self._leaves_memo.get(key) if key is not None else None
+        if hit is not None:
+            return hit
+        out = self._owner_leaves_search(v, owner, limit)
+        if key is not None:
+            self._leaves_memo[key] = out
+        return out
+
+    def _owner_leaves_search(self, v: Var, owner: int, limit: int) -> tuple[list[Var], list[Var]]:
         mine: list[Var] = []
         other: list[Var] = []
         todo, seen = [v], set()
@@ -383,7 +399,11 @@ class Tracker:
             return
         self._owned_at[v.id] = self._owners_seen
         members = v.pool.members
-        owners = [self._possible_owners(m) for m in members]
+        # (the same for every slot of the shuffle)
+        key = (v.pool.index, self._owners_seen)
+        owners = self._pool_owners_memo.get(key)
+        if owners is None:
+            owners = self._pool_owners_memo[key] = [self._possible_owners(m) for m in members]
         if all(os == owners[0] for os in owners):
             # (tells nothing directly) through earlier shuffles: not the only card
             # of the other owner among the cards the shuffles mixed (e.g. one card
@@ -1022,13 +1042,19 @@ class Tracker:
                     lst = self.lists[pl_idx][loc]
                     if len(cards) != len(lst):
                         raise TrackerError(f"size mismatch P{pl_idx} {name}: {len(cards)} vs {len(lst)}")
+                    # (the owners of deck cards show too: they tell apart only where a
+                    # card of the other player is in the deck, e.g. one shuffled in)
+                    foreign = loc == C.LOCATION_DECK and any(c.get("owner", pl_idx) != pl_idx for c in cards)
+                    if loc != C.LOCATION_HAND and not foreign and not any(
+                            c.get("code") or c.get("position", 0) & C.POS_FACEUP for c in cards):
+                        # (nothing shows: e.g. a hidden deck, the usual case)
+                        for v in lst:
+                            v.faceup = False
+                        continue
                     used: set[int] = set()
                     shown = Counter(c.get("code") for c in cards if c.get("code")
                                     and c.get("position", 0) & C.POS_FACEUP) if loc == C.LOCATION_DECK else None
                     faceup_now = self._faceup_deck_cards(pl_idx) if shown else []
-                    # (the owners of deck cards show too: they tell apart only where a
-                    # card of the other player is in the deck, e.g. one shuffled in)
-                    foreign = loc == C.LOCATION_DECK and any(c.get("owner", pl_idx) != pl_idx for c in cards)
                     for v, card in zip(lst, cards):
                         self.observe(v, card.get("code", 0))
                         if loc == C.LOCATION_DECK and card.get("code") and card.get("position", 0) & C.POS_FACEUP:

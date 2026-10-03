@@ -11,6 +11,9 @@
 #include "ocgapi_types.h"
 #include <set>
 #include <tuple>
+#include <string>
+#include <lauxlib.h>
+#include <lua.h>
 #include "card.h"
 #include "duel.h"
 #include "effect.h"
@@ -682,4 +685,26 @@ OCGEXT_API uint32_t OCG_ExtReadLog(OCG_Duel ocg_duel, uint32_t enable, uint32_t*
 	}
 	pduel->read_log.clear();
 	return n;
+}
+
+// Compiles a Lua script to a binary chunk (with its debug information: error
+// messages and tracebacks stay the same), which OCG_LoadScript accepts like the
+// source: loading it skips the compiler, which is most of the cost of setting up
+// a duel. Writes up to `cap` bytes to `out` and returns the size of the chunk,
+// or 0 if the script does not compile (load the source then, for the error).
+OCGEXT_API uint32_t OCG_ExtCompileScript(const char* src, uint32_t len, const char* name, uint8_t* out, uint32_t cap) {
+	lua_State* L = luaL_newstate();
+	if(!L)
+		return 0;
+	std::string chunk;
+	if(luaL_loadbuffer(L, src, len, name) == LUA_OK) {
+		lua_dump(L, [](lua_State*, const void* p, size_t sz, void* ud) -> int {
+			static_cast<std::string*>(ud)->append(static_cast<const char*>(p), sz);
+			return 0;
+		}, &chunk, 0);
+	}
+	lua_close(L);
+	if(chunk.size() <= cap)
+		std::copy(chunk.begin(), chunk.end(), out);
+	return static_cast<uint32_t>(chunk.size());
 }
