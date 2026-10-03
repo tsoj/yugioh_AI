@@ -84,6 +84,27 @@ REVEALED = "revealed"  # identity: one of the cards revealed before the shuffle 
 CARD_PROMPTS = ("SELECT_CARD", "SELECT_UNSELECT_CARD", "SELECT_TRIBUTE", "SELECT_SUM")
 
 
+class _LazyTracker:
+    """The lockstep tracker (the stream up to the replay's position), brought up to
+    date only when something reads it: most replays, and almost all probes, never
+    do. Reading it gives exactly the eager tracker's state (it only reads it)."""
+
+    def __init__(self, tracker: Tracker):
+        self._t = tracker
+        self._pending: list[tuple] = []
+
+    def process(self, item: tuple) -> None:
+        self._pending.append(item)
+
+    def __getattr__(self, name):
+        t = self._t
+        if self._pending:
+            pending, self._pending = self._pending, []
+            for item in pending:
+                t.process(item)
+        return getattr(t, name)
+
+
 class _ProbeSuccess(Exception):
     """Raised inside a probe once it has verified enough of the stream."""
 
@@ -375,7 +396,7 @@ class BeliefReplay:
         self._assumed_moves: list[tuple] = []  # (position, assumption) of moves of assumed cards
         self._multi_decisions: dict[tuple, tuple] = {}  # decision -> (card ids, chosen response)
         self._roll_dirty = True  # whether a card may have moved since that snapshot
-        self.lockstep = Tracker(self.viewer, self.init)
+        self.lockstep = _LazyTracker(Tracker(self.viewer, self.init))
 
     # -- setup -----------------------------------------------------------------
     def build_hypothesis(self) -> Hypothesis:
@@ -923,7 +944,8 @@ class BeliefReplay:
         elif self.depth > 0 and self.probe_boundary and it[0] == "msg" \
                 and it[1].get("type") not in ("HINT", "CARD_HINT", "PLAYER_HINT"):
             self.probe_after_boundary += 1
-        if it[0] == "msg" and it[1]["type"] == "MOVE" and it[1]["from"]["loc"] and self.depth == 0:
+        if it[0] == "msg" and it[1]["type"] == "MOVE" and it[1]["from"]["loc"] and self.depth == 0 \
+                and getattr(self, "_assumed_vars", None):
             # (a card whose code an assumption named moves: its consequences follow)
             try:
                 lv = self.lockstep.var_at(it[1]["from"]["con"], it[1]["from"]["loc"], it[1]["from"]["seq"])
