@@ -39,6 +39,7 @@ Any other difference raises `Divergence`.
 from __future__ import annotations
 
 import copy
+import gc
 from collections import Counter
 import mmap
 import os
@@ -3825,8 +3826,12 @@ class BeliefReplay:
             n = self._probe_count() + 1
             self._probe_counter[:8] = n.to_bytes(8, "little")
         rfd, wfd = os.pipe()  # (the probe reports how far it reproduced the stream)
+        # (the cyclic garbage collector would walk, and so copy, all of the parent's
+        # objects in the child; the probe is short-lived and frees nothing that matters)
+        gc.freeze()
         pid = os.fork()
         if pid == 0:
+            gc.disable()
             code = 2
             reached = self.pos
             os.close(rfd)
@@ -3888,6 +3893,7 @@ class BeliefReplay:
                     os.write(wfd, reached.to_bytes(4, "little") + report)
                 finally:
                     os._exit(code)
+        gc.unfreeze()
         os.close(wfd)
         try:
             _, status = os.waitpid(pid, 0)
