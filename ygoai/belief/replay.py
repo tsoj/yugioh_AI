@@ -363,6 +363,8 @@ class BeliefReplay:
         self._roll_cp = None  # the latest main-line step's snapshot (kept only until the next)
         self._card_decisions: dict[tuple, dict[int, int]] = {}  # decision -> card id -> answer index
         self._window_choices: list[tuple] = []  # (decision, activation answer) passed in leave windows
+        self._window_activations: list[tuple] = []  # (decision, passing answer) activated in leave windows
+        self._offered: dict = {}  # decision -> (card ids, places) a card selection of the opponent offered
         self._hidden_picks: list[tuple] = []  # (position, span) of opponent choices among its hidden cards
         self._silent_choices: list[tuple] = []  # (decision, card ids, candidates, index) nothing revealed
         self._assumed_moves: list[tuple] = []  # (position, assumption) of moves of assumed cards
@@ -575,11 +577,12 @@ class BeliefReplay:
                     # differ (or did not get past it): its next alternative, else an
                     # earlier decision (within a budget)
                     bt["tries"] += 1
-                    if e.pos <= bt["key"][0] + 1 and e.pos < bt["pos"] and not bt.get("parent") \
+                    if e.pos <= bt["key"][0] + 1 and e.pos <= bt["pos"] and not bt.get("parent") \
                             and not bt["state"]:
-                        # (the alternative failed right at its own action: the decisions it
-                        # led to, e.g. which card after answering "yes", may not have
-                        # existed before; they come next, with the alternative kept)
+                        # (the alternative failed right at its own action, also at the point
+                        # of the mismatch itself: the decisions it led to, e.g. which card
+                        # after answering "yes", may not have existed before; they come
+                        # next, with the alternative kept)
                         # (the first few alternatives each: the budget is shared)
                         new = [(k, [j for j in range(n) if j != i][:2]) for k, n, i in reversed(self._recent)
                                if k > bt["key"] and k not in self.overrides and n > 1]
@@ -1095,6 +1098,15 @@ class BeliefReplay:
                         # offer: another copy of it can differ in hidden history (e.g. a
                         # label a script left on the card on an earlier trip)
                         fix = self._viewer_copy_fix(fp, duel, cp)
+                    if fix is None and item[0] == "msg" and item[1]["type"] == "NEW_PHASE" \
+                            and fp["type"] in ("SELECT_BATTLECMD", "SELECT_IDLECMD"):
+                        # the real game went on to the next phase where the replay asks for
+                        # the command again: the opponent's activation came in a later
+                        # phase-leave window
+                        for dkey, passing in reversed(self._window_activations):
+                            if self.overrides.get(dkey) != passing:
+                                fix = ("decide", dkey, passing)
+                                break
                     if fix is None and item[0] == "prompt":
                         fix = self._prompt_copy_fix(item[1], fp, duel, cp) \
                             or self._hidden_candidates_fix(item[1], fp, duel) \
@@ -1571,10 +1583,11 @@ class BeliefReplay:
                 # a public card of the opponent the replay did not take: whether it
                 # qualified can depend on hidden cards (e.g. a cost that needs a
                 # matching card in the deck), so let it match the filters (a face-up
-                # card on the field only when no decision explains it: what it is
-                # shows, which one the effect took is usually the opponent's choice)
+                # card on the field only if the replay's selection left it out; when it
+                # was offered or there was no selection, first the decisions: which one
+                # was taken, or whether it happened, is the opponent's choice)
                 if exp["from"]["loc"] & (C.LOCATION_MZONE | C.LOCATION_SZONE) \
-                        and exp["from"].get("pos", 0) & C.POS_FACEUP:
+                        and exp["from"].get("pos", 0) & C.POS_FACEUP and self._was_offered(duel, exp["from"]) is not False:
                     faceup_match = self._match_fix(cp, msgs, idx, exp["from"])
                 else:
                     fix = self._match_fix(cp, msgs, idx, exp["from"])
@@ -1824,6 +1837,19 @@ class BeliefReplay:
         except Divergence as d:
             return d.fix
         return None
+
+    def _was_offered(self, duel: Duel, loc: dict) -> bool | None:
+        """Whether the card at `loc` was among the cards the opponent's latest card
+        selections (in the last few items) offered in the replay (None: there was
+        no such selection)."""
+        cid = infer.LocMap(duel).at(loc)
+        # (selections among cards of that place: e.g. not the choice of a Fusion
+        # Monster in the Extra Deck when the material on the field is in question)
+        recent = [ids for k, _, _ in self._recent if k[0] >= self.pos - 3 and k in self._offered
+                  for ids, places in [self._offered[k]] if (loc["con"], loc["loc"]) in places]
+        if cid is None or not recent:
+            return None
+        return any(cid in ids for ids in recent)
 
     def _match_fix(self, cp: int, msgs: list[dict], idx: int, loc: dict, duel: Duel | None = None) -> tuple | None:
         """The opponent took a hidden card for an effect, but in the replay no card
@@ -2913,6 +2939,10 @@ class BeliefReplay:
                 # alternative procedure; not a discarded hand, nor a card destroyed, e.g.
                 # an Equip Spell lost with its monster)
                 levels = {0: range(1, 5), 1: range(5, 13)}.get(tributes, range(7, 13))
+                # (the monsters Tributed for it, where they were: the card must be able to
+                # use exactly those, e.g. a Doomsday Token only for a DARK monster)
+                trib_locs = [x["from"] for x in up[:i] if x["type"] == "MOVE" and x["reason"] & C.REASON_RELEASE
+                             and x["from"]["loc"] == C.LOCATION_MZONE and x["from"]["con"] == src["con"]]
 
                 def fits(code):
                     card = self.db.get(code)
@@ -2979,10 +3009,13 @@ class BeliefReplay:
                 card = self.db.get(code)
                 return kind != "msetable" or card is None or card.level in usual_levels \
                     or code not in filler_codes or not tributes  # (without Tributes: whatever allowed it)
-            if entries and all(fits(e["code"]) and usual_fit(e["code"]) for e in entries):
+            trib_locs = trib_locs if kind == "msetable" and not foreign and src["loc"] == C.LOCATION_HAND else []
+            tribute_ok = not trib_locs or duel is None or self._settable_as(
+                duel, src, [None], tributes, trib_locs).get(None, True)
+            if entries and all(fits(e["code"]) and usual_fit(e["code"]) for e in entries) and tribute_ok:
                 return
             if entries and kind == "msetable" and duel is not None and src["loc"] == C.LOCATION_HAND \
-                    and not foreign and not discards and tributes < 3:
+                    and not foreign and not discards and tributes < 3 and tribute_ok:
                 # (its Level now, in the hand: effects can lower it, e.g. A Legendary
                 # Ocean for WATER monsters)
                 hand = capture(duel)["players"][src["con"]]["hand"]
@@ -3050,7 +3083,7 @@ class BeliefReplay:
                 # (the engine's answer first: the card in that slot, its properties
                 # assumed to be the candidate's, e.g. Zombie World allows only Zombies
                 # to be Tribute Summoned)
-                ok = self._settable_as(duel, src, codes[:60], tributes)
+                ok = self._settable_as(duel, src, codes[:60], tributes, trib_locs)
                 if ok and not any(ok.values()):
                     # (none of them: further cards that fit, Normal Monsters and the
                     # races the opponent has shown first, until a few are accepted)
@@ -3063,7 +3096,7 @@ class BeliefReplay:
                                                  -seen_races[self.db.get(c).race], c))
                     found = []
                     for k in range(0, min(len(pool), 1600), 200):
-                        more = self._settable_as(duel, src, pool[k:k + 200], tributes)
+                        more = self._settable_as(duel, src, pool[k:k + 200], tributes, trib_locs)
                         found += [c for c in pool[k:k + 200] if more.get(c)]
                         if len(found) >= 3:
                             break
@@ -3077,16 +3110,27 @@ class BeliefReplay:
             self._assume(src, codes, "opponent set a card the hypothesis cannot set")
             return
 
-    def _settable_as(self, duel: Duel, li: dict, codes: list[int], tributes: int) -> dict[int, bool]:
+    def _settable_as(self, duel: Duel, li: dict, codes: list, tributes: int,
+                     trib_locs: list[dict] | None = None) -> dict:
         """Whether the player may Set the hand card at `li` if it had each
         candidate's properties (code, type, Level, attribute, race, ATK/DEF assumed,
-        then reset): the restrictions on Setting, e.g. Zombie World allows only
-        Zombies to be Tribute Summoned (Levels and Tributes are checked apart)."""
-        out: dict[int, bool] = {}
+        then reset; None: as it is): the restrictions on Setting, e.g. Zombie World
+        allows only Zombies to be Tribute Summoned, and whether it can Tribute the
+        monsters at `trib_locs` (e.g. a Doomsday Token only for a DARK monster)."""
+        out: dict = {}
         sumtype = "SUMMON_TYPE_TRIBUTE" if tributes else "SUMMON_TYPE_NORMAL"
         lines = [f"local c=Duel.GetFieldCard({li['con']},LOCATION_HAND,{li['seq']})",
-                 "if not c then return end"]
+                 "if not c then return end", "local g=Group.CreateGroup()"]
+        for t in trib_locs or ():
+            lines.append(f"do local t=Duel.GetFieldCard({t['con']},LOCATION_MZONE,{t['seq']}) "
+                         f"if t then g:AddCard(t) end end")
+        check = f"Duel.CanPlayerSetMonster({li['con']},{sumtype},c)"
+        if trib_locs:
+            check += f" and Duel.CheckTribute(c,{len(trib_locs)},{len(trib_locs)},g)"
         for code in dict.fromkeys(codes):
+            if code is None:
+                lines.append(f"Debug.Message('none '..tostring({check}))")
+                continue
             card = self.db.get(code)
             if card is None:
                 continue
@@ -3095,11 +3139,11 @@ class BeliefReplay:
                 f"c:AssumeProperty(ASSUME_LEVEL,{card.level}) c:AssumeProperty(ASSUME_ATTRIBUTE,{card.attribute}) "
                 f"c:AssumeProperty(ASSUME_RACE,{card.race}) c:AssumeProperty(ASSUME_ATTACK,{max(card.attack, 0)}) "
                 f"c:AssumeProperty(ASSUME_DEFENSE,{max(card.defense, 0)}) "
-                f"Debug.Message('{code} '..tostring(Duel.CanPlayerSetMonster({li['con']},{sumtype},c))) Duel.AssumeReset()")
+                f"Debug.Message('{code} '..tostring({check})) Duel.AssumeReset()")
         try:
             for text in duel.lua_messages("\n".join(lines)):
                 code, res = text.split()
-                out[int(code)] = res == "true"
+                out[None if code == "none" else int(code)] = res == "true"
         except (ValueError, CoreError):
             return {}
         return out
@@ -3539,6 +3583,16 @@ class BeliefReplay:
             act = next((k for k, c in enumerate(valid) if c.get("index", -1) >= 0), None)
             if act is not None:
                 self._window_choices.append((dkey, act))
+        elif dkey is not None and prompt["type"] == "SELECT_CHAIN" and resp.get("index", -1) >= 0 \
+                and self._leaving_phase():
+            # (activated in a phase-leave window: in a later one instead, the phase
+            # can go on after the chain where this one asks for the command again)
+            passing = next((k for k, c in enumerate(valid) if c.get("index", -1) == -1), None)
+            if passing is not None:
+                self._window_activations.append((dkey, passing))
+        if dkey is not None and ids is not None:
+            offered = prompt.get("cards") or prompt.get("select_cards") or []
+            self._offered[dkey] = (set(ids), {(c["con"], c["loc"]) for c in offered})
         if dkey is not None and ids is not None and resp.get("indices"):
             self._multi_decisions[dkey] = (ids, resp)
             self._note_silent(duel, up, dkey, ids, valid, valid.index(resp))
