@@ -646,3 +646,22 @@ OCGEXT_API void OCG_ExtGetInfo(OCG_Duel ocg_duel, uint32_t* out5) {
 	out5[3] = static_cast<uint32_t>(f.player[0].lp);
 	out5[4] = static_cast<uint32_t>(f.player[1].lp);
 }
+
+// Analysis aid: turns the read log on or off and returns what it holds since the
+// last call (pairs of card id and a mask of the properties the game read: code 1,
+// type 2, Level 4, Rank 8, attribute 16, race 32, ATK 64, DEF 128, archetypes 256,
+// Link 512), clearing it. Reads while answering queries are not logged.
+OCGEXT_API uint32_t OCG_ExtReadLog(OCG_Duel ocg_duel, uint32_t enable, uint32_t* out, uint32_t cap) {
+	auto* pduel = static_cast<duel*>(ocg_duel);
+	pduel->read_log_on = enable != 0;
+	uint32_t n = 0;
+	for(const auto& it : pduel->read_log) {
+		if(n < cap) {
+			out[2 * n] = it.first;
+			out[2 * n + 1] = it.second;
+		}
+		++n;
+	}
+	pduel->read_log.clear();
+	return n;
+}

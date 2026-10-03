@@ -70,6 +70,10 @@ python3 scripts/check_belief.py --index runs/index.jsonl --tags shuffle_set_card
 # look at one reconstruction in detail (--max-restarts N stops after N repairs)
 python3 scripts/debug_belief.py SEED VIEWER [--cut 0.5]   # (--cut -2: the end of turn 2)
 
+# which hidden card or copy a failed reconstruction has wrong: the hidden cards the
+# engine read before the first divergence (core read log), and trial swaps/codes
+python3 scripts/suggest_repair.py SEED VIEWER [--cut 0.5] [--pairs ...] [--decks ...]
+
 # leak check: does the (secret) card creation order show in the observations?
 python3 scripts/diff_creation.py -n 1000 --start 5000
 

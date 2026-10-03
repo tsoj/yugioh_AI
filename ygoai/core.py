@@ -136,6 +136,7 @@ def _load_library(path: Path) -> ct.CDLL:
         "OCG_ExtGetOverlayCards": (u32, [vp, u8, u32, u32, ct.POINTER(u32), ct.POINTER(u32), u32]),
         "OCG_ExtGetAllCards": (u32, [vp, ct.POINTER(u32), u32]),
         "OCG_ExtChainRelated": (u32, [vp, ct.POINTER(u8), u32]),
+        "OCG_ExtReadLog": (u32, [vp, u32, ct.POINTER(u32), u32]),
         "OCG_ExtGetInfo": (None, [vp, ct.POINTER(u32)]),
         "OCG_ExtForceActivatable": (None, [vp, u8, u32, ct.c_uint64]),
         "OCG_ExtClearForceActivatable": (None, [vp]),
@@ -408,6 +409,14 @@ class Duel:
             buf = (ct.c_uint8 * n)()
             n = lib().OCG_ExtChainRelated(self.handle, buf, n)
         return [bool(buf[i]) for i in range(n)]
+
+    def read_log(self, enable: bool = True) -> dict[int, int]:
+        """Analysis aid: the card properties the game read since the last call
+        ({card id: mask}, see OCG_ExtReadLog), and logging on or off from now."""
+        cap = 4096
+        buf = (ct.c_uint32 * (2 * cap))()
+        n = lib().OCG_ExtReadLog(self.handle, int(enable), buf, cap)
+        return {buf[2 * i]: buf[2 * i + 1] for i in range(min(n, cap))}
 
     def lua_messages(self, code: str) -> list[str]:
         """Runs a Lua chunk in the duel and returns what it printed with

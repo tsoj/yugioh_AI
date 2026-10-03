@@ -1,6 +1,6 @@
 diff -ruN core_a/card.cpp core_b/card.cpp
 --- core_a/card.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/card.cpp	2026-10-02 15:53:59.034566762 +0200
++++ core_b/card.cpp	2026-10-03 03:06:05.842393941 +0200
 @@ -75,6 +75,19 @@
  			return c1->current.sequence < c2->current.sequence;
  	}
@@ -44,7 +44,87 @@ diff -ruN core_a/card.cpp core_b/card.cpp
  			loc_info info = pcard->get_info_location();
  			insert_value<uint8_t>(pduel->query_buffer, info.controler);
  			insert_value<uint8_t>(pduel->query_buffer, info.location);
-@@ -1402,7 +1422,7 @@
+@@ -240,6 +260,7 @@
+ // return: the current card name
+ // for double-name card, it returns printed name
+ uint32_t card::get_code() {
++	pduel->note_read(cardid, 1);
+ 	auto search = assume.find(ASSUME_CODE);
+ 	if(search != assume.end())
+ 		return search->second;
+@@ -329,6 +350,7 @@
+ 	}
+ }
+ void card::get_set_card(std::set<uint16_t>& setcodes) {
++	pduel->note_read(cardid, 256);
+ 	uint32_t code = get_code();
+ 	const auto& og_setcodes = (code != data.code) ? pduel->read_card(code).setcodes : data.setcodes;
+ 	setcodes.insert(og_setcodes.begin(), og_setcodes.end());
+@@ -415,6 +437,7 @@
+ 		get_set_card(setcodes);
+ }
+ uint32_t card::get_type(card* scard, uint64_t sumtype, uint8_t playerid) {
++	pduel->note_read(cardid, 2);
+ 	auto search = assume.find(ASSUME_TYPE);
+ 	if(search != assume.end())
+ 		return search->second;
+@@ -538,6 +561,7 @@
+ 	return batk;
+ }
+ int32_t card::get_attack() {
++	pduel->note_read(cardid, 64);
+ 	auto search = assume.find(ASSUME_ATTACK);
+ 	if(search != assume.end())
+ 		return search->second;
+@@ -736,6 +760,7 @@
+ 	return bdef;
+ }
+ int32_t card::get_defense() {
++	pduel->note_read(cardid, 128);
+ 	if(data.type & TYPE_LINK)
+ 		return 0;
+ 	auto search = assume.find(ASSUME_DEFENSE);
+@@ -874,6 +899,7 @@
+ // 2. cards with current type TYPE_MONSTER or
+ // 3. cards with EFFECT_PRE_MONSTER
+ uint32_t card::get_level() {
++	pduel->note_read(cardid, 4);
+ 	if(((data.type & TYPE_XYZ) && !(is_affected_by_effect(EFFECT_RANK_LEVEL) || is_affected_by_effect(EFFECT_RANK_LEVEL_S)))
+ 		|| (data.type & TYPE_LINK) || (status & STATUS_NO_LEVEL)
+ 		|| (!(data.type & TYPE_MONSTER) && !(get_type() & TYPE_MONSTER) && !is_affected_by_effect(EFFECT_PRE_MONSTER)))
+@@ -930,6 +956,7 @@
+ 	return level;
+ }
+ uint32_t card::get_rank() {
++	pduel->note_read(cardid, 8);
+ 	if(((!(data.type & TYPE_XYZ) || (status & STATUS_NO_LEVEL)) && !(is_affected_by_effect(EFFECT_LEVEL_RANK) || is_affected_by_effect(EFFECT_LEVEL_RANK_S))) 
+ 	|| (data.type & TYPE_LINK))
+ 		return 0;
+@@ -987,6 +1014,7 @@
+ 	return rank;
+ }
+ uint32_t card::get_link() {
++	pduel->note_read(cardid, 512);
+ 	if(!(data.type & TYPE_LINK) || (status & STATUS_NO_LEVEL))
+ 		return 0;
+ 	auto search = assume.find(ASSUME_LINK);
+@@ -1082,6 +1110,7 @@
+ }
+ // see get_level()
+ uint32_t card::get_attribute(card* scard, uint64_t sumtype, uint8_t playerid) {
++	pduel->note_read(cardid, 16);
+ 	auto search = assume.find(ASSUME_ATTRIBUTE);
+ 	if(search != assume.end())
+ 		return search->second;
+@@ -1133,6 +1162,7 @@
+ }
+ // see get_level()
+ uint64_t card::get_race(card* scard, uint64_t sumtype, uint8_t playerid) {
++	pduel->note_read(cardid, 32);
+ 	auto search = assume.find(ASSUME_RACE);
+ 	if(search != assume.end())
+ 		return search->second;
+@@ -1402,7 +1432,7 @@
  	int32_t zones = 0;
  	card_set cset;
  	get_linked_cards(&cset, linked_zone);
@@ -53,7 +133,7 @@ diff -ruN core_a/card.cpp core_b/card.cpp
  		auto zone = pcard->get_linked_zone();
  		uint32_t is_szone = pcard->current.location == LOCATION_SZONE ? 8 : 0;
  		uint32_t is_player = (current.controler == pcard->current.controler) ? 0 : 16;
-@@ -1574,7 +1594,7 @@
+@@ -1574,7 +1604,7 @@
  }
  int32_t card::get_union_count() {
  	int32_t count = 0;
@@ -62,7 +142,7 @@ diff -ruN core_a/card.cpp core_b/card.cpp
  		if((pcard->data.type & TYPE_UNION) && pcard->is_affected_by_effect(EFFECT_UNION_STATUS))
  			++count;
  	}
-@@ -1582,7 +1602,7 @@
+@@ -1582,7 +1612,7 @@
  }
  int32_t card::get_old_union_count() {
  	int32_t count = 0;
@@ -71,7 +151,7 @@ diff -ruN core_a/card.cpp core_b/card.cpp
  		if((pcard->data.type & TYPE_UNION) && pcard->is_affected_by_effect(EFFECT_OLDUNION_STATUS))
  			++count;
  	}
-@@ -1780,7 +1800,7 @@
+@@ -1780,7 +1810,7 @@
  	}
  	if (current.controler != PLAYER_NONE && !check_target.empty()) {
  		if(peffect->is_disable_related())
@@ -80,7 +160,7 @@ diff -ruN core_a/card.cpp core_b/card.cpp
  				pduel->game_field->add_to_disable_check_list(target);
  	}
  	if(peffect->is_flag(EFFECT_FLAG_OATH)) {
-@@ -1850,7 +1870,7 @@
+@@ -1850,7 +1880,7 @@
  	}
  	if ((current.controler != PLAYER_NONE) && !check_target.empty()) {
  		if (peffect->is_disable_related())
@@ -89,7 +169,7 @@ diff -ruN core_a/card.cpp core_b/card.cpp
  				pduel->game_field->add_to_disable_check_list(target);
  	}
  	if (peffect->is_flag(EFFECT_FLAG_INITIAL) && peffect->copy_id && is_status(STATUS_EFFECT_REPLACED)) {
-@@ -1935,12 +1955,12 @@
+@@ -1935,12 +1965,12 @@
  		return -1;
  	if(is_status(STATUS_EFFECT_REPLACED))
  		set_status(STATUS_EFFECT_REPLACED, FALSE);
@@ -108,7 +188,7 @@ diff -ruN core_a/card.cpp core_b/card.cpp
  	}
  	uint32_t cr = pduel->game_field->core.copy_reset;
  	uint8_t crc = pduel->game_field->core.copy_reset_count;
-@@ -2055,12 +2075,18 @@
+@@ -2055,12 +2085,18 @@
  			}
  		}
  	}
@@ -133,7 +213,7 @@ diff -ruN core_a/card.cpp core_b/card.cpp
  	}
  }
  void card::reset_effect_count() {
-@@ -2333,7 +2359,7 @@
+@@ -2333,7 +2369,7 @@
  }
  void card::set_material(card_set materials) {
  	material_cards = std::move(materials);
@@ -142,7 +222,7 @@ diff -ruN core_a/card.cpp core_b/card.cpp
  		pcard->current.reason_card = this;
  	effect_set eset;
  	filter_effect(EFFECT_MATERIAL_CHECK, &eset);
-@@ -2367,14 +2393,14 @@
+@@ -2367,14 +2403,14 @@
  	}
  }
  void card::clear_card_target() {
@@ -159,7 +239,7 @@ diff -ruN core_a/card.cpp core_b/card.cpp
  		pcard->effect_target_owner.erase(this);
  		for(auto& it : target_effect) {
  			if(it.second->is_disable_related())
-@@ -2399,7 +2425,7 @@
+@@ -2399,7 +2435,7 @@
  		if(peffect->is_available() && (!peffect->is_flag(EFFECT_FLAG_SINGLE_RANGE) || is_affect_by_effect(peffect)))
  			eset->push_back(peffect);
  	}
@@ -168,7 +248,7 @@ diff -ruN core_a/card.cpp core_b/card.cpp
  		rg = pcard->equip_effect.equal_range(code);
  		for(auto eit = rg.first; eit != rg.second;) {
  			peffect = eit->second;
-@@ -2408,7 +2434,7 @@
+@@ -2408,7 +2444,7 @@
  				eset->push_back(peffect);
  		}
  	}
@@ -177,7 +257,7 @@ diff -ruN core_a/card.cpp core_b/card.cpp
  		rg = pcard->target_effect.equal_range(code);
  		for(auto eit = rg.first; eit != rg.second;) {
  			peffect = eit->second;
-@@ -2454,12 +2480,12 @@
+@@ -2454,12 +2490,12 @@
  	auto rg = single_effect.equal_range(code);
  	for (; rg.first != rg.second; ++rg.first)
  		eset->push_back(rg.first->second);
@@ -192,7 +272,7 @@ diff -ruN core_a/card.cpp core_b/card.cpp
  		rg = pcard->target_effect.equal_range(code);
  		for(; rg.first != rg.second; ++rg.first) {
  			effect* peffect = rg.first->second;
-@@ -2487,13 +2513,13 @@
+@@ -2487,13 +2523,13 @@
  	for (; rg.first != rg.second; ++rg.first) {
  		immune_effect.push_back(rg.first->second);
  	}
@@ -208,7 +288,7 @@ diff -ruN core_a/card.cpp core_b/card.cpp
  		rg = pcard->target_effect.equal_range(EFFECT_IMMUNE_EFFECT);
  		for (; rg.first != rg.second; ++rg.first) {
  			peffect = rg.first->second;
-@@ -2522,15 +2548,16 @@
+@@ -2522,15 +2558,16 @@
  // 1. put all cards in the target of peffect into effects.disable_check_set, effects.disable_check_list
  // 2. add equiping_target of peffect into effects.disable_check_set, effects.disable_check_list
  void card::filter_disable_related_cards() {
@@ -228,7 +308,15 @@ diff -ruN core_a/card.cpp core_b/card.cpp
  					pduel->game_field->add_to_disable_check_list(target);
  			} else if((peffect->type & EFFECT_TYPE_XMATERIAL) && overlay_target)
  				pduel->game_field->add_to_disable_check_list(overlay_target);
-@@ -2808,7 +2835,7 @@
+@@ -2800,6 +2837,7 @@
+ }
+ // return: an effect with code which affects this or 0
+ effect* card::is_affected_by_effect(int32_t code) {
++	pduel->note_read(cardid, 2048);
+ 	effect* peffect;
+ 	auto rg = single_effect.equal_range(code);
+ 	for(auto eit = rg.first; eit != rg.second;) {
+@@ -2808,7 +2846,7 @@
  		if (peffect->is_available() && (!peffect->is_flag(EFFECT_FLAG_SINGLE_RANGE) || is_affect_by_effect(peffect)))
  			return peffect;
  	}
@@ -237,7 +325,7 @@ diff -ruN core_a/card.cpp core_b/card.cpp
  		rg = pcard->equip_effect.equal_range(code);
  		for(auto eit = rg.first; eit != rg.second;) {
  			peffect = eit->second;
-@@ -2817,7 +2844,7 @@
+@@ -2817,7 +2855,7 @@
  				return peffect;
  		}
  	}
@@ -246,7 +334,15 @@ diff -ruN core_a/card.cpp core_b/card.cpp
  		rg = pcard->target_effect.equal_range(code);
  		for(auto eit = rg.first; eit != rg.second;) {
  			peffect = eit->second;
-@@ -2857,7 +2884,7 @@
+@@ -2848,6 +2886,7 @@
+ 	return nullptr;
+ }
+ effect* card::is_affected_by_effect(int32_t code, card* target) {
++	pduel->note_read(cardid, 2048);
+ 	effect* peffect;
+ 	auto rg = single_effect.equal_range(code);
+ 	for(auto eit = rg.first; eit != rg.second;) {
+@@ -2857,7 +2896,7 @@
  						&& peffect->get_value(target))
  			return peffect;
  	}
@@ -255,7 +351,7 @@ diff -ruN core_a/card.cpp core_b/card.cpp
  		rg = pcard->equip_effect.equal_range(code);
  		for(auto eit = rg.first; eit != rg.second;) {
  			peffect = eit->second;
-@@ -2866,7 +2893,7 @@
+@@ -2866,7 +2905,7 @@
  				return peffect;
  		}
  	}
@@ -264,7 +360,7 @@ diff -ruN core_a/card.cpp core_b/card.cpp
  		rg = pcard->equip_effect.equal_range(code);
  		for(auto eit = rg.first; eit != rg.second;) {
  			peffect = eit->second;
-@@ -2877,7 +2904,7 @@
+@@ -2877,7 +2916,7 @@
  				return peffect;
  		}
  	}
@@ -273,7 +369,7 @@ diff -ruN core_a/card.cpp core_b/card.cpp
  		rg = pcard->target_effect.equal_range(code);
  		for(auto eit = rg.first; eit != rg.second;) {
  			peffect = eit->second;
-@@ -2920,15 +2947,15 @@
+@@ -2920,15 +2959,15 @@
  		if ((code == 0 || peffect->code == code) && is_affect_by_effect(peffect))
  			eset->push_back(peffect);
  	}
@@ -330,19 +426,27 @@ diff -ruN core_a/duel.cpp core_b/duel.cpp
  	for(auto& pgroup : groups) {
 diff -ruN core_a/duel.h core_b/duel.h
 --- core_a/duel.h	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/duel.h	2026-10-02 15:53:59.035241301 +0200
-@@ -62,6 +62,8 @@
++++ core_b/duel.h	2026-10-03 02:00:15.350232627 +0200
+@@ -62,6 +62,16 @@
  	};
  	std::vector<uint8_t> buff;
  	std::vector<uint8_t> query_buffer;
 +	bool querying{false};  // answering a query: evaluate, but change nothing
 +	uint64_t lua_steps{0};  // Lua instructions run in the current OCG_DuelProcess call
++	// (an analysis aid, off by default: which card properties the game read, per
++	// card id, see OCG_ExtReadLog)
++	bool read_log_on{false};
++	std::unordered_map<uint32_t, uint32_t> read_log;
++	void note_read(uint32_t cardid, uint32_t what) {
++		if(read_log_on && !querying)
++			read_log[cardid] |= what;
++	}
  	field* game_field{};
  	interpreter* lua{};
  	std::unordered_set<card*> cards;
 diff -ruN core_a/effect.cpp core_b/effect.cpp
 --- core_a/effect.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/effect.cpp	2026-10-02 22:26:24.943076466 +0200
++++ core_b/effect.cpp	2026-10-03 03:06:05.842507552 +0200
 @@ -10,6 +10,7 @@
  #include "effect.h"
  #include "field.h"
@@ -369,7 +473,16 @@ diff -ruN core_a/effect.cpp core_b/effect.cpp
  	if(res) {
  		if(!(status & EFFECT_STATUS_AVAILABLE))
  			id = pduel->game_field->infos.field_id++;
-@@ -295,8 +307,13 @@
+@@ -124,6 +136,8 @@
+ // count_limit: left count of activation
+ // count_limit_max: max count of activation
+ int32_t effect::check_count_limit(uint8_t playerid) const {
++	if(handler)
++		pduel->note_read(handler->cardid, 4096);
+ 	if(is_flag(EFFECT_FLAG_COUNT_LIMIT)) {
+ 		if(count_limit == 0)
+ 			return FALSE;
+@@ -295,8 +309,13 @@
  	int32_t result = TRUE;
  	if(!(type & EFFECT_TYPE_CONTINUOUS))
  		result = is_action_check(playerid);
@@ -781,8 +894,167 @@ diff -ruN core_a/interpreter.cpp core_b/interpreter.cpp
  lua_Integer interpreter::get_operation_value(card* pcard, int32_t findex, int32_t extraargs) {
 diff -ruN core_a/libcard.cpp core_b/libcard.cpp
 --- core_a/libcard.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/libcard.cpp	2026-10-02 15:53:59.036556025 +0200
-@@ -1030,7 +1030,7 @@
++++ core_b/libcard.cpp	2026-10-03 03:06:05.841844437 +0200
+@@ -116,6 +116,7 @@
+ 	return static_cast<int32_t>(setcodes.size());
+ }
+ LUA_FUNCTION(GetPreviousSetCard) {
++	pduel->note_read(self->cardid, 16384);
+ 	std::set<uint16_t> setcodes;
+ 	self->get_pre_set_card(setcodes);
+ 	if (setcodes.empty()) {
+@@ -381,6 +382,7 @@
+ 	return 1;
+ }
+ LUA_FUNCTION(GetPreviousCodeOnField) {
++	pduel->note_read(self->cardid, 16384);
+ 	lua_pushinteger(L, self->previous.code);
+ 	if(self->previous.code2) {
+ 		lua_pushinteger(L, self->previous.code2);
+@@ -389,30 +391,37 @@
+ 	return 1;
+ }
+ LUA_FUNCTION(GetPreviousTypeOnField) {
++	pduel->note_read(self->cardid, 16384);
+ 	lua_pushinteger(L, self->previous.type);
+ 	return 1;
+ }
+ LUA_FUNCTION(GetPreviousLevelOnField) {
++	pduel->note_read(self->cardid, 16384);
+ 	lua_pushinteger(L, self->previous.level);
+ 	return 1;
+ }
+ LUA_FUNCTION(GetPreviousRankOnField) {
++	pduel->note_read(self->cardid, 16384);
+ 	lua_pushinteger(L, self->previous.rank);
+ 	return 1;
+ }
+ LUA_FUNCTION(GetPreviousAttributeOnField) {
++	pduel->note_read(self->cardid, 16384);
+ 	lua_pushinteger(L, self->previous.attribute);
+ 	return 1;
+ }
+ LUA_FUNCTION(GetPreviousRaceOnField) {
++	pduel->note_read(self->cardid, 16384);
+ 	lua_pushinteger(L, self->previous.race);
+ 	return 1;
+ }
+ LUA_FUNCTION(GetPreviousAttackOnField) {
++	pduel->note_read(self->cardid, 16384);
+ 	lua_pushinteger(L, self->previous.attack);
+ 	return 1;
+ }
+ LUA_FUNCTION(GetPreviousDefenseOnField) {
++	pduel->note_read(self->cardid, 16384);
+ 	lua_pushinteger(L, self->previous.defense);
+ 	return 1;
+ }
+@@ -425,22 +434,27 @@
+ 	return 1;
+ }
+ LUA_FUNCTION(GetPreviousControler) {
++	pduel->note_read(self->cardid, 16384);
+ 	lua_pushinteger(L, self->previous.controler);
+ 	return 1;
+ }
+ LUA_FUNCTION(GetReason) {
++	pduel->note_read(self->cardid, 16384);
+ 	lua_pushinteger(L, self->current.reason);
+ 	return 1;
+ }
+ LUA_FUNCTION(GetReasonCard) {
++	pduel->note_read(self->cardid, 16384);
+ 	interpreter::pushobject(L, self->current.reason_card);
+ 	return 1;
+ }
+ LUA_FUNCTION(GetReasonPlayer) {
++	pduel->note_read(self->cardid, 16384);
+ 	lua_pushinteger(L, self->current.reason_player);
+ 	return 1;
+ }
+ LUA_FUNCTION(GetReasonEffect) {
++	pduel->note_read(self->cardid, 16384);
+ 	interpreter::pushobject(L, self->current.reason_effect);
+ 	return 1;
+ }
+@@ -477,6 +491,7 @@
+ 	return 1;
+ }
+ LUA_FUNCTION(GetPreviousPosition) {
++	pduel->note_read(self->cardid, 16384);
+ 	lua_pushinteger(L, self->previous.position);
+ 	return 1;
+ }
+@@ -492,6 +507,7 @@
+ 	return 1;
+ }
+ LUA_FUNCTION(GetPreviousLocation) {
++	pduel->note_read(self->cardid, 16384);
+ 	lua_pushinteger(L, self->previous.location);
+ 	return 1;
+ }
+@@ -500,6 +516,7 @@
+ 	return 1;
+ }
+ LUA_FUNCTION(GetPreviousSequence) {
++	pduel->note_read(self->cardid, 16384);
+ 	lua_pushinteger(L, self->previous.sequence);
+ 	return 1;
+ }
+@@ -524,10 +541,12 @@
+ 	return 1;
+ }
+ LUA_FUNCTION(GetTurnID) {
++	pduel->note_read(self->cardid, 16384);
+ 	lua_pushinteger(L, self->turnid);
+ 	return 1;
+ }
+ LUA_FUNCTION(GetFieldID) {
++	pduel->note_read(self->cardid, 16384);
+ 	lua_pushinteger(L, self->fieldid);
+ 	return 1;
+ }
+@@ -672,6 +691,7 @@
+ 	return 1;
+ }
+ LUA_FUNCTION(IsPreviousSetCard) {
++	pduel->note_read(self->cardid, 16384);
+ 	check_param_count(L, 2);
+ 	std::set<uint16_t> setcodes;
+ 	self->get_pre_set_card(setcodes);
+@@ -804,6 +824,7 @@
+ 	return 1;
+ }
+ LUA_FUNCTION(IsReason) {
++	pduel->note_read(self->cardid, 16384);
+ 	check_param_count(L, 2);
+ 	auto treason = lua_get<uint32_t>(L, 2);
+ 	lua_pushboolean(L, (self->current.reason & treason) != 0);
+@@ -831,6 +852,7 @@
+ 	return 1;
+ }
+ LUA_FUNCTION(IsStatus) {
++	pduel->note_read(self->cardid, 16384);
+ 	check_param_count(L, 2);
+ 	auto tstatus = lua_get<uint32_t>(L, 2);
+ 	lua_pushboolean(L, (self->status & tstatus) != 0);
+@@ -874,6 +896,7 @@
+ 	return 0;
+ }
+ LUA_FUNCTION(GetTurnCounter) {
++	pduel->note_read(self->cardid, 16384);
+ 	lua_pushinteger(L, self->turn_counter);
+ 	return 1;
+ }
+@@ -911,6 +934,7 @@
+ 	return 1;
+ }
+ LUA_FUNCTION(GetPreviousEquipTarget) {
++	pduel->note_read(self->cardid, 16384);
+ 	interpreter::pushobject(L, self->pre_equip_target);
+ 	return 1;
+ }
+@@ -1030,7 +1054,7 @@
  }
  LUA_FUNCTION(GetFirstCardTarget) {
  	if(self->effect_target_cards.size())
@@ -791,6 +1063,77 @@ diff -ruN core_a/libcard.cpp core_b/libcard.cpp
  	else lua_pushnil(L);
  	return 1;
  }
+@@ -1114,6 +1138,7 @@
+ 	return 1;
+ }
+ LUA_FUNCTION(IsHasEffect) {
++	pduel->note_read(self->cardid, 16384);
+ 	check_param_count(L, 2);
+ 	auto code = lua_get<uint32_t>(L, 2);
+ 	effect_set eset;
+@@ -1203,6 +1228,7 @@
+ }
+ LUA_FUNCTION(GetFlagEffect) {
+ 	check_param_count(L, 2);
++	pduel->note_read(self->cardid, 1024);
+ 	auto code = (lua_get<uint32_t>(L, 2) & 0xfffffff) | 0x10000000;
+ 	lua_pushinteger(L, self->single_effect.count(code));
+ 	return 1;
+@@ -1227,6 +1253,7 @@
+ 	return 1;
+ }
+ LUA_FUNCTION(GetFlagEffectLabel) {
++	pduel->note_read(self->cardid, 1024);
+ 	check_param_count(L, 2);
+ 	auto code = (lua_get<uint32_t>(L, 2) & 0xfffffff) | 0x10000000;
+ 	auto rg = self->single_effect.equal_range(code);
+@@ -1272,12 +1299,14 @@
+ 	return 0;
+ }
+ LUA_FUNCTION(IsRelateToEffect) {
++	pduel->note_read(self->cardid, 16384);
+ 	check_param_count(L, 2);
+ 	auto peffect = lua_get<effect*, true>(L, 2);
+ 	lua_pushboolean(L, self->is_has_relation(peffect));
+ 	return 1;
+ }
+ LUA_FUNCTION(IsRelateToChain) {
++	pduel->note_read(self->cardid, 16384);
+ 	check_param_count(L, 2);
+ 	auto chain_count = lua_get<uint8_t>(L, 2);
+ 	if(chain_count > pduel->game_field->core.current_chain.size() || chain_count < 1)
+@@ -1592,6 +1621,7 @@
+ 	return 1;
+ }
+ LUA_FUNCTION(IsPreviousPosition) {
++	pduel->note_read(self->cardid, 16384);
+ 	check_param_count(L, 2);
+ 	auto pos = lua_get<uint8_t>(L, 2);
+ 	lua_pushboolean(L, (self->previous.position & pos) != 0);
+@@ -1604,6 +1634,7 @@
+ 	return 1;
+ }
+ LUA_FUNCTION(IsPreviousControler) {
++	pduel->note_read(self->cardid, 16384);
+ 	check_param_count(L, 2);
+ 	auto con = lua_get<uint8_t>(L, 2);
+ 	lua_pushboolean(L, self->previous.controler == con);
+@@ -1635,6 +1666,7 @@
+ 	return 1;
+ }
+ LUA_FUNCTION(IsPreviousLocation) {
++	pduel->note_read(self->cardid, 16384);
+ 	check_param_count(L, 2);
+ 	auto loc = lua_get<uint16_t>(L, 2);
+ 	lua_pushboolean(L, self->previous.is_location(loc));
+@@ -1787,6 +1819,7 @@
+ 	return 1;
+ }
+ LUA_FUNCTION(GetCounter) {
++	pduel->note_read(self->cardid, 16384);
+ 	check_param_count(L, 2);
+ 	auto countertype = lua_get<uint16_t>(L, 2);
+ 	if(countertype == 0)
 diff -ruN core_a/libduel.cpp core_b/libduel.cpp
 --- core_a/libduel.cpp	2026-09-29 02:25:58.000000000 +0200
 +++ core_b/libduel.cpp	2026-10-02 15:53:59.036983540 +0200
