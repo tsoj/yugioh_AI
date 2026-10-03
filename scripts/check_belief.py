@@ -19,6 +19,7 @@ import random
 import signal
 import sys
 import time
+import zlib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -113,6 +114,12 @@ def main() -> int:
     ap.add_argument("--fractions", default="0.333,0.667,1.0")
     ap.add_argument("--turns", default="1,2,3",
                     help="also cut at the end of these turns (results show them as frac -N); '' for none")
+    ap.add_argument("--turn-share", type=float, default=0.1,
+                    help="share of the games that get the --turns cuts (picked by seed, the same in every "
+                         "run; they rarely fail where the others pass), 1 for all")
+    ap.add_argument("--previous", type=Path,
+                    help="an earlier output: games whose reconstruction failed there (at any cut, for that "
+                         "viewer) get the --turns cuts too")
     ap.add_argument("--mirror-prob", type=float, default=0.2)
     ap.add_argument("--timeout", type=int, default=180, help="seconds per belief replay")
     ap.add_argument("--read-guided-ok", action="store_true",
@@ -133,8 +140,17 @@ def main() -> int:
     args = ap.parse_args()
     if args.read_guided_ok:
         os.environ["YGOAI_READ_GUIDED_OK"] = "1"
-    fractions = tuple(float(f) for f in args.fractions.split(",") if f) \
-        + tuple(-float(t) for t in args.turns.split(",") if t)
+    fractions = tuple(float(f) for f in args.fractions.split(",") if f)
+    turn_cuts = tuple(-float(t) for t in args.turns.split(",") if t)
+    failed_before: set[tuple[int, int]] = set()
+    if args.previous:
+        failed_before = {(r["seed"], r["viewer"]) for r in map(json.loads, args.previous.open())
+                         if "viewer" in r and not r["ok"]}
+
+    def cuts(seed: int, viewer: int) -> tuple:
+        # (a fixed share of the seeds, spread over the range by a hash)
+        sampled = zlib.crc32(f"turn cuts {seed}".encode()) % 10000 < args.turn_share * 10000
+        return fractions + (turn_cuts if sampled or (seed, viewer) in failed_before else ())
     if args.cases:
         cases = []
         for line in args.cases.open():
@@ -153,7 +169,7 @@ def main() -> int:
         else:
             seeds = [args.start + i for i in range(args.games)]
         cases = [(seed, viewer, frac) for seed in seeds for viewer in (0, 1)
-                 for frac in sorted(fractions, reverse=True)]
+                 for frac in sorted(cuts(seed, viewer), reverse=True)]
     pairs = tuple(tuple(p.split("-")) for p in args.pairs.split(",")) if args.pairs else None
     # one task per game (it is played once for all of its reconstructions)
     by_seed: dict[int, list] = {}
