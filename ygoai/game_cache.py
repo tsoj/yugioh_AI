@@ -7,6 +7,10 @@ the card database, the card scripts, the Python code that plays and observes
 games and a few environment variables. The cache key covers all of them (files
 by content, the many card scripts by size and modification time), so a change
 to any of them plays the games anew. YGOAI_GAME_CACHE=0 turns the cache off.
+
+Games stored under an older fingerprint are never loaded again (unless the code
+goes back to that state, e.g. to compare with the previous commit), so only the
+KEEP most recently used fingerprints are kept; the others are deleted.
 """
 
 from __future__ import annotations
@@ -15,6 +19,8 @@ import hashlib
 import json
 import os
 import pickle
+import shutil
+import time
 import zlib
 from pathlib import Path
 
@@ -24,6 +30,8 @@ CACHE_DIR = Path(os.environ.get("YGOAI_GAME_CACHE_DIR", ROOT / "build" / "game_c
 _ENV = ("YGOAI_NO_OVERRIDES", "YGOAI_CORE_LIB", "YGOAI_SCRIPTS", "YGOAI_CDB_DIR", "YGOAI_DECKS",
         "YGOAI_NEW_DECKS")
 _fingerprints: dict[bool, str] = {}
+KEEP = 3  # most recently used fingerprints kept
+_used: set[str] = set()  # fingerprint directories this process has marked as used
 
 
 def enabled() -> bool:
@@ -64,7 +72,34 @@ def fingerprint(with_belief: bool = False) -> str:
 
 def _path(key: dict, with_belief: bool) -> Path:
     digest = hashlib.sha256(json.dumps(key, sort_keys=True, default=str).encode()).hexdigest()[:24]
-    return CACHE_DIR / fingerprint(with_belief) / f"{key['seed']}-{digest}.pkl.z"
+    d = CACHE_DIR / fingerprint(with_belief)
+    if d.name not in _used:
+        _used.add(d.name)
+        _mark_used_and_prune(d)
+    return d / f"{key['seed']}-{digest}.pkl.z"
+
+
+def _mark_used_and_prune(d: Path) -> None:
+    """Marks fingerprint directory `d` as just used (once per process) and deletes
+    all but the KEEP most recently used ones."""
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        (d / ".used").write_text(str(time.time()))
+        dirs = [x for x in CACHE_DIR.iterdir() if x.is_dir()]
+    except OSError:
+        return
+
+    def last_used(x: Path) -> float:
+        try:
+            return (x / ".used").stat().st_mtime
+        except OSError:
+            try:
+                return x.stat().st_mtime
+            except OSError:
+                return 0.0
+    for old in sorted(dirs, key=last_used, reverse=True)[KEEP:]:
+        if old.name not in _used:
+            shutil.rmtree(old, ignore_errors=True)  # (another process may be pruning it too)
 
 
 def load(key: dict, with_belief: bool = False):
@@ -83,7 +118,6 @@ def store(key: dict, value, with_belief: bool = False) -> None:
         return
     path = _path(key, with_belief)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(f".{os.getpid()}.tmp")
         tmp.write_bytes(zlib.compress(pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL), 6))
         tmp.replace(path)  # (atomic: parallel workers never read half a file)
