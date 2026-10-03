@@ -426,7 +426,7 @@ diff -ruN core_a/duel.cpp core_b/duel.cpp
  	for(auto& pgroup : groups) {
 diff -ruN core_a/duel.h core_b/duel.h
 --- core_a/duel.h	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/duel.h	2026-10-03 02:00:15.350232627 +0200
++++ core_b/duel.h	2026-10-03 14:17:52.057942784 +0200
 @@ -62,6 +62,16 @@
  	};
  	std::vector<uint8_t> buff;
@@ -444,9 +444,25 @@ diff -ruN core_a/duel.h core_b/duel.h
  	field* game_field{};
  	interpreter* lua{};
  	std::unordered_set<card*> cards;
+@@ -103,7 +113,15 @@
+ 	int32_t get_next_integer(int32_t l, int32_t h);
+ 	duel_message* new_message(uint8_t message);
+ 	const card_data& read_card(uint32_t code);
++	// (errors of a condition evaluated only to keep timestamps current, see
++	// field::refresh_effect_conditions: noted, not reported)
++	bool mute_errors{false};
++	bool muted_error{false};
+ 	inline void handle_message(const char* message, OCG_LogTypes type) {
++		if(mute_errors && type == OCG_LOG_TYPE_ERROR) {
++			muted_error = true;
++			return;
++		}
+ 		handle_message_callback(handle_message_payload, message, type);
+ 	}
+ 	inline int read_script(const char* name) {
 diff -ruN core_a/effect.cpp core_b/effect.cpp
 --- core_a/effect.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/effect.cpp	2026-10-03 03:06:05.842507552 +0200
++++ core_b/effect.cpp	2026-10-03 14:17:52.058006628 +0200
 @@ -10,6 +10,7 @@
  #include "effect.h"
  #include "field.h"
@@ -455,10 +471,24 @@ diff -ruN core_a/effect.cpp core_b/effect.cpp
  
  bool effect_sort_id(const effect* e1, const effect* e2) {
  	return e1->id < e2->id;
-@@ -112,6 +113,17 @@
+@@ -110,8 +111,31 @@
+ 	}
+ 	if (!condition)
  		return TRUE;
++	bool refreshing = pduel->game_field->core.refreshing_condition == this;
++	if(refreshing) {
++		// (a script may not expect its condition to be asked outside of when it
++		// applies, e.g. a condition written for an activation, given a player)
++		pduel->mute_errors = true;
++		pduel->muted_error = false;
++	}
  	pduel->lua->add_param<LuaParam::EFFECT>(this);
  	int32_t res = pduel->lua->check_condition(condition, 1);
++	if(refreshing) {
++		pduel->mute_errors = false;
++		if(pduel->muted_error)
++			return res;  // (no answer: the status stays as it is)
++	}
 +	// An effect whose condition holds again starts applying anew: it gets a new id
 +	// (its timestamp, the order in which effects apply, e.g. a "+2 Level during the
 +	// Main Phase" after a "Level becomes 2"). Conditions are evaluated lazily,
@@ -473,7 +503,7 @@ diff -ruN core_a/effect.cpp core_b/effect.cpp
  	if(res) {
  		if(!(status & EFFECT_STATUS_AVAILABLE))
  			id = pduel->game_field->infos.field_id++;
-@@ -124,6 +136,8 @@
+@@ -124,6 +148,8 @@
  // count_limit: left count of activation
  // count_limit_max: max count of activation
  int32_t effect::check_count_limit(uint8_t playerid) const {
@@ -482,7 +512,7 @@ diff -ruN core_a/effect.cpp core_b/effect.cpp
  	if(is_flag(EFFECT_FLAG_COUNT_LIMIT)) {
  		if(count_limit == 0)
  			return FALSE;
-@@ -295,8 +309,13 @@
+@@ -295,8 +321,13 @@
  	int32_t result = TRUE;
  	if(!(type & EFFECT_TYPE_CONTINUOUS))
  		result = is_action_check(playerid);
@@ -2783,7 +2813,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			}
 diff -ruN core_a/processor.cpp core_b/processor.cpp
 --- core_a/processor.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/processor.cpp	2026-10-02 22:26:24.943561680 +0200
++++ core_b/processor.cpp	2026-10-03 14:16:04.882589189 +0200
 @@ -2574,7 +2574,7 @@
  	case 30: {
  		auto des = arg.cards_destroyed_by_battle;
@@ -2866,7 +2896,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  		}
  		if(core.leave_confirmed.size())
  			send_to(core.leave_confirmed, nullptr, REASON_RULE, PLAYER_NONE, PLAYER_NONE, LOCATION_GRAVE, 0, POS_FACEUP);
-@@ -4434,8 +4432,40 @@
+@@ -4434,8 +4432,46 @@
  	}
  	return 0;
  }
@@ -2889,9 +2919,15 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
 +	for(auto* pcard : pduel->cards) {
 +		add(pcard->single_effect);
 +		add(pcard->field_effect);
-+		add(pcard->equip_effect);
-+		add(pcard->target_effect);
-+		add(pcard->xmaterial_effect);
++		// (equip, target and material effects only while they apply to a card: their
++		// conditions may assume one, e.g. GetEquipTarget(); the game evaluates them
++		// only then too)
++		if(pcard->equiping_target)
++			add(pcard->equip_effect);
++		if(!pcard->effect_target_cards.empty())
++			add(pcard->target_effect);
++		if(pcard->overlay_target)
++			add(pcard->xmaterial_effect);
 +	}
 +	std::sort(conditional.begin(), conditional.end(), effect_sort_id);
 +	conditional.erase(std::unique(conditional.begin(), conditional.end()), conditional.end());
@@ -2907,7 +2943,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  	adjust_disable_check_list();
  	adjust_self_destroy_set();
  }
-@@ -4650,6 +4680,7 @@
+@@ -4650,6 +4686,7 @@
  	switch(arg.step) {
  	case 0: {
  		core.re_adjust = false;
@@ -2915,7 +2951,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  		return FALSE;
  	}
  	case 1: {
-@@ -4783,7 +4814,7 @@
+@@ -4783,7 +4820,7 @@
  			core.re_adjust = true;
  			get_control(core.control_adjust_set[1 - infos.turn_player], nullptr, PLAYER_NONE, infos.turn_player, 0, 0, 0xff);
  			get_control(core.control_adjust_set[infos.turn_player], nullptr, PLAYER_NONE, 1 - infos.turn_player, 0, 0, 0xff);
@@ -2924,7 +2960,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  				++core.readjust_map[rcard];
  				if(core.readjust_map[rcard] > 3)
  					destroy(rcard, nullptr, REASON_RULE, PLAYER_NONE);
-@@ -4896,18 +4927,35 @@
+@@ -4896,18 +4933,35 @@
  	}
  	case 12: {
  		//shuffle check
@@ -2962,7 +2998,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  		if(core.shuffle_hand_check[infos.turn_player])
  			shuffle(infos.turn_player, LOCATION_HAND);
  		if(core.shuffle_hand_check[1 - infos.turn_player])
-@@ -4992,6 +5040,11 @@
+@@ -4992,6 +5046,11 @@
  			arg.step = Processors::restart;
  			return FALSE;
  		}
