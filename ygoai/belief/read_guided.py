@@ -95,14 +95,15 @@ def _candidates(br: BeliefReplay, steps: list, pos: int, codes: list[int]) -> li
         for other, (c2, l2, _, code2) in where.items():
             if other != cid and (c2, l2, code2) == (con, loc, code):
                 for at in dict.fromkeys((p, arrived)):
-                    mine.append(({(at, 0): [(cid, other)]}, []))
+                    mine.append(({(at, 0): [(cid, other)]}, [],
+                                 f"copies of {code} at P{con} loc {loc} swapped at item {at}"))
         if con == opp and loc in (H, D, M, S):
             seen = {signature(code, mask)}
             for new in codes:
                 sig = signature(new, mask)
                 if new != code and sig is not None and sig not in seen:
                     seen.add(sig)
-                    mine.append(({}, [(p, con, loc, i, new)]))
+                    mine.append(({}, [(p, con, loc, i, new)], f"P{con} loc {loc} seq {i} at item {p}: {code} -> {new}"))
                 if len(mine) >= CODES_PER_CARD:
                     break
         per_card.append(mine)
@@ -124,6 +125,7 @@ def read_guided_repair(br: BeliefReplay) -> Duel | None:
             if con == br.opponent:
                 seen.append(m["code"])
     seen = list(dict.fromkeys(seen))
+    path: list[str] = []  # (the repairs followed so far)
     for _ in range(ROUNDS):
         pos, steps, first = _logged_run(br, swaps, assumptions)
         if pos is None or pos < 0:
@@ -131,7 +133,7 @@ def read_guided_repair(br: BeliefReplay) -> Duel | None:
         hyp = first.hypothesis
         codes = seen + sorted(set(hyp.decks[br.opponent]["main"])) if hyp is not None else seen
         best = None
-        for sw, asm in _candidates(br, steps, pos, list(dict.fromkeys(codes)))[:CANDIDATES]:
+        for sw, asm, what in _candidates(br, steps, pos, list(dict.fromkeys(codes)))[:CANDIDATES]:
             new_swaps = {k: list(v) for k, v in swaps.items()}
             for k, v in sw.items():
                 new_swaps.setdefault(k, []).extend(v)
@@ -143,12 +145,14 @@ def read_guided_repair(br: BeliefReplay) -> Duel | None:
                 continue
             except Divergence as e:
                 if e.pos > pos and (best is None or e.pos > best[0]):
-                    best = (e.pos, new_swaps, assumptions + asm)
+                    best = (e.pos, new_swaps, assumptions + asm, what)
                 continue
             br.stats.restarts += sub.stats.restarts
             br.hypothesis, br.swaps, br.assumptions = sub.hypothesis, new_swaps, assumptions + asm
+            br.read_guided_fix = path + [what]
             return duel
         if best is None:
             return None
-        _, swaps, assumptions = best
+        _, swaps, assumptions, what = best
+        path.append(what)
     return None

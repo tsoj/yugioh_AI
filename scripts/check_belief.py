@@ -115,6 +115,9 @@ def main() -> int:
                     help="also cut at the end of these turns (results show them as frac -N); '' for none")
     ap.add_argument("--mirror-prob", type=float, default=0.2)
     ap.add_argument("--timeout", type=int, default=180, help="seconds per belief replay")
+    ap.add_argument("--read-guided-ok", action="store_true",
+                    help="count reconstructions the last-resort read-guided repair saved as consistent "
+                         "(by default they count as failures, to be looked at)")
     ap.add_argument("-j", "--jobs", type=int, default=mp.cpu_count())
     ap.add_argument("-o", "--output", type=Path, help="write all results as JSON lines")
     ap.add_argument("-v", "--verbose", action="store_true")
@@ -127,6 +130,8 @@ def main() -> int:
     ap.add_argument("--completion", choices=["vanilla", "corpus"], default="vanilla",
                     help="how unknown opponent cards are guessed")
     args = ap.parse_args()
+    if args.read_guided_ok:
+        os.environ["YGOAI_READ_GUIDED_OK"] = "1"
     fractions = tuple(float(f) for f in args.fractions.split(",") if f) \
         + tuple(-float(t) for t in args.turns.split(",") if t)
     if args.cases:

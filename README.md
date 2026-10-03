@@ -178,7 +178,10 @@ minimal example.
   one was revealed, drawn, used) or with other codes that differ in the properties it read,
   each candidate a whole replay with the usual repairs. It covers the wrong hidden card no rule
   addresses (a deck card whose ATK an effect compares, a face-down monster that keeps the
-  viewer from attacking); it runs only where the replay would fail.
+  viewer from attacking); it runs only where the replay would fail. It can also hide a problem
+  that should be fixed instead (a leak that makes copies differ showed as such a case), so the
+  tests count what it saves as failures ("read-guided repair needed: ..."; `check_belief.py
+  --read-guided-ok` counts them as consistent).
 
 ### Using the belief replay in an AI
 

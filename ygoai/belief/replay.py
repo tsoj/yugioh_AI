@@ -246,6 +246,7 @@ class BeliefReplay:
         self.trace: list[tuple] | None = None  # (pos, prompt, response, certain, n_candidates)
         self.log = None  # optional callable(str) for debugging
         self.read_guided = True  # last resort: repairs guided by the engine's reads (read_guided.py)
+        self.read_guided_fix: list[str] | None = None  # the repairs it made, if it was needed
         self.on_process = None  # optional callable(duel) after each engine step (with the read log on)
         self.sim_log = None  # optional list: god view events of the latest attempt (debugging)
         # repairs, persistent across restarts

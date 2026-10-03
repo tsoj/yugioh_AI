@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -84,6 +85,11 @@ def check_prefix(record: GameRecord, viewer: int, items: list[tuple], cut: int,
         duel.close()
         res.ok = True
         res.stage = "done"
+        if br.read_guided_fix and not os.environ.get("YGOAI_READ_GUIDED_OK"):
+            # (a test failure until such repairs are known not to hide anything, e.g. a
+            # leak that makes copies differ: the last resort is meant for the AI's use)
+            res.ok = False
+            res.error = "read-guided repair needed: " + "; ".join(br.read_guided_fix)
     except Divergence as e:
         res.error = str(e)
         res.details = {"expected": e.expected, "got": e.got}
