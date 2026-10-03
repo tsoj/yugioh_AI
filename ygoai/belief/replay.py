@@ -728,6 +728,8 @@ class BeliefReplay:
             except BaseException:
                 duel.close()
                 raise
+        if last is None:  # (every attempt ended in an impossible hypothesis)
+            raise Divergence(self.pos, "too many restarts (no consistent hypothesis)")
         raise Divergence(self.pos, f"too many restarts (last: {last.reason})", last.expected, last.got)
 
     def _add_fix(self, fix: tuple) -> bool:
@@ -1382,12 +1384,22 @@ class BeliefReplay:
                 live = infer.LocMap(duel)
                 a = live.at(hinted)
                 if a:
-                    others = [cid for code, cid in duel.location_cards(hinted["con"], C.LOCATION_HAND)
+                    others = [(i, cid) for i, (code, cid) in enumerate(duel.location_cards(hinted["con"],
+                                                                                            C.LOCATION_HAND))
                               if cid != a and code == live.codes.get(a)]
-                    for b in others:
-                        fix = self._history_swap(a, b, cp)
+                    if hinted is exp:
+                        # (as an identity: the card that just moved there is the
+                        # physical card the other copy is in the replay; unlike a
+                        # swap of the two, it holds when the hypothesis changes)
+                        for i, _ in others:
+                            fix = self._moved_identify_fix(hinted, {"con": hinted["con"],
+                                                                    "loc": C.LOCATION_HAND, "seq": i})
+                            if fix is not None:
+                                break
+                    for _, b in others:
                         if fix is not None:
                             break
+                        fix = self._history_swap(a, b, cp)
                 if fix is None and hinted is got and got["hint_type"] == C.CHINT_DESC_REMOVE:
                     fix = self._unhinted_fix(got)
             if fix is None and exp["type"] == got["type"] and isinstance(exp.get("cards"), list) \
@@ -2274,6 +2286,32 @@ class BeliefReplay:
         if member is None:
             return None
         entry = (self.pos, (le["con"], le["loc"], le["seq"]), member.id)
+        if entry in self.identities or entry in self.failed_identities:
+            return None
+        return ("identify", *entry)
+
+    def _moved_identify_fix(self, li: dict, other: dict) -> tuple | None:
+        """The card the latest move brought to `li` is, in the real game, the
+        physical card that the one at `other` descends from in the replay."""
+        move = next((j for j in range(self.pos - 1, max(-1, self.pos - 6), -1)
+                     if self.items[j][0] == "msg" and self.items[j][1]["type"] == "MOVE"
+                     and infer.same_loc(self.items[j][1]["to"], li)), None)
+        solved = getattr(self, "_solved", None)
+        if move is None or solved is None:
+            return None
+        frm = self.items[move][1]["from"]
+        try:
+            ve = self.lockstep.var_at(li["con"], li["loc"], li["seq"])
+            vg = self.lockstep.var_at(other["con"], other["loc"], other["seq"])
+        except TrackerError:
+            return None
+        if ve is None or vg is None or ve.kind != "claim" or ve.same_as is not None or ve.pool is None:
+            return None
+        sv = next((v for v in solved.all_vars if v.id == vg.id), None)
+        member = sv.assigned if sv is not None and sv.kind == "claim" else None
+        if member is None or not any(m.id == member.id for m in ve.pool.members):
+            return None
+        entry = (move, (frm["con"], frm["loc"], frm["seq"]), member.id)
         if entry in self.identities or entry in self.failed_identities:
             return None
         return ("identify", *entry)
