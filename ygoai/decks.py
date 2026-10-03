@@ -100,6 +100,7 @@ class DeckPool:
 
     def __init__(self, db: CardDB, decks_dir: Path = DECKS_DIR, split: str | None = None):
         self.db = db
+        self.dir = decks_dir
         self.paths = sorted(p for p in decks_dir.glob("*.ydk") if split is None or deck_split(p) == split)
         if not self.paths:
             raise FileNotFoundError(f"no .ydk files in {decks_dir}")
@@ -113,7 +114,8 @@ class DeckPool:
     def diverse(self, index: int) -> Deck:
         """The deck at `index` of the diverse order (see `diverse_order`), wrapping around."""
         if not hasattr(self, "_order"):
-            self._order = diverse_order(self, ROOT / "build" / "diverse_decks.json")
+            name = "diverse_decks.json" if self.dir == DECKS_DIR else f"diverse_decks_{self.dir.name}.json"
+            self._order = diverse_order(self, ROOT / "build" / name)
         return self.load(self._by_name()[self._order[index % len(self._order)]])
 
     def _by_name(self) -> dict[str, Path]:

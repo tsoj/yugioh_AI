@@ -123,9 +123,10 @@ def main() -> int:
     ap.add_argument("-v", "--verbose", action="store_true")
     ap.add_argument("--pairs", help="agent pairings, e.g. setter-greedy,mixed-random (game seed %% number "
                                     "of pairs picks one; default: random/greedy in all four combinations)")
-    ap.add_argument("--decks", choices=["random", "diverse", "cards"], default="random",
+    ap.add_argument("--decks", choices=["random", "diverse", "cards", "new"], default="random",
                     help="random corpus decks, decks ordered to cover as many different cards as possible, "
-                         "or decks of random cards (\"cards\")")
+                         "decks of random cards (\"cards\"), or the decks downloaded later in the diverse order "
+                         "(\"new\")")
     ap.add_argument("--book", help="opening book (scripts/make_book.py): game seed %% openings picks the decks")
     ap.add_argument("--completion", choices=["vanilla", "corpus"], default="vanilla",
                     help="how unknown opponent cards are guessed")

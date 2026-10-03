@@ -135,7 +135,7 @@ def check_game(record: GameRecord, fractions=(1 / 3, 2 / 3, 1.0), viewers=(0, 1)
 
 
 PAIRS = [("random", "random"), ("random", "greedy"), ("greedy", "random"), ("greedy", "greedy")]
-_deck_pool = None
+_deck_pools: dict = {}
 
 
 _books: dict = {}
@@ -155,16 +155,18 @@ def load_book(path) -> list:
 def game_decks(seed: int, mirror_prob: float = 0.2, decks: str = "random", book: str | None = None) -> tuple:
     """The deck pair of test game `seed`: random decks (sometimes a mirror match);
     with decks="diverse" from the order that covers as many different cards as
-    possible (game `seed` uses its positions 2*seed and 2*seed + 1); with a `book`
+    possible (game `seed` uses its positions 2*seed and 2*seed + 1), with
+    decks="new" the same among the decks downloaded later; with a `book`
     (see scripts/make_book.py) opening seed % (number of openings)."""
     import random
     from ..carddb import default_db
     from ..decks import DeckPool
-    global _deck_pool
+    from ..paths import DECKS_DIR, NEW_DECKS_DIR
     if book:
         return tuple(load_book(book)[seed % len(load_book(book))])  # (the book decides the pairing)
-    if _deck_pool is None and decks != "cards":
-        _deck_pool = DeckPool(default_db())
+    if decks != "cards" and decks not in _deck_pools:
+        _deck_pools[decks] = DeckPool(default_db(), NEW_DECKS_DIR if decks == "new" else DECKS_DIR)
+    pool = _deck_pools.get(decks)
     rng = random.Random(seed)
     if decks == "cards":
         from ..decks import RANDOM_DECK_STYLES, random_card_deck
@@ -172,11 +174,11 @@ def game_decks(seed: int, mirror_prob: float = 0.2, decks: str = "random", book:
         d0 = random_card_deck(db, rng, f"random cards {seed}a", rng.choice(RANDOM_DECK_STYLES))
         return d0, d0 if rng.random() < mirror_prob else random_card_deck(
             db, rng, f"random cards {seed}b", rng.choice(RANDOM_DECK_STYLES))
-    if decks == "diverse":
-        d0 = _deck_pool.diverse(2 * seed)
-        return d0, d0 if rng.random() < mirror_prob else _deck_pool.diverse(2 * seed + 1)
-    d0 = _deck_pool.sample(rng)
-    return d0, d0 if rng.random() < mirror_prob else _deck_pool.sample(rng)
+    if decks in ("diverse", "new"):
+        d0 = pool.diverse(2 * seed)
+        return d0, d0 if rng.random() < mirror_prob else pool.diverse(2 * seed + 1)
+    d0 = pool.sample(rng)
+    return d0, d0 if rng.random() < mirror_prob else pool.sample(rng)
 
 
 def make_game(seed: int, mirror_prob: float = 0.2, pairs: list[tuple[str, str]] | None = None,

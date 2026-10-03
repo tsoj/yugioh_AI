@@ -469,7 +469,9 @@ class Tracker:
                     self._chosen = None
         confirmed_move = t == "MOVE" and self._confirmed and self._confirmed_shuffled \
             and m["from"]["loc"] == C.LOCATION_DECK \
-            and all(x == (m["from"]["con"], C.LOCATION_DECK) for x in self._confirmed_locs)
+            and all(x == (m["from"]["con"], C.LOCATION_DECK) for x in self._confirmed_locs) \
+            and (not m["code"] or m["code"] in {x.fixed_code if x.fixed_code is not None else x.code
+                                                 for x in self._confirmed})  # (else another card)
         if confirmed_move:
             # revealed, shuffled back and then taken out of that pile, card after
             # card (e.g. "reveal 3, shuffle, your opponent picks 1 to add, the rest

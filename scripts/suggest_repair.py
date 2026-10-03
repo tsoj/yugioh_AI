@@ -123,7 +123,7 @@ def main():
     ap.add_argument("viewer", type=int)
     ap.add_argument("--cut", type=float, default=1.0, help="fraction of the game, or -N: the end of turn N")
     ap.add_argument("--pairs", help="agent pairings as in check_belief.py")
-    ap.add_argument("--decks", choices=["random", "diverse", "cards"], default="random")
+    ap.add_argument("--decks", choices=["random", "diverse", "cards", "new"], default="random")
     ap.add_argument("--book", help="opening book (scripts/make_book.py)")
     ap.add_argument("--window", type=int, default=5, help="items before the divergence whose reads count")
     ap.add_argument("--candidates", type=int, default=20, help="candidates tried per round")

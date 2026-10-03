@@ -85,6 +85,17 @@ class FlowSolver:
     def solve(self) -> Hypothesis:
         t = self.t
         viewer = t.viewer
+        if self.db is not None:
+            from .completion import fits_need
+            byid_ = {v.id: v for v in t.all_vars}
+            for v in t.all_vars:
+                # (a guess which revealed card a slot is, see Tracker "confirmed_move",
+                # that none of them can be: e.g. a card Set in a spell/trap zone after
+                # monsters were revealed)
+                if v.allowed is not None and v.need is not None:
+                    codes = [byid_[a].fixed_code or byid_[a].code for a in v.allowed if a in byid_]
+                    if codes and all(c and not fits_need(self.db.get(c), v.need, False) for c in codes):
+                        v.allowed = None
         consumer: dict[int, int] = {}
         for pool in t.pools:
             for m in pool.members:

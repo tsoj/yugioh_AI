@@ -13,3 +13,5 @@ OVERRIDE_SCRIPTS = ROOT / "core_ext" / "lua" / "ygoai_overrides.lua"
 FIXED_CARD_SCRIPTS_DIR = ROOT / "core_ext" / "lua" / "cards"
 BABEL_CDB_DIR = Path(os.environ.get("YGOAI_CDB_DIR", EXTERNAL / "BabelCDB"))
 DECKS_DIR = Path(os.environ.get("YGOAI_DECKS", ROOT / "download_human_decks" / "decks"))
+# decks downloaded later (newer than the corpus): test games only, the corpus stays as is
+NEW_DECKS_DIR = Path(os.environ.get("YGOAI_NEW_DECKS", ROOT / "download_human_decks" / "decks_new"))
