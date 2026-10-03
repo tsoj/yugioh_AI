@@ -113,7 +113,7 @@ def check_prefix(record: GameRecord, viewer: int, items: list[tuple], cut: int,
     res.probed = br.stats.probed_decisions
     res.probes = br.stats.probes
     res.restarts = br.stats.restarts
-    res.fixes = {k: getattr(br.stats, k) for k in ("forces", "assumptions", "swaps")
+    res.fixes = {k: getattr(br.stats, k) for k in ("forces", "assumptions", "swaps", "read_guided")
                  if getattr(br.stats, k)}
     return res
 

@@ -172,6 +172,14 @@ minimal example.
   The main line keeps the positions of the latest step, which most repairs need, so finding a
   repair takes no restart of its own.
 
+  When these repairs give up, a last resort (`read_guided.py`): replayed without repairs, the
+  core's read log names the hidden cards the engine read just before the first divergence;
+  each is tried as another copy of its name in the same place (copies differ in history: which
+  one was revealed, drawn, used) or with other codes that differ in the properties it read,
+  each candidate a whole replay with the usual repairs. It covers the wrong hidden card no rule
+  addresses (a deck card whose ATK an effect compares, a face-down monster that keeps the
+  viewer from attacking); it runs only where the replay would fail.
+
 ### Using the belief replay in an AI
 
 An AI keeps its observation stream as a list of items `("msg", message)`, `("prompt", prompt,

@@ -203,6 +203,7 @@ class ReplayStats:
     forces: int = 0
     assumptions: int = 0
     swaps: int = 0
+    read_guided: int = 0  # replays tried by the last-resort read-guided repair (read_guided.py)
 
 
 def _loc_of(msg: dict) -> dict | None:
@@ -244,6 +245,8 @@ class BeliefReplay:
         self.stats = ReplayStats()
         self.trace: list[tuple] | None = None  # (pos, prompt, response, certain, n_candidates)
         self.log = None  # optional callable(str) for debugging
+        self.read_guided = True  # last resort: repairs guided by the engine's reads (read_guided.py)
+        self.on_process = None  # optional callable(duel) after each engine step (with the read log on)
         self.sim_log = None  # optional list: god view events of the latest attempt (debugging)
         # repairs, persistent across restarts
         # Every effect the opponent was seen activating may be forced to be
@@ -519,7 +522,26 @@ class BeliefReplay:
 
     # -- main loop ---------------------------------------------------------------
     def run(self) -> Duel:
-        """Replays the whole stream; returns the duel positioned at the stream end."""
+        """Replays the whole stream; returns the duel positioned at the stream end.
+        When the repairs give up, a last resort guided by the hidden cards the engine
+        read (read_guided.py)."""
+        try:
+            return self._run()
+        except Divergence as e:
+            last_prompt = max((i for i, it in enumerate(self.items) if it[0] == "prompt"), default=-1)
+            unfinished = bool(self.items) and self.items[-1][0] == "msg" and self.items[-1][1]["type"] == "WIN" \
+                and e.pos > last_prompt + 1
+            # (not after the viewer's last decision in a game that ended in the middle
+            # of an action: what shows there is incomplete, see check.check_prefix)
+            if self.depth > 0 or not self.read_guided or unfinished:
+                raise
+            from .read_guided import read_guided_repair
+            duel = read_guided_repair(self)
+            if duel is None:
+                raise
+            return duel
+
+    def _run(self) -> Duel:
         last = None
         for _ in range(self.max_restarts + 1):
             self._reset()
@@ -577,12 +599,12 @@ class BeliefReplay:
                     # differ (or did not get past it): its next alternative, else an
                     # earlier decision (within a budget)
                     bt["tries"] += 1
-                    if e.pos <= bt["key"][0] + 1 and e.pos <= bt["pos"] and not bt.get("parent") \
-                            and not bt["state"]:
-                        # (the alternative failed right at its own action, also at the point
-                        # of the mismatch itself: the decisions it led to, e.g. which card
-                        # after answering "yes", may not have existed before; they come
-                        # next, with the alternative kept)
+                    if e.pos <= bt["key"][0] + 1 and not bt.get("parent") and not bt["state"] and (
+                            e.pos < bt["pos"] or e.reason.startswith("no candidate for opponent")):
+                        # (the alternative failed right at its own action, or at the point
+                        # of the mismatch with a new decision that no answer fits: the
+                        # decisions it led to, e.g. which card after answering "yes", may
+                        # not have existed before; they come next, with the alternative kept)
                         # (the first few alternatives each: the budget is shared)
                         new = [(k, [j for j in range(n) if j != i][:2]) for k, n, i in reversed(self._recent)
                                if k > bt["key"] and k not in self.overrides and n > 1]
@@ -972,7 +994,12 @@ class BeliefReplay:
             if nomatch:
                 duel.set_forced_nomatch(nomatch)
             answered, answered_resp = pending, pending_resp  # (the response this step processes)
+            if self.on_process is not None and not getattr(duel, "reads_on", False):
+                duel.read_log(True)
+                duel.reads_on = True
             status = duel.process()
+            if self.on_process is not None:
+                self.on_process(duel)
             if nomatch:
                 duel.set_forced_nomatch([])
             if forced_match:
