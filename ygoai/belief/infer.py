@@ -581,6 +581,18 @@ class LocMap:
             lst.insert(min(t["seq"], len(lst)), cid)
         return cid
 
+    def replaced(self, up: list[dict]) -> list[int]:
+        """Card ids moved in place of other cards (REASON_REPLACE) by the upcoming
+        messages, where they were before (the map follows the moves)."""
+        out: list[int] = []
+        for m in up:
+            if m["type"] == "MOVE":
+                cid = self.at(m["from"])
+                if cid and m.get("reason", 0) & C.REASON_REPLACE:
+                    out.append(cid)
+                self.move(m)
+        return out
+
     def references(self, up: list[dict]) -> list[int]:
         """Card ids referenced by the upcoming messages, in order."""
         refs: list[int] = []
@@ -729,24 +741,35 @@ def selection_window(up: list[dict]) -> list[dict]:
     return up
 
 
-def infer_cards(prompt: dict, up: list[dict], duel, ids: list | None = None) -> tuple[list[dict], bool]:
-    """SELECT_CARD / SELECT_TRIBUTE / SELECT_SUM."""
+HINTMSG_DESTROY = 502  # (the select message "Select the card(s) to destroy")
+
+
+def infer_cards(prompt: dict, up: list[dict], duel, ids: list | None = None,
+                select_msg: int | None = None) -> tuple[list[dict], bool]:
+    """SELECT_CARD / SELECT_TRIBUTE / SELECT_SUM. `select_msg`: the selection's
+    hint text (HINT_SELECTMSG), if any."""
     t = prompt["type"]
     cards = prompt["cards"]
     if ids is None:
         ids = card_ids(duel, cards)
     lm = LocMap(duel)
     refs = lm.references(up)
+    # (a card destroyed in place of another, REASON_REPLACE, is not the card selected
+    # to be destroyed; nor is its announcement by the replacement's own prompt. The
+    # replacement's prompt itself selects the substitutes, e.g. Thunder Dragon Titan
+    # banishing 2 cards from the GY instead)
+    substitutes = set(LocMap(duel).replaced(selection_window(up))) if select_msg == HINTMSG_DESTROY else set()
     chosen = []
     for cid in refs:
-        if cid in ids:
+        if cid in ids and cid not in substitutes:
             chosen.append(ids.index(cid))
     lo, hi = prompt["min"], prompt["max"]
     n = len(cards)
     cands: list[dict] = []
     certain = False
     first = next((m for m in up if m["type"] not in ("HINT", "CARD_HINT")), None)
-    if t == "SELECT_CARD" and first is not None and first["type"] == "CARD_SELECTED":
+    if t == "SELECT_CARD" and first is not None and first["type"] == "CARD_SELECTED" \
+            and not all(LocMap(duel).at(x) in substitutes for x in first["cards"]):
         # the core announces exactly the selected cards
         sel = [i for i, c in enumerate(cards) if any(same_loc(c, x) for x in first["cards"])]
         if len(sel) == len(first["cards"]) and lo <= len(sel) <= hi:
@@ -834,7 +857,8 @@ def infer_cards(prompt: dict, up: list[dict], duel, ids: list | None = None) -> 
             if c not in cands:
                 cands.append(c)
     if t == "SELECT_CARD" and (hi == 1 or lo == 1):
-        for i in range(n):
+        # (substitutes last)
+        for i in sorted(range(n), key=lambda i: ids[i] in substitutes):
             c = {"indices": [i]}
             if c not in cands:
                 cands.append(c)

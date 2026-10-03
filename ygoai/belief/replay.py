@@ -1016,6 +1016,15 @@ class BeliefReplay:
             msgs = [parse(m) for m in duel.get_messages()]
             if not self._roll_dirty and any(m["type"] not in _NO_MOVES for m in msgs):
                 self._roll_dirty = True
+            # (the hint text the replay's next prompt comes with, possibly from an
+            # earlier step: hidden from the viewer for the opponent's prompts, but the
+            # replay's own engine shows it)
+            for m in msgs:
+                if m["type"] == "HINT" and m["hint_type"] == C.HINT_SELECTMSG:
+                    self._pending_select_msg = m["data"]
+            if status == STATUS_AWAITING:
+                self._prompt_select_msg = getattr(self, "_pending_select_msg", None)
+                self._pending_select_msg = None
             for m in msgs:
                 self._simlog("msg", m, cp)
             # a swap must happen before the prompt that led to the move was built
@@ -3073,7 +3082,9 @@ class BeliefReplay:
             usual_levels = {0: range(1, 5), 1: range(5, 7)}.get(tributes, range(7, 13)) \
                 if kind == "msetable" else None
 
-            filler_codes = set(filler.vanillas) | set(filler.settable_monsters_all)
+            # (a stand-in the completion chose; not a card the opponent has shown, e.g.
+            # Elemental HERO Neos, a Normal Monster, Set with Kaiser Sea Horse's 2 Tributes)
+            filler_codes = (set(filler.vanillas) | set(filler.settable_monsters_all)) - set(self._opp_seen_codes())
 
             def usual_fit(code):
                 # (an inert stand-in should need exactly the Tributes seen; another
@@ -3350,7 +3361,7 @@ class BeliefReplay:
             extended = window is not up
             up = window
         if t in ("SELECT_CARD", "SELECT_TRIBUTE", "SELECT_SUM"):
-            cands, certain = infer.infer_cards(prompt, up, duel, ids)
+            cands, certain = infer.infer_cards(prompt, up, duel, ids, self._select_msg())
             return cands, certain and not extended
         if t == "SELECT_UNSELECT_CARD":
             self._check_selection_dead_end(prompt, up, duel, ids)
@@ -3373,6 +3384,11 @@ class BeliefReplay:
     # if anything is chained in a phase-leave window (infer.PHASE_LEAVE_EVENTS),
     # the core resolves it and gives the turn player the command again
     # (IdleCommand steps 9-10, BattleCommand steps 39-40)
+
+    def _select_msg(self) -> int | None:
+        """The hint text (HINT_SELECTMSG) the current selection prompt came with in
+        the replay (the step that produced the prompt)."""
+        return getattr(self, "_prompt_select_msg", None)
 
     def _hidden_ids(self, duel: Duel) -> list[int]:
         """Card ids of the opponent's cards the viewer cannot see (hidden piles

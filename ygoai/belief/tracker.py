@@ -574,7 +574,18 @@ class Tracker:
                         self._referenced, self._referenced_piles, self._picked = [], set(), []
                     else:
                         pool = self._picked if any(x is not v for x in self._picked) else self._referenced
-                        v.prefer = [x for x in pool if x is not v]
+                        # (only the revealed cards that can be this one: another name shows
+                        # another card)
+                        v.prefer = [x for x in pool if x is not v and (
+                            not m.get("code") or self._code(x) is None or self._code(x) == m["code"])]
+            if v is not None and v.kind == "claim" and v.pool is not None and not v.prefer and v.same_as is None \
+                    and frm["loc"] == C.LOCATION_HAND and self._resolving and self._chain \
+                    and self._chain_from_hand[-1] and self._chain[-1] is not None and m.get("code") \
+                    and self._chain[-1].code == m["code"] and self._chain[-1] is not v:
+                # (a card of that name leaving the hand while a link activated from the
+                # hand resolves is most likely that link's card, e.g. "Special Summon
+                # this card", the hand shuffled since)
+                v.prefer = [self._chain[-1]]
             if to["loc"] == C.LOCATION_MZONE and frm["loc"] == C.LOCATION_HAND and self._tributed_to_hand \
                     and v is not None and v.kind == "claim":
                 v.not_same.extend(x for x in self._tributed_to_hand if x is not v)
