@@ -157,12 +157,17 @@ def new_record(decks: list[Deck], seed: int, config: DuelConfig | None = None) -
 def initial_extra_order(record: GameRecord, player: int) -> list[int]:
     """The player's Extra Deck as the duel starts (in creation order, which is
     random: the owner sees it, the opponent does not)."""
-    duel = setup_duel(record.decks, record.core_seed, record.duel_config(), record.deck_orders,
-                      default_db(), copy_seed=record.core_seed[0])
-    try:
-        return [code for code, _ in duel.location_cards(player, C.LOCATION_EXTRA)]
-    finally:
-        duel.close()
+    # (remembered per record: every reconstruction of a game asks again)
+    cache = record.__dict__.setdefault("_extra_orders", {})
+    if player not in cache:
+        duel = setup_duel(record.decks, record.core_seed, record.duel_config(), record.deck_orders,
+                          default_db(), copy_seed=record.core_seed[0])
+        try:
+            for p in (0, 1):
+                cache[p] = [code for code, _ in duel.location_cards(p, C.LOCATION_EXTRA)]
+        finally:
+            duel.close()
+    return list(cache[player])
 
 
 def init_info(record: GameRecord, player: int) -> dict:

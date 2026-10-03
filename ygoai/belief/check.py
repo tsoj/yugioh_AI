@@ -197,15 +197,27 @@ def make_game(seed: int, mirror_prob: float = 0.2, pairs: list[tuple[str, str]] 
     return record
 
 
-def make_game_streams(seed: int, *args, **kwargs) -> tuple[GameRecord, list[list[tuple]]]:
+def make_game_streams(seed: int, mirror_prob: float = 0.2, pairs: list[tuple[str, str]] | None = None,
+                      decks: str = "random", book: str | None = None,
+                      deck_pair: tuple | None = None) -> tuple[GameRecord, list[list[tuple]]]:
     """make_game and both players' observation streams, recorded while the game
-    is played (the same as observation_stream, without replaying the game)."""
+    is played (the same as observation_stream, without replaying the game).
+    Games played before come from the on-disk cache (ygoai.game_cache)."""
+    from .. import game_cache
+    deck_pair = deck_pair or game_decks(seed, mirror_prob, decks, book)
+    names = (pairs or PAIRS)[seed % len(pairs or PAIRS)]
+    key = {"seed": seed, "pairs": [list(names)], "decks": [d.to_json() for d in deck_pair]}
+    with_belief = any("belief" in n for n in names)
+    cached = game_cache.load(key, with_belief)
+    if cached is not None:
+        return cached
     logs = [ObservationLog(v) for v in (0, 1)]
-    record = make_game(seed, *args, observers=logs, **kwargs)
+    record = make_game(seed, mirror_prob, pairs, decks, book, observers=logs, deck_pair=deck_pair)
     streams = []
     for log in logs:
         items = log.items
         # (a replay stops at the win; the game itself goes on to the end of its step)
         end = next((i + 1 for i, it in enumerate(items) if it[0] == "msg" and it[1]["type"] == "WIN"), len(items))
         streams.append(items[:end])
+    game_cache.store(key, (record, streams), with_belief)
     return record, streams

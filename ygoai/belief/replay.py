@@ -58,7 +58,7 @@ from ..messages import parse
 from ..observe import AUTO_RESPONSE, filter_message, filter_prompt, is_hidden_prompt, to_core_response
 from ..state import LOCATIONS, capture, view
 from . import infer
-from .completion import DeckCompletion, VanillaCompletion
+from .completion import DeckCompletion, VanillaCompletion, _vanilla
 from . import tracker as tracker_mod
 from .tracker import Hypothesis, Tracker, TrackerError
 
@@ -229,7 +229,7 @@ class BeliefReplay:
         self.init = init
         self.items = list(items)
         self.db = db or default_db()
-        self.completion = completion or VanillaCompletion(self.db)
+        self.completion = completion or _vanilla(self.db)  # (shared: building one takes a while)
         self.check_state = check_state
         self.max_probes = max_probes
         self._probe_counter: mmap.mmap | None = None
@@ -2991,7 +2991,7 @@ class BeliefReplay:
 
     def _filler(self) -> VanillaCompletion:
         if not hasattr(self, "_filler_cache"):
-            self._filler_cache = VanillaCompletion(self.db)
+            self._filler_cache = _vanilla(self.db)
         return self._filler_cache
 
     def _check_idle_assumption(self, prompt: dict, up: list[dict], duel: Duel | None = None) -> None:

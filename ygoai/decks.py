@@ -101,7 +101,9 @@ class DeckPool:
     def __init__(self, db: CardDB, decks_dir: Path = DECKS_DIR, split: str | None = None):
         self.db = db
         self.dir = decks_dir
-        self.paths = sorted(p for p in decks_dir.glob("*.ydk") if split is None or deck_split(p) == split)
+        # (sorted by name: the same order as by path within one directory, much faster)
+        self.paths = sorted((p for p in decks_dir.glob("*.ydk") if split is None or deck_split(p) == split),
+                            key=lambda p: p.name)
         if not self.paths:
             raise FileNotFoundError(f"no .ydk files in {decks_dir}")
         self._cache: dict[Path, Deck | None] = {}

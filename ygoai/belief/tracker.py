@@ -373,8 +373,12 @@ class Tracker:
         if v is None:
             return
         if v.seen_owner != owner:
+            # (news only if the card could have had another owner: otherwise every
+            # conclusion from the owners stays as it is)
+            informative = self._possible_owners(v) != {owner}
             v.seen_owner = owner
-            self._owners_seen += 1
+            if informative:
+                self._owners_seen += 1
         if v.kind != "claim" or v.pool is None or self._owned_at.get(v.id) == self._owners_seen:
             return
         self._owned_at[v.id] = self._owners_seen
@@ -1019,8 +1023,8 @@ class Tracker:
                     if len(cards) != len(lst):
                         raise TrackerError(f"size mismatch P{pl_idx} {name}: {len(cards)} vs {len(lst)}")
                     used: set[int] = set()
-                    shown = Counter(c.get("code") for c in cards if loc == C.LOCATION_DECK and c.get("code")
-                                    and c.get("position", 0) & C.POS_FACEUP)
+                    shown = Counter(c.get("code") for c in cards if c.get("code")
+                                    and c.get("position", 0) & C.POS_FACEUP) if loc == C.LOCATION_DECK else None
                     faceup_now = self._faceup_deck_cards(pl_idx) if shown else []
                     # (the owners of deck cards show too: they tell apart only where a
                     # card of the other player is in the deck, e.g. one shuffled in)

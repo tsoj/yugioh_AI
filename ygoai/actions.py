@@ -257,8 +257,14 @@ def is_declarable(card, opcodes: list[int]) -> bool:
     return (alias or not card.alias) and (token or not is_token_monster)
 
 
+_declarable_cache: dict = {}
+
+
 def declarable_codes(db: CardDB, opcodes: list[int]) -> list[int]:
-    return [code for code, card in db.cards.items() if is_declarable(card, opcodes)]
+    key = (id(db), tuple(opcodes))
+    if key not in _declarable_cache:
+        _declarable_cache[key] = [code for code, card in db.cards.items() if is_declarable(card, opcodes)]
+    return list(_declarable_cache[key])
 
 
 # ---------------------------------------------------------------------------
