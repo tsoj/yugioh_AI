@@ -331,7 +331,10 @@ other creation orders and compares both players' observation streams (no differe
 games). Location order adds nothing the messages do not show anyway, except where a script
 turns the iteration order into something without locations: a card-name declaration built by
 iterating over the deck lists the names in deck order, so the arbiter shows ANNOUNCE_CARD
-filters in a canonical form (and ANNOUNCE_NUMBER options sorted).
+filters in a canonical form (and ANNOUNCE_NUMBER options sorted). One more place showed it: the
+cards that left the field together had their own "when this card leaves the field" effects
+handled in id order (two Double Hooking leaving at once destroyed their equipped monsters in
+that order); these single events are raised in location order now too.
 
 ## Changes to ygopro-core
 

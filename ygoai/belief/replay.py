@@ -1238,6 +1238,7 @@ class BeliefReplay:
 
     def _mismatch(self, cp: int, msgs: list[dict], idx: int, item: tuple, got: dict, duel: Duel) -> Divergence:
         fix = None
+        faceup_match = None
         if item[0] == "msg":
             exp = item[1]
             fix = self._force_fix(exp)
@@ -1569,8 +1570,14 @@ class BeliefReplay:
                     and exp["from"]["loc"] and not exp["from"]["loc"] & C.LOCATION_OVERLAY and exp != got:
                 # a public card of the opponent the replay did not take: whether it
                 # qualified can depend on hidden cards (e.g. a cost that needs a
-                # matching card in the deck), so let it match the filters
-                fix = self._match_fix(cp, msgs, idx, exp["from"])
+                # matching card in the deck), so let it match the filters (a face-up
+                # card on the field only when no decision explains it: what it is
+                # shows, which one the effect took is usually the opponent's choice)
+                if exp["from"]["loc"] & (C.LOCATION_MZONE | C.LOCATION_SZONE) \
+                        and exp["from"].get("pos", 0) & C.POS_FACEUP:
+                    faceup_match = self._match_fix(cp, msgs, idx, exp["from"])
+                else:
+                    fix = self._match_fix(cp, msgs, idx, exp["from"])
             if fix is None:
                 fix = self._forced_cost_fix()
             if fix is None and got["type"] in _NOTHING_MORE | {"CHAINED"} \
@@ -1628,6 +1635,15 @@ class BeliefReplay:
             if span not in self.match_piles and span not in self.nomatch_piles \
                     and ("matchpile", span) not in self._pile_dropped:
                 fix = ("matchpile", *span)
+        if fix is None and item[0] == "prompt" and item[1]["type"] == "SELECT_CHAIN" and item[1].get("chains") \
+                and got.get("type") != "SELECT_CHAIN":
+            # the viewer may chain in the real game, in the replay there was no chain
+            # window: its card's check depends on the opponent's hidden cards (e.g.
+            # Disarmament counts a face-down Equip Spell): let them qualify
+            span = (self._action_start(), self.pos)
+            if span not in self.match_piles and span not in self.nomatch_piles \
+                    and ("matchpile", span) not in self._pile_dropped:
+                fix = ("matchpile", *span)
         solving = next((j for j in range(self.pos - 1, max(-1, self.pos - 30), -1) if self.items[j][0] == "msg"
                         and self.items[j][1]["type"] == "CHAIN_SOLVING"), None)
         if fix is None and item[0] == "msg" and item[1]["type"] in ("CHAIN_SOLVED", "CHAIN_SOLVING", "CHAIN_END") \
@@ -1650,6 +1666,8 @@ class BeliefReplay:
             # have singled out without anything showing it then (another card was
             # the one, e.g. "it returns to the hand during the End Phase")
             fallback = self._silent_choice_fix(infer.LocMap(duel).at(got["to"]) if got["to"]["loc"] else None)
+        if fix is None and fallback is None:
+            fallback = faceup_match
         what = item[1].get("type") if item[0] == "msg" else item[0]
         d = Divergence(self.pos, f"message mismatch [{what} vs {got.get('type')}]", item, got, fix)
         d.fallback = fallback
@@ -1857,14 +1875,17 @@ class BeliefReplay:
             return None if cp in self.snapshot_cps else ("snapshot", cp)
         lm = copy.deepcopy(self.snapshots[cp])
         lm.references(msgs[:idx])
+        # (only the opponent's cards: the viewer's own are known, their checks
+        # right as they are, e.g. its own activations in the chain window)
         taken = []
         for j in range(g0, self.pos):
             cid = lm.at(self.items[j][1]["to"])
             if not cid:
                 return None
-            taken.append(cid)
+            if self.items[j][1]["from"]["con"] == self.opponent:
+                taken.append(cid)
         loc = exp["from"]["loc"]
-        players = sorted({self.items[j][1]["from"]["con"] for j in range(g0, g1 + 1)})
+        players = sorted({self.items[j][1]["from"]["con"] for j in range(g0, g1 + 1)} & {self.opponent})
         pile = set()
         for p in players:
             lm._load(p, loc)
@@ -1874,7 +1895,8 @@ class BeliefReplay:
             cid = lm.at(m["from"])
             if not cid:
                 return None
-            taken.append(cid)
+            if m["from"]["con"] == self.opponent:
+                taken.append(cid)
             lm.move(m)
         rest = sorted(pile - set(taken))
         a = self._link_start()
@@ -2922,6 +2944,19 @@ class BeliefReplay:
 
                 def fits(code, _f=fits_level3):
                     return _f(code) and code in script_index.set_proc_tribute_cards(tributes)
+            # (a kind the card showed before, e.g. Set as a Spell/Trap and returned to
+            # the hand: an Artifact monster can be both)
+            try:
+                earlier = self.lockstep.var_at(src["con"], src["loc"], src["seq"])
+            except TrackerError:
+                earlier = None
+            earlier_need = earlier.need if earlier is not None else None
+            if earlier_need is not None:
+                from .completion import fits_need
+                fits_now = fits
+
+                def fits(code, _f=fits_now):
+                    return _f(code) and fits_need(self.db.get(code), earlier_need, usual=False)
             # (cards of the setter's hand discarded as a cost first: a card with its
             # own procedure, e.g. Infernal Incinerator discards the whole hand)
             discards = kind == "msetable" and any(
@@ -2958,6 +2993,9 @@ class BeliefReplay:
                     return  # (lowered by an effect to fit, or a usual Level)
             usual = {0: range(1, 5), 1: range(5, 7)}.get(tributes, range(7, 13)) if kind == "msetable" else None
             codes = [e["code"] for e in prompt[kind] if fits(e["code"])]
+            if kind == "msetable" and earlier_need == ("st",):
+                from .completion import monster_sset_codes
+                codes += sorted(c for c in monster_sset_codes() if self.db.get(c) and fits(c))
             if kind == "msetable" and tributes >= 3 and not discards:
                 from . import script_index
                 procs = script_index.set_proc_tribute_cards(tributes)
