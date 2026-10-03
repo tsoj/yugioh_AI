@@ -247,6 +247,14 @@ def _p_shuffle_codes(r):
     return d
 
 
+def _p_shuffle_hand(r):
+    d = _p_shuffle_codes(r)
+    # (the patched core adds each card's position before the shuffle: its owner
+    # knows where each of its cards went)
+    d["prev"] = [r.u8() for _ in d["codes"]]
+    return d
+
+
 def _p_swap_grave_deck(r):
     d = {"player": r.u8(), "main_count": r.u32()}
     n = r.u32()
@@ -259,7 +267,8 @@ def _p_shuffle_set_card(r):
     n = r.u8()
     old = [r.loc() for _ in range(n)]
     new = [r.loc() for _ in range(n)]
-    return {"location": loc, "old": old, "overlay": new}
+    # (ocgext: the zone each card went to)
+    return {"location": loc, "old": old, "overlay": new, "new": [r.u8() for _ in range(n)]}
 
 
 def _p_empty(r):
@@ -466,7 +475,7 @@ _PARSERS = {
     C.MSG_CONFIRM_DECKTOP: _p_confirm,
     C.MSG_CONFIRM_CARDS: _p_confirm,
     C.MSG_SHUFFLE_DECK: _p_player,
-    C.MSG_SHUFFLE_HAND: _p_shuffle_codes,
+    C.MSG_SHUFFLE_HAND: _p_shuffle_hand,
     C.MSG_SWAP_GRAVE_DECK: _p_swap_grave_deck,
     C.MSG_SHUFFLE_SET_CARD: _p_shuffle_set_card,
     C.MSG_REVERSE_DECK: _p_empty,

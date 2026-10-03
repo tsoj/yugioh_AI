@@ -504,8 +504,14 @@ class BeliefReplay:
                 duel.push_forced_shuffle_ids(sh["player"], sh["location"], sh_ids, sh["codes"])
             else:
                 duel.push_forced_shuffle(sh["player"], sh["location"], sh["codes"])
-        for codes in hyp.set_card_shuffles:
-            duel.push_forced_set_card_shuffle(codes)
+        for k, codes in enumerate(hyp.set_card_shuffles):
+            ranks, owners = hyp.set_card_shuffle_ranks[k] if k < len(hyp.set_card_shuffle_ranks) else (None, None)
+            # (the player of `ids` only matters without owners: these have them)
+            set_ids = swap_roles(ids(0, codes, ranks, owners)) if owners else None
+            if set_ids is not None:
+                duel.push_forced_set_card_shuffle_ids(set_ids, codes)
+            else:
+                duel.push_forced_set_card_shuffle(codes)
         for item in self.items:
             if item[0] != "msg":
                 continue

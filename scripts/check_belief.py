@@ -192,6 +192,10 @@ def main() -> int:
             by_frac[r["frac"]][1] += 1
     for frac, (k, n) in sorted(by_frac.items()):
         print(f"  cut {f'turn {-frac:.0f}' if frac < 0 else f'{frac:.2f}'}: {k}/{n}")
+    pseudo = sum(1 for r in results if not r["ok"] and str(r.get("error", "")).startswith("read-guided repair"))
+    if pseudo:
+        print(f"  ({pseudo} of the failures are pseudo-failures: consistent with the last-resort read-guided "
+              f"repair, to check that no leak is behind them)")
     ignored = sum(1 for r in results if r.get("end_ignored"))
     if ignored:
         print(f"  ({ignored} consistent up to the viewer's last decision: the game ended in an unfinished action)")
@@ -210,6 +214,8 @@ def main() -> int:
         if not r["ok"]:
             msg = r["error"]
             key = msg.split(": ", 1)[1] if msg.startswith("divergence at item") else msg
+            if msg.startswith("read-guided repair"):
+                key = "pseudo-failure (read-guided repair)"
             errs[key[:100]] += 1
     for k, v in errs.most_common(25):
         print(f"  {v:4d}  {k}")

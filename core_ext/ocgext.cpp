@@ -37,7 +37,7 @@ struct State {
 	// wanted order by card id (may be empty) and by code (the fallback)
 	std::deque<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> forced_shuffles[2][3];
 	std::deque<std::vector<ForcedLoc>> forced_random_selects;
-	std::deque<std::vector<uint32_t>> forced_set_card_shuffles;
+	std::deque<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> forced_set_card_shuffles;  // (ids, codes)
 	// (player, card code, effect description) whose cost/target checks are skipped
 	std::set<std::tuple<uint8_t, uint32_t, uint64_t>> forced_activatable;
 	// card ids that count as matching every card filter
@@ -205,27 +205,38 @@ void on_shuffle_set_card(duel* pduel, card** ms, const uint8_t* seq, int32_t ct)
 	auto wanted = std::move(st->forced_set_card_shuffles.front());
 	st->forced_set_card_shuffles.pop_front();
 	++st->consumed;
-	if(static_cast<int32_t>(wanted.size()) != ct) {
+	if(static_cast<int32_t>(wanted.second.size()) != ct) {
 		++st->errors;
 		return;
 	}
-	// wanted[k] is the code that must end up at the k-th smallest sequence
+	// wanted[k] is the card (by id if these are the cards, else by code) that must
+	// end up at the k-th smallest sequence
 	std::vector<uint8_t> sorted_seq(seq, seq + ct);
 	std::sort(sorted_seq.begin(), sorted_seq.end());
-	std::vector<card*> pool(ms, ms + ct);
-	std::vector<card*> result(ct, nullptr);
-	for(int32_t i = 0; i < ct; ++i) {
-		auto rank = std::distance(sorted_seq.begin(), std::find(sorted_seq.begin(), sorted_seq.end(), seq[i]));
-		auto code = wanted[rank];
-		auto it = std::find_if(pool.begin(), pool.end(), [code](card* c) { return c && c->data.code == code; });
-		if(it == pool.end()) {
-			++st->errors;
+	for(bool by_id : {true, false}) {
+		if(by_id && static_cast<int32_t>(wanted.first.size()) != ct)
+			continue;
+		std::vector<card*> pool(ms, ms + ct);
+		std::vector<card*> result(ct, nullptr);
+		bool ok = true;
+		for(int32_t i = 0; i < ct && ok; ++i) {
+			auto rank = std::distance(sorted_seq.begin(), std::find(sorted_seq.begin(), sorted_seq.end(), seq[i]));
+			auto it = std::find_if(pool.begin(), pool.end(), [&](card* c) {
+				return c && (by_id ? c->cardid == wanted.first[rank] : c->data.code == wanted.second[rank]);
+			});
+			if(it == pool.end()) {
+				ok = false;
+				break;
+			}
+			result[i] = *it;
+			*it = nullptr;
+		}
+		if(ok) {
+			std::copy(result.begin(), result.end(), ms);
 			return;
 		}
-		result[i] = *it;
-		*it = nullptr;
 	}
-	std::copy(result.begin(), result.end(), ms);
+	++st->errors;
 }
 
 bool is_forced_activatable(duel* pduel, effect* peffect, uint8_t playerid) {
@@ -330,7 +341,14 @@ OCGEXT_API void OCG_ExtPushForcedRandomSelect(OCG_Duel ocg_duel, const uint32_t*
 
 OCGEXT_API void OCG_ExtPushForcedSetCardShuffle(OCG_Duel ocg_duel, const uint32_t* codes, uint32_t count) {
 	auto& st = states[static_cast<duel*>(ocg_duel)];
-	st.forced_set_card_shuffles.emplace_back(codes, codes + count);
+	st.forced_set_card_shuffles.emplace_back(std::vector<uint32_t>(), std::vector<uint32_t>(codes, codes + count));
+}
+
+// Like OCG_ExtPushForcedSetCardShuffle, but also with the unique card ids (used
+// if these are the cards shuffled, else the codes).
+OCGEXT_API void OCG_ExtPushForcedSetCardShuffleById(OCG_Duel ocg_duel, const uint32_t* ids, const uint32_t* codes, uint32_t count) {
+	auto& st = states[static_cast<duel*>(ocg_duel)];
+	st.forced_set_card_shuffles.emplace_back(std::vector<uint32_t>(ids, ids + count), std::vector<uint32_t>(codes, codes + count));
 }
 
 // Effects of cards with `code` and description `desc` count as activatable for

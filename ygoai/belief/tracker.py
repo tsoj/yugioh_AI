@@ -101,6 +101,7 @@ class Hypothesis:
     # same section (= creation order), per initial main/extra deck slot
     deck_ranks: list = field(default_factory=list)
     extra_ranks: list = field(default_factory=list)
+    set_card_shuffle_ranks: list = field(default_factory=list)  # (ranks, owners) per set card shuffle
 
 
 class Tracker:
@@ -612,6 +613,11 @@ class Tracker:
             pool = self._shuffle(p, C.LOCATION_HAND)
             if len(m["codes"]) != len(pool.claims):
                 raise TrackerError("hand size mismatch on shuffle")
+            if m.get("prev") and len(m["prev"]) == len(pool.claims):
+                # (its own hand: the owner knows where each card went)
+                for v, i in zip(pool.claims, m["prev"]):
+                    if i < len(pool.members):
+                        self._identify(v, pool.members[i])
             for v, code, pub in zip(pool.claims, m["codes"], m.get("public") or [False] * len(m["codes"])):
                 v.faceup = pub
                 self.observe(v, code)
@@ -639,6 +645,9 @@ class Tracker:
                 claim.faceup = False
             for claim, zone in zip(pool.claims, pool.zones):
                 self.zones[locs[0]["con"]][locs[0]["loc"]][zone] = claim
+                if m.get("new") and zone in m["new"]:
+                    # (its own cards: the controller knows which went where)
+                    self._identify(claim, vars_[m["new"].index(zone)])
             self.set_shuffle_events.append(pool)
         elif t in ("SUMMONING", "SPSUMMONING", "FLIPSUMMONING", "SET"):
             v = self.var_at(m["con"], m["loc"], m["seq"], m["pos"])
@@ -1378,12 +1387,14 @@ class Solver:
                      "owners": owner_list(pool.claims)}
                     for pool in t.shuffle_events]
         set_shuffles = [[final(c) for c in pool.claims] for pool in t.set_shuffle_events]
+        set_shuffle_ranks = [(rank_list(pool.claims), owner_list(pool.claims)) for pool in t.set_shuffle_events]
         for v in t.exclusions:
             if final(v) in v.excluded:
                 raise TrackerError(f"{v} is {final(v)}, which was excluded")
         var_codes = {v.id: self._known(v) for v in t.all_vars}
         return Hypothesis(decks=decks, deck_orders=deck_orders, extra_orders=extra_orders,
-                          shuffles=shuffles, set_card_shuffles=set_shuffles, unknown_atoms=unknown,
+                          shuffles=shuffles, set_card_shuffles=set_shuffles,
+                          set_card_shuffle_ranks=set_shuffle_ranks, unknown_atoms=unknown,
                           var_codes=var_codes, pinned=set(self.pinned),
                           observed={v.id for v, _ in t.observations},
                           deck_ranks=deck_ranks, extra_ranks=extra_ranks)

@@ -127,6 +127,7 @@ def _load_library(path: Path) -> ct.CDLL:
         "OCG_ExtPushForcedShuffleById": (None, [vp, u8, u32, ct.POINTER(u32), ct.POINTER(u32), u32]),
         "OCG_ExtPushForcedRandomSelect": (None, [vp, ct.POINTER(u32), u32]),
         "OCG_ExtPushForcedSetCardShuffle": (None, [vp, ct.POINTER(u32), u32]),
+        "OCG_ExtPushForcedSetCardShuffleById": (None, [vp, ct.POINTER(u32), ct.POINTER(u32), u32]),
         "OCG_ExtClearForced": (None, [vp]),
         "OCG_ExtPendingForced": (u32, [vp]),
         "OCG_ExtGetErrors": (u32, [vp]),
@@ -474,6 +475,12 @@ class Duel:
     def push_forced_set_card_shuffle(self, codes: list[int]) -> None:
         arr = (ct.c_uint32 * max(1, len(codes)))(*codes)
         lib().OCG_ExtPushForcedSetCardShuffle(self.handle, arr, len(codes))
+
+    def push_forced_set_card_shuffle_ids(self, ids: list[int], codes: list[int]) -> None:
+        """Like push_forced_set_card_shuffle, by unique card ids (per ascending zone)."""
+        arr = (ct.c_uint32 * max(1, len(ids)))(*ids)
+        carr = (ct.c_uint32 * max(1, len(codes)))(*codes)
+        lib().OCG_ExtPushForcedSetCardShuffleById(self.handle, arr, carr, len(ids))
 
     def force_activatable(self, player: int, code: int, desc: int) -> None:
         lib().OCG_ExtForceActivatable(self.handle, player, code, desc)

@@ -300,9 +300,15 @@ def filter_message(msg: dict, viewer: int) -> dict | None:
     if out["type"] in _LISTINGS:
         out["cards"] = sorted(out["cards"], key=_loc_key)
     elif out["type"] == "SHUFFLE_SET_CARD":
-        pairs = sorted(zip(out["old"], out["overlay"]), key=lambda p: _loc_key(p[0]))
-        out["old"] = [a for a, _ in pairs]
-        out["overlay"] = [b for _, b in pairs]
+        # (where each card went only their controller knows)
+        new = out.pop("new", None)
+        if not out["old"] or out["old"][0]["con"] != viewer:
+            new = None
+        pairs = sorted(zip(out["old"], out["overlay"], new or out["old"]), key=lambda p: _loc_key(p[0]))
+        out["old"] = [a for a, _, _ in pairs]
+        out["overlay"] = [b for _, b, _ in pairs]
+        if new is not None:
+            out["new"] = [c for _, _, c in pairs]
     return out
 
 
@@ -358,9 +364,11 @@ def _filter_message(msg: dict, viewer: int) -> dict | None:
     if t in ("SHUFFLE_HAND", "SHUFFLE_EXTRA"):
         if msg["player"] == viewer:
             return msg
-        # (a face-up card, e.g. one kept revealed in the hand, stays visible)
+        # (a face-up card, e.g. one kept revealed in the hand, stays visible; where the
+        # cards went only their owner knows)
         public = msg.get("public") or [False] * len(msg["codes"])
-        return {**msg, "codes": [c if pub else 0 for c, pub in zip(msg["codes"], public)]}
+        out = {k: v for k, v in msg.items() if k != "prev"}
+        return {**out, "codes": [c if pub else 0 for c, pub in zip(msg["codes"], public)]}
     if t == "SET":
         if msg["con"] == viewer:
             return msg
