@@ -1626,6 +1626,15 @@ class BeliefReplay:
                 span = self._nomatch_span(start)
                 if span is not None:
                     fix = ("nomatchpile", *span)
+            if fix is None and got["type"] == "CHAINING" and got["trigger_con"] == self.opponent \
+                    and not (exp["type"] == "CHAINING" and exp.get("code") == got.get("code")) \
+                    and self._unforce_fix(got) is None:
+                # the replay's opponent activated an effect (e.g. a mandatory trigger:
+                # "Special Summon 1 Troop Dragon from your Deck") whose check passes
+                # thanks to the hidden (filler) cards: in the real game none fits
+                span = (self._action_start(), self.pos)
+                if span not in self.nomatch_piles and span not in self.match_piles:
+                    fix = ("nomatchpile", *span)
             if fix is None and exp["type"] == "WIN" and got["type"] != "WIN":
                 # the real game ended where the replay went on: the real one stopped
                 # at a prompt (the win is checked then), e.g. "if an excavated card

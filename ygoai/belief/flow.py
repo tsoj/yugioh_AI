@@ -580,9 +580,13 @@ class FlowSolver:
                 if self.completion is None:
                     raise TrackerError("unknown opponent cards but no deck completion available")
                 fill_main, fill_extra = comp.complete(known_main, known_extra, n_main, n_extra)
-                it_main, it_extra = iter(fill_main), iter(fill_extra)
+                fills = {"main": list(fill_main), "extra": list(fill_extra)}
                 for a in plain:
-                    a.resolved = next(it_main) if a.kind == "main" else next(it_extra)
+                    # (in order, except where the next code was ruled out for this slot,
+                    # e.g. by a scan of the deck: a realistic completion can guess it)
+                    lst, ex = fills[a.kind], excluded.get(a.id, ())
+                    k = 0 if lst[0] not in ex else next((i for i, c in enumerate(lst) if c not in ex), 0)
+                    a.resolved = lst.pop(k)
         for v in t.all_vars:
             if v.kind == "created" and v.resolved is None:
                 key = commodities[vcom[v.id]][1] if v.id in vcom else None
