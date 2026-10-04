@@ -28,6 +28,12 @@ def _init_worker(initializer, initargs):
         initializer(*initargs)
 
 
+# tasks a worker process runs before it is replaced: per-process caches (e.g.
+# of state views, decks, compiled scripts) only grow, which adds up over the
+# hour of a whole regression suite
+MAX_TASKS_PER_CHILD = 100
+
+
 def run_parallel(fn: Callable, tasks: Iterable, jobs: int, initializer=None,
                  initargs: tuple = ()) -> Iterator[tuple[Any, Any]]:
     """Yields (task, result) pairs as they complete; result is a Crash if the
@@ -45,7 +51,8 @@ def run_parallel(fn: Callable, tasks: Iterable, jobs: int, initializer=None,
                 except cf.process.BrokenProcessPool as e:
                     yield task, Crash(task, f"worker died: {e}")
             continue
-        ex = cf.ProcessPoolExecutor(jobs, initializer=_init_worker, initargs=(initializer, initargs))
+        ex = cf.ProcessPoolExecutor(jobs, initializer=_init_worker, initargs=(initializer, initargs),
+                                    max_tasks_per_child=MAX_TASKS_PER_CHILD)
         futures = {ex.submit(fn, t): t for t in pending}
         pending = []
         try:

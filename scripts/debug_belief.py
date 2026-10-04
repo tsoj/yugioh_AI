@@ -69,7 +69,7 @@ def main():
     ap.add_argument("--pairs", help="agent pairings as in check_belief.py, e.g. setter-greedy,mixed-random")
     ap.add_argument("--decks", choices=["random", "diverse", "cards", "new", "new-cards", "new-mixed"], default="random")
     ap.add_argument("--book", help="opening book (scripts/make_book.py)")
-    ap.add_argument("--completion", choices=["vanilla", "corpus"], default="vanilla")
+    ap.add_argument("--completion", choices=["vanilla", "corpus"], default="corpus")
     args = ap.parse_args()
     rec = make_game(args.seed, pairs=[tuple(p.split("-")) for p in args.pairs.split(",")] if args.pairs else None,
                     decks=args.decks, book=args.book)
@@ -78,7 +78,7 @@ def main():
     cut = cut_point(items, args.cut)
     if cut is None:
         sys.exit(f"the game has no cut {args.cut}")
-    completion = None
+    completion = None  # (the replay's own default: vanilla)
     if args.completion == "corpus":
         from ygoai.belief.corpus import CorpusCompletion
         completion = CorpusCompletion()

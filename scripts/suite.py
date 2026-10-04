@@ -4,7 +4,7 @@ exact settings it was played with (other settings play other games).
 
 Each range is checked against its latest baseline (runs/suite/baselines.json):
 
-    python3 scripts/suite.py TAG                  # all ranges
+    python3 scripts/suite.py TAG                  # all ranges, in one pool of workers
     python3 scripts/suite.py TAG reg1000 new50000 # some of them
     python3 scripts/suite.py --list
 
@@ -16,10 +16,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
 import time
+import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -28,16 +30,17 @@ BASELINES = SUITE_DIR / "baselines.json"
 P = "setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter"
 MC = "belief_mc-greedy,setter-belief_mc,belief_mc-mixed,random-belief_mc,belief_mc-belief_mc"
 
-# name: (games, first seed, other flags)
+# name: (games, first seed, other flags); the unknown opponent cards are filled from
+# real decks (--completion corpus, cards with effects) except where vanilla is given
 RANGES: dict[str, tuple[int, int, list[str]]] = {
-    "reg1000": (1000, 1000, []),
-    "reg2000": (1000, 2000, []),
-    "reg3000": (1000, 3000, []),
-    "reg4000": (1000, 4000, ["--pairs", P]),
-    "reg5000": (1000, 5000, ["--decks", "diverse"]),
-    "reg6000": (1000, 6000, ["--decks", "diverse", "--pairs", P]),
-    "reg7000": (1000, 7000, ["--decks", "diverse", "--pairs", P]),
-    "book9000": (1000, 9000, ["--book", "build/book.jsonl"]),
+    "reg1000": (1000, 1000, ["--completion", "vanilla"]),
+    "reg2000": (1000, 2000, ["--completion", "vanilla"]),
+    "reg3000": (1000, 3000, ["--completion", "vanilla"]),
+    "reg4000": (1000, 4000, ["--pairs", P, "--completion", "vanilla"]),
+    "reg5000": (1000, 5000, ["--decks", "diverse", "--completion", "vanilla"]),
+    "reg6000": (1000, 6000, ["--decks", "diverse", "--pairs", P, "--completion", "vanilla"]),
+    "reg7000": (1000, 7000, ["--decks", "diverse", "--pairs", P, "--completion", "vanilla"]),
+    "book9000": (1000, 9000, ["--book", "build/book.jsonl", "--completion", "vanilla"]),
     "fresh10000": (1000, 10000, []),
     "fresh11000": (1000, 11000, ["--pairs", P]),
     "fresh12000": (1000, 12000, ["--decks", "diverse"]),
@@ -54,8 +57,8 @@ RANGES: dict[str, tuple[int, int, list[str]]] = {
     "book22000": (1000, 22000, ["--book", "build/book.jsonl"]),
     "cards30000": (1000, 30000, ["--decks", "cards"]),
     "cards31000": (1000, 31000, ["--decks", "cards", "--pairs", P]),
-    "cards40000": (1000, 40000, ["--decks", "cards"]),
-    "cards41000": (1000, 41000, ["--decks", "cards", "--pairs", P]),
+    "cards40000": (1000, 40000, ["--decks", "cards", "--completion", "vanilla"]),
+    "cards41000": (1000, 41000, ["--decks", "cards", "--pairs", P, "--completion", "vanilla"]),
     "new50000": (1000, 50000, ["--decks", "new"]),
     "new51000": (1000, 51000, ["--decks", "new", "--pairs", P]),
     "new52000": (1000, 52000, ["--decks", "new"]),
@@ -70,7 +73,6 @@ RANGES: dict[str, tuple[int, int, list[str]]] = {
     "nc65000": (400, 65000, ["--decks", "new-cards"]),
     # with the realistic (effect card) deck completion
     "corpus1000": (200, 1000, ["--completion", "corpus"]),
-    "corpus52000": (300, 52000, ["--decks", "new", "--completion", "corpus"]),
     "corp58000": (400, 58000, ["--decks", "new", "--completion", "corpus"]),
     "corp59000": (400, 59000, ["--decks", "new-mixed", "--completion", "corpus"]),
     "corp60000": (400, 60000, ["--decks", "new", "--pairs", P, "--completion", "corpus"]),
@@ -94,12 +96,44 @@ def compare(old: Path, new: Path) -> tuple[str, int]:
     return out.strip(), broke
 
 
+def _cost(baseline: str | None) -> dict[int, float]:
+    """Seconds each game's reconstructions took in the baseline (a timeout as its limit)."""
+    out: dict[int, float] = {}
+    if baseline:
+        for line in open(ROOT / baseline):
+            r = json.loads(line)
+            out[r["seed"]] = out.get(r["seed"], 0.0) + (r.get("seconds") or 0.0)
+    return out
+
+
+def _quick_cases(baseline: str | None) -> set[tuple] | None:
+    """The quick tier's reconstructions of a range: those that failed, needed
+    restarts, took long or ended in an unfinished action in the baseline (where
+    regressions show), and a fixed tenth of the others."""
+    if not baseline:
+        return None
+    keep = set()
+    for line in open(ROOT / baseline):
+        r = json.loads(line)
+        if "frac" not in r:
+            continue
+        key = (r["seed"], r["viewer"], r["frac"])
+        if not r["ok"] or (r.get("restarts") or 0) > 0 or (r.get("seconds") or 0) > 2 or r.get("end_ignored") \
+                or zlib.crc32(f"{key[0]} {key[1]} {key[2]}".encode()) % 10 == 0:
+            keep.add(key)
+    return keep
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("tag", nargs="?", help="suffix of this run's outputs")
     ap.add_argument("ranges", nargs="*", help="only these ranges (default: all)")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--accept", action="store_true", help="make the runs baselines even if something broke")
+    ap.add_argument("-j", "--jobs", type=int, default=os.cpu_count())
+    ap.add_argument("--quick", action="store_true",
+                    help="only the reconstructions where regressions show (see _quick_cases); its runs never "
+                         "become baselines")
     args = ap.parse_args()
     base = load_baselines()
     if args.list or not args.tag:
@@ -109,35 +143,74 @@ def main() -> int:
     unknown = [r for r in args.ranges if r not in RANGES]
     if unknown:
         sys.exit(f"unknown ranges: {unknown}")
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import check_belief as cb
+    from ygoai.parallel import Crash, run_parallel
     SUITE_DIR.mkdir(parents=True, exist_ok=True)
-    failed = False
-    for name in args.ranges or list(RANGES):
+    # all ranges' games in one pool, the slowest (by the baselines) first: no range
+    # waits for its last few slow cases while the other workers are idle
+    names = args.ranges or list(RANGES)
+    owner: dict[int, str] = {}
+    left: dict[str, int] = {}
+    outs, results, tasks = {}, {}, []
+    for name in names:
         n, start, flags = RANGES[name]
+        argv = ["-n", str(n), "--start", str(start), *flags]
+        if base.get(name):
+            argv += ["--previous", str(ROOT / base[name])]
+        cost = _cost(base.get(name))
+        median = sorted(cost.values())[len(cost) // 2] if cost else 1.0
+        quick = _quick_cases(base.get(name)) if args.quick else None
+        for t in cb.build_tasks(cb.make_parser().parse_args(argv)):
+            if quick is not None:
+                cases = [(v, f) for v, f in t[1] if (t[0], v, f) in quick]
+                if not cases:
+                    continue
+                t = (t[0], cases, *t[2:])
+            owner[id(t)] = name
+            tasks.append((cost.get(t[0], median), t))
+        left[name] = sum(1 for _, t in tasks if owner[id(t)] == name)
+        if not left[name]:
+            continue
+        outs[name] = (SUITE_DIR / f"{name}.{args.tag}.jsonl").open("w")
+        results[name] = [0, 0]  # (consistent, all)
+    tasks.sort(key=lambda ct: -ct[0])
+    print(f"{len(tasks)} games of {len(names)} ranges", flush=True)
+    t0, failed = time.time(), False
+    for task, res in run_parallel(cb.run_task, [t for _, t in tasks], args.jobs):
+        name = owner[id(task)]
+        if isinstance(res, Crash):
+            res = [{"seed": task[0], "viewer": v, "frac": f, "ok": False, "error": f"crash: {res.error}"}
+                   for v, f in task[1]]
+        res = [r for r in res if r is not None]
+        results[name][0] += sum(r["ok"] for r in res)
+        results[name][1] += len(res)
+        for r in res:
+            outs[name].write(json.dumps(r) + "\n")
+        outs[name].flush()
+        left[name] -= 1
+        if left[name]:
+            continue
+        outs[name].close()
         out = SUITE_DIR / f"{name}.{args.tag}.jsonl"
-        cmd = [sys.executable, str(ROOT / "scripts" / "check_belief.py"), "-n", str(n), "--start", str(start),
-               *flags, "-o", str(out)]
+        ok, total = results[name]
+        line = f"{name}: {ok}/{total} consistent [{time.time() - t0:.0f}s]"
         old = base.get(name)
         if old:
-            cmd += ["--previous", old]
-        t = time.time()
-        r = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT)
-        summary = next((l for l in r.stdout.splitlines() if "reconstructions consistent" in l), "?")
-        if r.returncode not in (0, 1) or summary == "?":  # (1: some reconstructions failed)
-            print(f"{name}: run failed (exit {r.returncode})\n{r.stderr[-2000:]}", flush=True)
-            failed = True
-            continue
-        line = f"{name}: {summary.strip()} [{time.time() - t:.0f}s]"
-        if old:
-            text, broke = compare(Path(old), out)
+            text, broke = compare(ROOT / old, out)
             line += "\n    " + text.replace("\n", "\n    ")
-            if broke != 0:
-                failed = True
-            if broke == 0 or args.accept:
+            other = re.search(r"(\d+) reconstructions are of games that were played differently", text)
+            if other:
+                # (not compared: not silently a baseline either)
+                line += f"\n    ! {other.group(1)} reconstructions of other games: not compared, run not made the baseline"
+            failed |= broke != 0 or bool(other)
+            if (broke == 0 and not other or args.accept) and not args.quick:
                 base[name] = str(out.relative_to(ROOT))
-        else:
+        elif not args.quick:
             base[name] = str(out.relative_to(ROOT))
         BASELINES.write_text(json.dumps(base, indent=1) + "\n")
         print(line, flush=True)
+    print(f"done in {time.time() - t0:.0f}s", flush=True)
     return 1 if failed else 0
 
 

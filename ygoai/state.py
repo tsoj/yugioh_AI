@@ -137,7 +137,7 @@ _parsed: dict[bytes, list[dict | None]] = {}
 def _parse_location_cached(buf: bytes) -> list[dict | None]:
     cards = _parsed.get(buf)
     if cards is None:
-        if len(_parsed) > 20000:
+        if len(_parsed) > 5000:
             _parsed.clear()
         cards = _parsed[buf] = parse_location_query(buf)
     # (fresh dicts: the caller adds the card ids; nested values are never changed)
@@ -208,7 +208,7 @@ def viewer_view(duel: Duel, viewer: int) -> dict:
             key = (raw, p, loc, viewer)
             cards = _viewed.get(key)
             if cards is None:
-                if len(_viewed) > 20000:
+                if len(_viewed) > 5000:
                     _viewed.clear()
                 cards = _viewed[key] = _view_location(parse_location_query(raw), p, loc, viewer)
             vp[name] = cards

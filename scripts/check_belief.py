@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import argparse
 import collections
+import ctypes
+import gc
 import json
 import multiprocessing as mp
 import os
@@ -43,19 +45,18 @@ def _alarm(*_):
 _main_pid = os.getpid()
 
 
-_completion = None
+_completions: dict = {}  # (per worker process: building one takes a while)
 
 
 def get_completion(name: str):
-    global _completion
-    if _completion is None:
+    if name not in _completions:
         if name == "corpus":
             from ygoai.belief.corpus import CorpusCompletion
-            _completion = CorpusCompletion()
+            _completions[name] = CorpusCompletion()
         else:
             from ygoai.belief.completion import VanillaCompletion
-            _completion = VanillaCompletion()
-    return _completion
+            _completions[name] = VanillaCompletion()
+    return _completions[name]
 
 
 def _replay_case(record, items, seed: int, viewer: int, frac: float, timeout: int, completion: str) -> dict | None:
@@ -97,11 +98,27 @@ def run_task(task: tuple) -> list[dict]:
         if cut is None or (viewer, cut) in done:
             continue  # (the same prefix as another cut)
         done.add((viewer, cut))
-        out.append(_replay_case(record, streams[viewer], seed, viewer, frac, timeout, completion))
+        r = _replay_case(record, streams[viewer], seed, viewer, frac, timeout, completion)
+        if r is not None:
+            # (which game it was: runs are compared only on the same games)
+            r["game"] = zlib.crc32(repr(streams[viewer]).encode())
+        out.append(r)
+    # (give the memory of the game's replays back: a worker runs many games, and the
+    # heap would otherwise stay at the largest replay's peak)
+    del record, streams
+    gc.collect()
+    _malloc_trim()
     return out
 
 
-def main() -> int:
+def _malloc_trim() -> None:
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
+
+
+def make_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
     ap.add_argument("-n", "--games", type=int, default=50)
     ap.add_argument("--start", type=int, default=0, help="first game seed")
@@ -135,11 +152,13 @@ def main() -> int:
                          "decks of random cards (\"cards\"), or the decks downloaded later in the diverse order "
                          "(\"new\")")
     ap.add_argument("--book", help="opening book (scripts/make_book.py): game seed %% openings picks the decks")
-    ap.add_argument("--completion", choices=["vanilla", "corpus"], default="vanilla",
+    ap.add_argument("--completion", choices=["vanilla", "corpus"], default="corpus",
                     help="how unknown opponent cards are guessed")
-    args = ap.parse_args()
-    if args.read_guided_ok:
-        os.environ["YGOAI_READ_GUIDED_OK"] = "1"
+    return ap
+
+
+def build_tasks(args: argparse.Namespace) -> list[tuple]:
+    """One task per game (it is played once for all of its reconstructions)."""
     fractions = tuple(float(f) for f in args.fractions.split(",") if f)
     turn_cuts = tuple(-float(t) for t in args.turns.split(",") if t)
     failed_before: set[tuple[int, int]] = set()
@@ -171,15 +190,21 @@ def main() -> int:
         cases = [(seed, viewer, frac) for seed in seeds for viewer in (0, 1)
                  for frac in sorted(cuts(seed, viewer), reverse=True)]
     pairs = tuple(tuple(p.split("-")) for p in args.pairs.split(",")) if args.pairs else None
-    # one task per game (it is played once for all of its reconstructions)
     by_seed: dict[int, list] = {}
     for seed, viewer, frac in cases:
         by_seed.setdefault(seed, []).append((viewer, frac))
     # (the decks are chosen here: the workers then never load the deck corpus,
     # which keeps them small and the replay's probes (forks) cheap)
-    tasks = [(seed, cs, args.mirror_prob, args.timeout, args.completion, pairs, args.decks, args.book,
-              game_decks(seed, args.mirror_prob, args.decks, args.book))
-             for seed, cs in by_seed.items()]
+    return [(seed, cs, args.mirror_prob, args.timeout, args.completion, pairs, args.decks, args.book,
+             game_decks(seed, args.mirror_prob, args.decks, args.book))
+            for seed, cs in by_seed.items()]
+
+
+def main() -> int:
+    args = make_parser().parse_args()
+    if args.read_guided_ok:
+        os.environ["YGOAI_READ_GUIDED_OK"] = "1"
+    tasks = build_tasks(args)
     results = []
     t0 = time.monotonic()
     out = args.output.open("w") if args.output else None  # streamed: large runs can be watched

@@ -44,8 +44,8 @@ def _python_sources(with_belief: bool) -> list[Path]:
     for path in sorted(pkg.rglob("*.py")):
         rel = path.relative_to(pkg).parts
         # (the belief replay does not take part in playing a game, except for the
-        # function that plays the test games and the belief_mc agent)
-        if rel[0] == "belief" and not with_belief and path.name != "check.py":
+        # module that plays the test games and the belief_mc agent)
+        if rel[0] == "belief" and not with_belief and path.name != "games.py":
             continue
         out.append(path)
     return out

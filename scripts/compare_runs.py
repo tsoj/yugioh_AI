@@ -49,7 +49,11 @@ def main() -> int:
     old, new = load(args.old), load(args.new)
     shared = set(old) & set(new)
     # (only the same games: e.g. agents that use the belief play other games when it changes)
-    common = sorted((k for k in shared if old[k].get("len") == new[k].get("len")), key=str)
+    def same_game(a: dict, b: dict) -> bool:
+        if "game" in a and "game" in b:
+            return a["game"] == b["game"]
+        return a.get("len") == b.get("len")
+    common = sorted((k for k in shared if same_game(old[k], new[k])), key=str)
     if len(common) < len(shared):
         print(f"{len(shared) - len(common)} reconstructions are of games that were played differently "
               f"(not compared)")
