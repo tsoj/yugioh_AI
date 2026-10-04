@@ -78,6 +78,7 @@ _BOUNDARIES = frozenset(("CHAIN_SOLVED", "CHAIN_END", "NEW_PHASE", "NEW_TURN", "
 # messages by which the real game goes on after an effect did (nothing) more
 _NOTHING_MORE = frozenset(("CHAIN_SOLVED", "CHAIN_END", "PLAYER_HINT", "NEW_PHASE", "NEW_TURN"))
 UNORDERED_HINTS = ("PLAYER_HINT", "CARD_HINT")
+BATTLE_START_EVENT = 28  # (HINT_EVENT of the chain window in the Battle Phase's start step)
 _SHUFFLE_LOCS = {"SHUFFLE_HAND": C.LOCATION_HAND, "SHUFFLE_DECK": C.LOCATION_DECK,
                  "SHUFFLE_EXTRA": C.LOCATION_EXTRA}
 REVEALED = "revealed"  # identity: one of the cards revealed before the shuffle (see _revealed_fix)
@@ -1322,6 +1323,18 @@ class BeliefReplay:
         if item[0] == "msg":
             exp = item[1]
             fix = self._force_fix(exp)
+            if fix is None and exp["type"] == got.get("type") == "HINT" and exp["hint_type"] == C.HINT_EVENT \
+                    and got.get("hint_type") == C.HINT_EVENT and exp["data"] != got.get("data"):
+                # the real game is in another step than the replay: an activation of
+                # the opponent came in another chain window (with the same messages)
+                for dkey, passing in reversed(self._window_activations):
+                    if self.overrides.get(dkey) != passing:
+                        fix = ("decide", dkey, passing)
+                        break
+            if fix is None and exp["type"] == "MOVE" and got.get("type") in ("CHAIN_SOLVED", "CHAIN_SOLVING", "CHAIN_END") \
+                    and exp["from"]["loc"] in HIDDEN_PILES:
+                # (the replay's effect ended without moving it)
+                fix = self._unmoved_copy_fix(exp, duel, cp)
             if fix is None and exp["type"] == got.get("type") == "CHAINING" and exp.get("code") == got.get("code") \
                     and exp.get("desc") == got.get("desc") \
                     and all(exp.get(k) == got.get(k) for k in ("con", "loc", "seq", "trigger_con", "trigger_loc")) \
@@ -1391,6 +1404,12 @@ class BeliefReplay:
                 ch = self._next_activation(self._upcoming())
                 if ch is not None:
                     fix = self._force_fix(ch)
+                    if fix is None and ch["trigger_con"] == self.opponent \
+                            and (self.opponent, ch["code"], ch["desc"]) in self._active_forces:
+                        # (forced and still not activated: a check beyond its cost and
+                        # target depends on hidden cards, e.g. "can be activated the turn
+                        # it was Set" if the deck has a fitting card)
+                        fix = self._unavailable_fix()
             if fix is None and not (exp["type"] == "CHAINING" and exp.get("code") == got.get("code")
                                     and exp.get("desc") == got.get("desc")):
                 fix = self._unforce_fix(got)
@@ -2330,6 +2349,26 @@ class BeliefReplay:
             return None
         return ("identify", *entry)
 
+    def _unmoved_copy_fix(self, exp: dict, duel: Duel, cp: tuple) -> tuple | None:
+        """The real game moves a hidden card that the replay has right there but
+        does not move: another copy has its role (e.g. the copy revealed for an
+        effect that then banishes it, while the other copy was summoned)."""
+        f = exp["from"]
+        cards = duel.all_cards()[0]
+        lst = cards.get((f["con"], f["loc"]), [])
+        # (the card there in the replay: of the code shown, if any; a face-down move
+        # shows none)
+        if f["seq"] >= len(lst) or exp.get("code") and lst[f["seq"]][0] != exp["code"]:
+            return None
+        code_a, a = lst[f["seq"]]
+        for (_, _), others in cards.items():
+            for code, b in others:
+                if b and b != a and code == code_a:
+                    fix = self._history_swap(a, b, cp)
+                    if fix is not None and fix[1] != (0, 0):  # (only where they were shuffled together)
+                        return fix
+        return None
+
     def _stale_trigger_fix(self, ch: dict) -> tuple | None:
         try:
             v = self.lockstep.var_at(ch["con"], ch["loc"], ch["seq"])
@@ -3204,8 +3243,17 @@ class BeliefReplay:
             codes += [c for c in (filler.settable_monsters_all if kind == "msetable"
                                   else filler.settable_spells) if fits(c)]
             if usual is not None:
-                # (the usual Levels for the Tributes first)
-                codes.sort(key=lambda c: self.db.get(c).level not in usual)
+                # (the usual Levels for the Tributes first, as Levels are in that hand
+                # now: an effect can lower them, e.g. by 1 for WATER monsters; the card
+                # the replay has there shows by how much)
+                delta = 0
+                if kind == "msetable" and duel is not None and src["loc"] == C.LOCATION_HAND:
+                    hand = capture(duel)["players"][src["con"]]["hand"]
+                    now = hand[src["seq"]] if src["seq"] < len(hand) else None
+                    base = self.db.get(now["code"]) if now and now.get("code") else None
+                    if base is not None and now.get("level") is not None and base.level:
+                        delta = now["level"] - base.level
+                codes.sort(key=lambda c: self.db.get(c).level + delta not in usual)
             if kind == "msetable" and duel is not None and src["loc"] == C.LOCATION_HAND:
                 # (the engine's answer first: the card in that slot, its properties
                 # assumed to be the candidate's, e.g. Zombie World allows only Zombies
@@ -3253,7 +3301,10 @@ class BeliefReplay:
                          f"if t then g:AddCard(t) end end")
         check = f"Duel.CanPlayerSetMonster({li['con']},{sumtype},c)"
         if trib_locs:
-            check += f" and Duel.CheckTribute(c,{len(trib_locs)},{len(trib_locs)},g)"
+            # (and it must need Tributes at all: e.g. a Level lowered in the hand by an
+            # effect can need none, where the real card needed some)
+            check += f" and Duel.CheckTribute(c,{len(trib_locs)},{len(trib_locs)},g)" \
+                     " and select(1,c:GetTributeRequirement())>=1"
         for code in dict.fromkeys(codes):
             if code is None:
                 lines.append(f"Debug.Message('none '..tostring({check}))")
@@ -3525,6 +3576,12 @@ class BeliefReplay:
                 return item[2]["phase"]
         return None
 
+    def _battle_start_window(self) -> bool:
+        """The chain window of the Battle Phase's start step (the activation can come
+        from the battle command after it instead: the same messages)."""
+        hint = getattr(self, "_event_hint", None)
+        return hint is not None and hint[0] == self.pos and hint[1] == BATTLE_START_EVENT
+
     def _leaving_phase(self) -> bool:
         hint = getattr(self, "_event_hint", None)
         return hint is not None and hint[0] == self.pos and hint[1] in infer.PHASE_LEAVE_EVENTS
@@ -3716,7 +3773,7 @@ class BeliefReplay:
             if act is not None:
                 self._window_choices.append((dkey, act))
         elif dkey is not None and prompt["type"] == "SELECT_CHAIN" and resp.get("index", -1) >= 0 \
-                and self._leaving_phase():
+                and (self._leaving_phase() or self._battle_start_window()):
             # (activated in a phase-leave window: in a later one instead, the phase
             # can go on after the chain where this one asks for the command again)
             passing = next((k for k, c in enumerate(valid) if c.get("index", -1) == -1), None)
