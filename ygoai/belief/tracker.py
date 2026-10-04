@@ -472,10 +472,11 @@ class Tracker:
             self._tributed_to_hand = []
         if t == "NEW_TURN":
             self.turn_player = m["player"]
-        if t in ("CHAIN_SOLVED", "CHAIN_END", "NEW_PHASE", "NEW_TURN") \
+        if t in ("CHAIN_END", "NEW_PHASE", "NEW_TURN") \
+                or (t == "CHAIN_SOLVED" and m["chain_count"] <= max(self._referenced_link, 1)) \
                 or (t == "CHAINING" and m["chain_count"] == 1):
             # (cards revealed e.g. as a cost stay relevant until their chain link
-            # resolved; a new chain starts afresh)
+            # resolved, also while later links resolve; a new chain starts afresh)
             self._referenced = []
             self._referenced_piles = set()
             self._picked = []

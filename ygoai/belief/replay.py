@@ -1547,7 +1547,11 @@ class BeliefReplay:
                 # the replay's script moved a specific physical card (e.g. the card it
                 # revealed earlier) from where the hypothesis shuffled it: in the real
                 # game that card is at the slot it was moved from
-                fix = self._identify_fix(exp["from"], got["from"])
+                # (first: the cards it moves are the ones it revealed before the hand was
+                # shuffled, e.g. "banish both revealed cards")
+                fix = self._revealed_fix(exp["from"]) if not exp.get("code") else None
+                if fix is None:
+                    fix = self._identify_fix(exp["from"], got["from"])
             if fix is None and exp["type"] == "MOVE" and exp.get("code") and exp["from"]["loc"] in HIDDEN_PILES \
                     and self._opp_prompt is not None:
                 # the opponent chose among cards offered to it, one of them a copy
