@@ -394,6 +394,7 @@ class BeliefReplay:
         self._window_activations: list[tuple] = []  # (decision, passing answer) activated in leave windows
         self._offered: dict = {}  # decision -> (card ids, places) a card selection of the opponent offered
         self._hidden_picks: list[tuple] = []  # (position, span) of opponent choices among its hidden cards
+        self._sim_marks: dict[int, list[int]] = {}  # card hint value -> card ids it was put on (hidden ones too)
         self._silent_choices: list[tuple] = []  # (decision, card ids, candidates, index) nothing revealed
         self._assumed_moves: list[tuple] = []  # (position, assumption) of moves of assumed cards
         self._multi_decisions: dict[tuple, tuple] = {}  # decision -> (card ids, chosen response)
@@ -1103,6 +1104,10 @@ class BeliefReplay:
                             self._assume({"con": self.opponent, "loc": C.LOCATION_DECK, "seq": seq},
                                          [answered_resp["code"]], "the opponent announced a card of its deck")
                     raise Divergence(self.pos, "core rejected a response")
+                if m["type"] == "CARD_HINT" and m["hint_type"] == C.CHINT_DESC_ADD and m["loc"]:
+                    cid = infer.LocMap(duel).at(m)
+                    if cid:
+                        self._sim_marks.setdefault(m["value"], []).append(cid)
                 o = filter_message(m, self.viewer)
                 if o is None:
                     continue
@@ -1473,6 +1478,8 @@ class BeliefReplay:
                         fix = self._history_swap(a, b, cp)
                 if fix is None and hinted is got and got["hint_type"] == C.CHINT_DESC_REMOVE:
                     fix = self._unhinted_fix(got)
+                if fix is None and hinted is exp and exp["hint_type"] == C.CHINT_DESC_REMOVE:
+                    fix = self._mark_fix(exp, duel)
             if fix is None and exp["type"] == got["type"] and isinstance(exp.get("cards"), list) \
                     and isinstance(got.get("cards"), list) and len(exp["cards"]) == len(got["cards"]):
                 # the same card in another place of a pile: another copy was chosen
@@ -2214,6 +2221,37 @@ class BeliefReplay:
         if entry in self.identities or entry in self.failed_identities:
             return None
         return ("identify", *entry)
+
+    def _mark_fix(self, hint: dict, duel: Duel) -> tuple | None:
+        """The real game removes a card hint from a card that just came out of a
+        hidden pile (the viewer never saw it put on there): the card is the one
+        the replay put that hint on (e.g. the Set card returned to the hand, not
+        the one Set from the hand after it was shuffled)."""
+        k = next((j for j in range(self.pos - 1, max(-1, self.pos - 6), -1) if self.items[j][0] == "msg"
+                  and self.items[j][1]["type"] == "MOVE" and infer.same_loc(self.items[j][1]["to"], hint)), None)
+        solved = getattr(self, "_solved", None)
+        if k is None or solved is None or self.items[k][1]["from"]["loc"] not in HIDDEN_PILES:
+            return None
+        f = self.items[k][1]["from"]
+        where = {cid: (p, loc, seq) for (p, loc), lst in duel.all_cards()[0].items()
+                 for seq, (_, cid) in enumerate(lst) if cid}
+        here = infer.LocMap(duel).at(hint)
+        byid = {x.id: x for x in solved.all_vars}
+        for cid in reversed(self._sim_marks.get(hint["value"], [])):
+            if cid == here or cid not in where:
+                continue
+            try:
+                v = self.lockstep.var_at(*where[cid])
+            except TrackerError:
+                continue
+            sv = byid.get(v.id) if v is not None else None
+            if sv is None:
+                continue
+            same = sv.assigned if sv.kind == "claim" and sv.assigned is not None else sv
+            entry = (k, (f["con"], f["loc"], f["seq"]), same.id)
+            if entry not in self.identities and entry not in self.failed_identities:
+                return ("identify", *entry)
+        return None
 
     def _hidden_set_fix(self, duel: Duel) -> tuple | None:
         """The opponent summons a card from the hand shortly (the stream shows its
