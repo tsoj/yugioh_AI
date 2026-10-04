@@ -29,13 +29,28 @@ def category(error: str) -> str:
     return e[:90]
 
 
+REVIEWED = Path(__file__).with_name("reviewed_pseudo.json")
+
+
+def reviewed() -> dict[tuple, str]:
+    """Pseudo-failures checked to be genuine uses of the read-guided repair (no
+    leak behind them): (seed, viewer, frac) -> the repair, which must stay the same."""
+    try:
+        return {(e["seed"], e["viewer"], e["frac"]): e["error"] for e in json.loads(REVIEWED.read_text())}
+    except (OSError, ValueError):
+        return {}
+
+
 def load(path: Path) -> dict[tuple, dict]:
     rows = {}
+    ok_pseudo = reviewed()
     for line in path.open():
         r = json.loads(line)
         if r["ok"] and (r.get("fixes") or {}).get("read_guided"):
             # (older runs counted reconstructions the read-guided repair saved as consistent)
             r["ok"], r["error"] = False, "read-guided repair needed (older run)"
+        if not r["ok"] and ok_pseudo.get((r["seed"], r.get("viewer"), r.get("frac"))) == r.get("error"):
+            r["ok"] = True  # (a reviewed pseudo-failure, see reviewed_pseudo.json)
         rows[(r["seed"], r.get("viewer"), r.get("frac"))] = r
     return rows
 

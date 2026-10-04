@@ -1,0 +1,5 @@
+[
+ {"seed": 22160, "viewer": 1, "frac": 1.0,
+  "error": "read-guided repair needed: P0 loc 4 seq 3 at item 592: 32864 -> 73219648",
+  "note": "The viewer's attack options depend on the opponent's face-down monster (Vilepawn Archfiend keeps its Archfiends from being attacked); the read-guided repair tried the corpus guesses for that slot. No leak: nothing but the viewer's stream and the hypothesis."}
+]
