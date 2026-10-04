@@ -193,6 +193,7 @@ _PROPERTY_BATCH = 8  # ... per repair
 _MAX_SELECTIONS = 30  # multi-card selections offered beyond the inferred ones
 _DECISION_WINDOW = 10  # stream positions a decision stays a candidate for retrying
 _DECISION_TRIES = 24  # alternatives tried for one mismatch
+_TAIL_RESTARTS = 4  # repairs for a mismatch in the unfinished action a game ended in
 _PROBE_BUDGET = 48  # probes a probe of the main line may start in all (nested)
 
 
@@ -270,6 +271,9 @@ class BeliefReplay:
         self.trace: list[tuple] | None = None  # (pos, prompt, response, certain, n_candidates)
         self.log = None  # optional callable(str) for debugging
         self.read_guided = True  # last resort: repairs guided by the engine's reads (read_guided.py)
+        # where the unfinished action a game ended in starts (the caller retries without it)
+        self.tail_start: int | None = None
+        self._tail_restarts = 0
         self.read_guided_fix: list[str] | None = None  # the repairs it made, if it was needed
         self.on_process = None  # optional callable(duel) after each engine step (with the read log on)
         self.sim_log = None  # optional list: god view events of the latest attempt (debugging)
@@ -614,6 +618,12 @@ class BeliefReplay:
             except Divergence as e:
                 duel.close()
                 last = e
+                if self.tail_start is not None and e.pos >= self.tail_start:
+                    # (in the unfinished action the game ended in: only a few repairs,
+                    # the caller then checks up to the viewer's last decision)
+                    self._tail_restarts += 1
+                    if self._tail_restarts > _TAIL_RESTARTS:
+                        raise
                 bt = self._state_bt
                 if bt is not None and not bt["state"] and e.fix is not None and (
                         e.pos == bt["pos"] or e.pos < bt["pos"] and e.fix[0] in ("nomatchpile", "matchpile", "unflip")) \
@@ -632,9 +642,11 @@ class BeliefReplay:
                     # earlier decision (within a budget)
                     bt["tries"] += 1
                     if e.pos <= bt["key"][0] + 1 and not bt.get("parent") and not bt["state"] and (
-                            e.pos < bt["pos"] or e.reason.startswith("no candidate for opponent")):
+                            e.pos < bt["pos"] or e.reason.startswith("no candidate for opponent")
+                            or e.reason != bt["reason"]):
                         # (the alternative failed right at its own action, or at the point
-                        # of the mismatch with a new decision that no answer fits: the
+                        # of the mismatch with another mismatch, i.e. it got further there,
+                        # or with a new decision that no answer fits: the
                         # decisions it led to, e.g. which card after answering "yes", may
                         # not have existed before; they come next, with the alternative kept)
                         # (the first few alternatives each: the budget is shared)
@@ -4031,7 +4043,7 @@ class BeliefReplay:
             self._since_state.append((dkey, len(valid), valid.index(resp)))
         return resp
 
-    def _choose(self, duel: Duel, prompt: dict, valid: list[dict], certain: bool) -> dict:
+    def _choose(self, duel: Duel, prompt: dict, valid: list[dict], certain: bool | None) -> dict:
         n_inferred = sum(1 for c in valid if c in self._inferred)
         if certain or len(valid) == 1 or n_inferred == 1:
             # (one inferred answer: the others are there for backtracking only)
@@ -4089,6 +4101,10 @@ class BeliefReplay:
             if outcome == PROBE_FAILED:
                 failures.append(reached)
         choice = best[2] if best is not None else unrefuted
+        if choice is None and certain is None:
+            # (the inferred answer was likely, only not certain: no other one fits
+            # better, e.g. which of materials moved as one group was picked first)
+            choice = valid[0]
         if choice is None and self.depth == 0 and len(failures) == len(valid) > 1 \
                 and len(set(failures)) == 1 and failures[0] >= self.pos:
             # every answer failed at the same later point: what failed does not

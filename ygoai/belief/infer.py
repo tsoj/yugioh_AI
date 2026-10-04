@@ -904,7 +904,9 @@ def infer_unselect(prompt: dict, up: list[dict], duel, ids: list | None = None) 
     sel_ids = set(ids[:len(sel)]) - unsel_ids
     group = [(r, loc) for cid, r, loc in moved if cid in sel_ids]
     grouped = len(group) > 1 and len(set(group)) == 1
-    for window, certain in ((near, not grouped), (refs, False)):
+    # (grouped: None, "likely": the first moved is probed against the others, and
+    # kept when no answer survives the probes)
+    for window, certain in ((near, None if grouped else True), (refs, False)):
         picks = [ids.index(cid) for cid in window if cid in ids[:len(sel)] and cid not in unsel_ids]
         if picks:
             # (the other used cards next: which one comes first can matter, e.g. the

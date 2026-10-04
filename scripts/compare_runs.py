@@ -33,6 +33,9 @@ def load(path: Path) -> dict[tuple, dict]:
     rows = {}
     for line in path.open():
         r = json.loads(line)
+        if r["ok"] and (r.get("fixes") or {}).get("read_guided"):
+            # (older runs counted reconstructions the read-guided repair saved as consistent)
+            r["ok"], r["error"] = False, "read-guided repair needed (older run)"
         rows[(r["seed"], r.get("viewer"), r.get("frac"))] = r
     return rows
 
@@ -44,7 +47,12 @@ def main() -> int:
     ap.add_argument("-v", "--verbose", action="store_true", help="list every case")
     args = ap.parse_args()
     old, new = load(args.old), load(args.new)
-    common = sorted(set(old) & set(new), key=str)
+    shared = set(old) & set(new)
+    # (only the same games: e.g. agents that use the belief play other games when it changes)
+    common = sorted((k for k in shared if old[k].get("len") == new[k].get("len")), key=str)
+    if len(common) < len(shared):
+        print(f"{len(shared) - len(common)} reconstructions are of games that were played differently "
+              f"(not compared)")
     fixed = [k for k in common if not old[k]["ok"] and new[k]["ok"]]
     broke = [k for k in common if old[k]["ok"] and not new[k]["ok"]]
     still = [k for k in common if not old[k]["ok"] and not new[k]["ok"]]

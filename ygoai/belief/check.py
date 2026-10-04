@@ -76,6 +76,9 @@ def check_prefix(record: GameRecord, viewer: int, items: list[tuple], cut: int,
     stopped = cut == len(items) and (record.result or {}).get("reason") in ("turn_limit", "decision_limit", "time_limit")
     br = BeliefReplay(viewer, init_info(record, viewer), prefix, stopped=stopped, **replay_kwargs)
     br.log = lambda text: res.repairs.append(text) if text.startswith("restart") else None
+    last_prompt = max((i for i, it in enumerate(prefix) if it[0] == "prompt"), default=-1)
+    if cut == len(items) and items and items[-1][0] == "msg" and items[-1][1]["type"] == "WIN" and last_prompt >= 0:
+        br.tail_start = last_prompt + 2  # (see the retry below)
     try:
         res.stage = "hypothesis"
         hyp = br.build_hypothesis()
