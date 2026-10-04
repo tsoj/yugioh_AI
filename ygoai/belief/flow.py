@@ -579,11 +579,22 @@ class FlowSolver:
                 n_extra = sum(1 for a in plain if a.kind == "extra")
                 if self.completion is None:
                     raise TrackerError("unknown opponent cards but no deck completion available")
-                fill_main, fill_extra = comp.complete(known_main, known_extra, n_main, n_extra)
+                # (plus a spare code per slot with ruled out codes: e.g. a second copy
+                # of a searched card that no slot may hold; the completion's order is
+                # kept, so its first codes are the same)
+                spare = {kind: sum(1 for a in plain if a.kind == kind and excluded.get(a.id))
+                         for kind in ("main", "extra")}
+                try:
+                    fill_main, fill_extra = comp.complete(known_main, known_extra, n_main + spare["main"],
+                                                          n_extra + spare["extra"])
+                except RuntimeError:
+                    fill_main, fill_extra = comp.complete(known_main, known_extra, n_main, n_extra)
                 fills = {"main": list(fill_main), "extra": list(fill_extra)}
-                for a in plain:
-                    # (in order, except where the next code was ruled out for this slot,
-                    # e.g. by a scan of the deck: a realistic completion can guess it)
+                # (in order, except where the next code was ruled out for this slot,
+                # e.g. by a scan of the deck: a realistic completion can guess it; the
+                # slots with ruled out codes first, so that a code the completion adds
+                # again goes where it may be)
+                for a in sorted(plain, key=lambda a: not excluded.get(a.id)):
                     lst, ex = fills[a.kind], excluded.get(a.id, ())
                     k = 0 if lst[0] not in ex else next((i for i, c in enumerate(lst) if c not in ex), 0)
                     a.resolved = lst.pop(k)

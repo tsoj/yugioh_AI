@@ -1395,6 +1395,8 @@ class BeliefReplay:
                 key = (self.pos, got["from"]["con"], C.LOCATION_HAND, (got["from"]["seq"],), code)
                 if code and key not in self.exclusions and key not in self.failed_exclusions:
                     fix = ("exclude", *key)
+            if fix is None and exp["type"] == "MOVE" and got.get("type") == "MOVE":
+                fix = self._summon_copy_fix(exp, got)
             if fix is None and exp["type"] == "MOVE" and got["type"] == "MOVE" \
                     and exp["from"]["loc"] in (C.LOCATION_DECK, C.LOCATION_EXTRA) and exp != got:
                 # (a group taken out of hidden piles by one operation: before the
@@ -1798,6 +1800,8 @@ class BeliefReplay:
             span = self._hidden_picks[-1][1]
             if span not in self.nomatch_piles and span not in self.match_piles:
                 fix = ("nomatchpile", *span)
+        if fix is None:
+            fix = self._hidden_set_fix(duel)
         fallback = None
         if fix is None:
             fallback, at = self._hidden_pick_fallback()
@@ -2164,6 +2168,82 @@ class BeliefReplay:
         if entry in self.identities or entry in self.failed_identities:
             return None
         return ("identify", *entry)
+
+    def _summon_copy_fix(self, exp: dict, got: dict) -> tuple | None:
+        """The replay's Tribute Summon from the hand takes another number of
+        Tributes than the real one (one more or one fewer Tribute shows up): the
+        summoned card's Level differs, so the real card is another copy than the
+        one the hypothesis put in that hand slot (e.g. not the copy whose Level an
+        effect lowered after revealing it, the hand shuffled since)."""
+        tribute = C.REASON_RELEASE | C.REASON_SUMMON
+
+        def summon(m: dict) -> bool:
+            return m["type"] == "MOVE" and m["from"]["con"] == self.opponent \
+                and m["from"]["loc"] == C.LOCATION_HAND and m["to"]["loc"] == C.LOCATION_MZONE
+
+        if not (exp["reason"] & tribute == tribute and summon(got)
+                or summon(exp) and got["reason"] & tribute == tribute):
+            return None
+        j = next((j for j in range(self.pos, min(len(self.items), self.pos + 12))
+                  if self.items[j][0] == "msg" and summon(self.items[j][1])), None)
+        if j is None or not self.items[j][1]["code"]:
+            return None
+        f = self.items[j][1]["from"]
+        solved = getattr(self, "_solved", None)
+        try:
+            v = self.lockstep.var_at(f["con"], f["loc"], f["seq"])
+        except TrackerError:
+            return None
+        sv = next((x for x in solved.all_vars if x.id == v.id), None) if solved and v else None
+        member = sv.assigned if sv is not None and sv.kind == "claim" else None
+        if member is None:
+            return None
+        entry = (j, (f["con"], f["loc"], f["seq"]), ("not", member.id))
+        if entry in self.identities or entry in self.failed_identities:
+            return None
+        return ("identify", *entry)
+
+    def _hidden_set_fix(self, duel: Duel) -> tuple | None:
+        """The opponent summons a card from the hand shortly (the stream shows its
+        code) that the replay does not have in the hand: the hypothesis moved it
+        out face-down (e.g. Set it, the hand shuffled before): the real Set card
+        is another one."""
+        j = next((j for j in range(self.pos, min(len(self.items), self.pos + 15))
+                  if self.items[j][0] == "msg" and self.items[j][1]["type"] == "MOVE"
+                  and self.items[j][1]["code"] and self.items[j][1]["from"]["con"] == self.opponent
+                  and self.items[j][1]["from"]["loc"] == C.LOCATION_HAND
+                  and self.items[j][1]["to"]["loc"] == C.LOCATION_MZONE), None)
+        if j is None:
+            return None
+        code = self.items[j][1]["code"]
+        if any(c == code for c, _ in duel.location_cards(self.opponent, C.LOCATION_HAND)):
+            return None
+        solved = getattr(self, "_solved", None)
+        if solved is None:
+            return None
+        # (the latest hidden moves out of the opponent's hand, to cards still there)
+        for k in range(self.pos - 1, max(-1, self.pos - 30), -1):
+            m = self.items[k][1]
+            if self.items[k][0] != "msg" or m["type"] != "MOVE" or m["code"] \
+                    or m["from"]["con"] != self.opponent or m["from"]["loc"] != C.LOCATION_HAND:
+                continue
+            t = m["to"]
+            try:
+                v = self.lockstep.var_at(t["con"], t["loc"], t["seq"])
+            except TrackerError:
+                continue
+            sv = next((x for x in solved.all_vars if v is not None and x.id == v.id), None)
+            member = sv.assigned if sv is not None and sv.kind == "claim" else None
+            a = member
+            while a is not None and a.kind == "claim":
+                a = a.assigned
+            if member is None or a is None or a.resolved != code:
+                continue
+            f = m["from"]
+            entry = (k, (f["con"], f["loc"], f["seq"]), ("not", member.id))
+            if entry not in self.identities and entry not in self.failed_identities:
+                return ("identify", *entry)
+        return None
 
     def _stat_copy_fix(self, exp: dict, got: dict) -> tuple | None:
         """A card on the field has other stats than the real one (e.g. Level 6

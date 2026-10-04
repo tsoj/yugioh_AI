@@ -895,6 +895,9 @@ def infer_unselect(prompt: dict, up: list[dict], duel, ids: list | None = None) 
             first = [{"index": j} for j in dict.fromkeys(picks)]
             rest = [{"index": j} for j in range(len(sel)) if {"index": j} not in first]
             fin = [{"finish": True}] if (prompt["finishable"] or prompt["cancelable"]) else []
+            if not unsel:
+                # (nothing selected yet: finishing cancels what the cards are used for)
+                return first + fin + rest, certain
             return first[:1] + fin + first[1:] + rest, certain
     cands = []
     if prompt["finishable"] or prompt["cancelable"]:
