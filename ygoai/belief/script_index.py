@@ -160,3 +160,20 @@ def unsummonable(code: int) -> bool:
     and Card.EnableReviveLimit (on a Main Deck monster: Special Summon only)."""
     text = _script_text(code)
     return bool(re.search(r"EnableUnsummonable\(|EFFECT_UNSUMMONABLE_CARD|EnableReviveLimit\(", text))
+
+
+@lru_cache(maxsize=1)
+def win_condition_codes() -> frozenset[int]:
+    """Cards that can win the game by themselves (their script calls Duel.Win, e.g.
+    Exodia the Forbidden One, Destiny Board) and the cards those scripts name (e.g.
+    the Forbidden One pieces): as stand-ins for unknown cards they would change the
+    game with no player action (a hand of guessed pieces wins)."""
+    out: set[int] = set()
+    paths = [p for sub in ("official", "pre-release", "unofficial") for p in (CARD_SCRIPTS_DIR / sub).glob("c*.lua")]
+    paths += list(FIXED_CARD_SCRIPTS_DIR.glob("c*.lua"))
+    for path in paths:
+        text = path.read_text(errors="replace")
+        if "Duel.Win(" in text:
+            out.add(int(path.stem[1:]))
+            out.update(int(x) for x in re.findall(r"\b(\d{6,9})\b", text))
+    return frozenset(out)

@@ -507,8 +507,11 @@ class BeliefReplay:
         # two cards in that shuffle's result
         self._folded_swaps = {((0, 0), a, b) for a, b in self.swaps.get((0, 0), ())}
         shuffle_cp = {k: c for c, ks in self.prev_shuffle_cps.items() for k in ks}
+        # (only copies trade places: a swap found under another hypothesis can name
+        # cards that are no longer copies of each other)
+        code_of = {cid: key[1] for key, cid in id_of.items()}
         for cp in sorted(c for c in self.swaps if c != (0, 0)):
-            pairs = self.swaps[cp]
+            pairs = [(a, b) for a, b in self.swaps[cp] if code_of.get(a) == code_of.get(b)]
             here = set(self.prev_shuffle_cps.get(cp, ()))
             for k in here:
                 lst = shuffle_ids[k] if k < len(shuffle_ids) else None
@@ -992,6 +995,10 @@ class BeliefReplay:
                 self._roll_dirty = True
                 # the pending response selected card objects: never move those
                 busy = set(infer.response_card_ids(duel, pending, pending_resp)) if pending else set()
+                # (only copies trade places: a swap found under another hypothesis
+                # can name cards that are no longer copies of each other)
+                codes = {cid: code for lst in duel.all_cards()[0].values() for code, cid in lst if cid}
+                todo = [(a, b) for a, b in todo if codes.get(a) == codes.get(b)]
                 carry = []
                 for a, b in todo:
                     if a in busy or b in busy or not duel.swap_cards(a, b):

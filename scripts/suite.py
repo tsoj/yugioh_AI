@@ -106,7 +106,7 @@ def _cost(baseline: str | None) -> dict[int, float]:
     return out
 
 
-def _quick_cases(baseline: str | None) -> set[tuple] | None:
+def _quick_cases(baseline: str | None, failed_only: bool = False) -> set[tuple] | None:
     """The quick tier's reconstructions of a range: those that failed, needed
     restarts, took long or ended in an unfinished action in the baseline (where
     regressions show), and a fixed tenth of the others."""
@@ -118,6 +118,10 @@ def _quick_cases(baseline: str | None) -> set[tuple] | None:
         if "frac" not in r:
             continue
         key = (r["seed"], r["viewer"], r["frac"])
+        if failed_only:
+            if not r["ok"]:
+                keep.add(key)
+            continue
         if not r["ok"] or (r.get("restarts") or 0) > 0 or (r.get("seconds") or 0) > 2 or r.get("end_ignored") \
                 or zlib.crc32(f"{key[0]} {key[1]} {key[2]}".encode()) % 10 == 0:
             keep.add(key)
@@ -134,6 +138,8 @@ def main() -> int:
     ap.add_argument("--quick", action="store_true",
                     help="only the reconstructions where regressions show (see _quick_cases); its runs never "
                          "become baselines")
+    ap.add_argument("--failed", action="store_true", help="only the reconstructions that failed in the baselines "
+                                                          "(never made baselines)")
     args = ap.parse_args()
     base = load_baselines()
     if args.list or not args.tag:
@@ -160,7 +166,7 @@ def main() -> int:
             argv += ["--previous", str(ROOT / base[name])]
         cost = _cost(base.get(name))
         median = sorted(cost.values())[len(cost) // 2] if cost else 1.0
-        quick = _quick_cases(base.get(name)) if args.quick else None
+        quick = _quick_cases(base.get(name), args.failed) if args.quick or args.failed else None
         for t in cb.build_tasks(cb.make_parser().parse_args(argv)):
             if quick is not None:
                 cases = [(v, f) for v, f in t[1] if (t[0], v, f) in quick]
@@ -204,9 +210,9 @@ def main() -> int:
                 # (not compared: not silently a baseline either)
                 line += f"\n    ! {other.group(1)} reconstructions of other games: not compared, run not made the baseline"
             failed |= broke != 0 or bool(other)
-            if (broke == 0 and not other or args.accept) and not args.quick:
+            if (broke == 0 and not other or args.accept) and not (args.quick or args.failed):
                 base[name] = str(out.relative_to(ROOT))
-        elif not args.quick:
+        elif not (args.quick or args.failed):
             base[name] = str(out.relative_to(ROOT))
         BASELINES.write_text(json.dumps(base, indent=1) + "\n")
         print(line, flush=True)

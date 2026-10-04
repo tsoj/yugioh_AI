@@ -95,9 +95,11 @@ class CorpusCompletion(DeckCompletion):
         return fill_main, fill_extra
 
     def _fill(self, weights: Counter, known: Counter, n: int, extra: bool) -> list[int]:
+        from .script_index import win_condition_codes
+        wins = win_condition_codes()  # (never guessed: e.g. Exodia pieces, a guessed hand would win)
         have = Counter(known)
-        ranked = sorted(((w, code) for (code, is_extra), w in weights.items() if is_extra == extra),
-                        reverse=True)
+        ranked = sorted(((w, code) for (code, is_extra), w in weights.items()
+                         if is_extra == extra and code not in wins), reverse=True)
         out: list[int] = []
         while len(out) < n:
             progressed = False
