@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import gzip
 import json
 import re
 import sys
@@ -44,7 +45,8 @@ def reviewed() -> dict[tuple, str]:
 def load(path: Path) -> dict[tuple, dict]:
     rows = {}
     ok_pseudo = reviewed()
-    for line in path.open():
+    opener = gzip.open(path, "rt") if str(path).endswith(".gz") else path.open()
+    for line in opener:
         r = json.loads(line)
         if r["ok"] and (r.get("fixes") or {}).get("read_guided"):
             # (older runs counted reconstructions the read-guided repair saved as consistent)

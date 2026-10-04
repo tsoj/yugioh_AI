@@ -14,6 +14,7 @@ import argparse
 import collections
 import ctypes
 import gc
+import gzip
 import json
 import multiprocessing as mp
 import os
@@ -163,7 +164,8 @@ def build_tasks(args: argparse.Namespace) -> list[tuple]:
     turn_cuts = tuple(-float(t) for t in args.turns.split(",") if t)
     failed_before: set[tuple[int, int]] = set()
     if args.previous:
-        failed_before = {(r["seed"], r["viewer"]) for r in map(json.loads, args.previous.open())
+        opener = gzip.open(args.previous, "rt") if args.previous.suffix == ".gz" else args.previous.open()
+        failed_before = {(r["seed"], r["viewer"]) for r in map(json.loads, opener)
                          if "viewer" in r and not r["ok"]}
 
     def cuts(seed: int, viewer: int) -> tuple:

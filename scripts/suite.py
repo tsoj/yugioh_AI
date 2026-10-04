@@ -10,12 +10,17 @@ Each range is checked against its latest baseline (runs/suite/baselines.json):
 
 A range's run becomes its new baseline when nothing that passed there before
 broke (or with --accept). A run that did not finish leaves the baseline alone.
+The baselines are kept in git, slimmed down (tests/baselines/RANGE.jsonl.gz: per
+reconstruction the game, whether it was consistent, the error, the restarts and
+a coarse cost); the full results of each run stay in runs/suite/.
 """
 
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
+import math
 import os
 import re
 import subprocess
@@ -26,7 +31,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SUITE_DIR = ROOT / "runs" / "suite"
-BASELINES = SUITE_DIR / "baselines.json"
+BASE_DIR = ROOT / "tests" / "baselines"
 P = "setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter"
 MC = "belief_mc-greedy,setter-belief_mc,belief_mc-mixed,random-belief_mc,belief_mc-belief_mc"
 
@@ -82,10 +87,45 @@ RANGES: dict[str, tuple[int, int, list[str]]] = {
 
 
 def load_baselines() -> dict[str, str]:
-    try:
-        return json.loads(BASELINES.read_text())
-    except (OSError, ValueError):
-        return {}
+    """Range name -> its baseline file (relative to the repository root)."""
+    return {name: str((BASE_DIR / f"{name}.jsonl.gz").relative_to(ROOT)) for name in RANGES
+            if (BASE_DIR / f"{name}.jsonl.gz").exists()}
+
+
+def read_rows(path: Path):
+    """The result rows of a run file (.jsonl, or a gzipped baseline)."""
+    with (gzip.open(path, "rt") if str(path).endswith(".gz") else open(path)) as f:
+        for line in f:
+            yield json.loads(line)
+
+
+def slim(r: dict) -> dict:
+    """What a baseline keeps of a result row: enough to compare runs (and to pick
+    the quick tier and the order of the games), without the run's noise."""
+    out = {k: r[k] for k in ("seed", "viewer", "frac", "cut", "len", "game", "ok") if k in r}
+    if not r["ok"]:
+        out["error"] = (r.get("error") or "")[:300]
+    if r.get("restarts"):
+        out["restarts"] = r["restarts"]
+    if r.get("end_ignored"):
+        out["end_ignored"] = True
+    seconds = r.get("seconds") or 0.0
+    out["cost"] = max(-3, math.ceil(math.log2(max(seconds, 0.1))))  # (seconds, as a power of 2)
+    return out
+
+
+def store_baseline(name: str, run: Path) -> None:
+    BASE_DIR.mkdir(parents=True, exist_ok=True)
+    rows = sorted((slim(r) for r in read_rows(run)), key=lambda r: (r["seed"], r.get("viewer") or 0, -(r.get("frac") or 0)))
+    data = "".join(json.dumps(r, separators=(",", ":")) + "\n" for r in rows).encode()
+    tmp = BASE_DIR / f"{name}.jsonl.gz.tmp"
+    with open(tmp, "wb") as f, gzip.GzipFile(filename="", mode="wb", fileobj=f, mtime=0, compresslevel=9) as gz:
+        gz.write(data)  # (no time stamp: the same results give the same file)
+    tmp.replace(BASE_DIR / f"{name}.jsonl.gz")
+
+
+def _seconds(r: dict) -> float:
+    return r["seconds"] if "seconds" in r else 2.0 ** r.get("cost", 0)
 
 
 def compare(old: Path, new: Path) -> tuple[str, int]:
@@ -100,9 +140,8 @@ def _cost(baseline: str | None) -> dict[int, float]:
     """Seconds each game's reconstructions took in the baseline (a timeout as its limit)."""
     out: dict[int, float] = {}
     if baseline:
-        for line in open(ROOT / baseline):
-            r = json.loads(line)
-            out[r["seed"]] = out.get(r["seed"], 0.0) + (r.get("seconds") or 0.0)
+        for r in read_rows(ROOT / baseline):
+            out[r["seed"]] = out.get(r["seed"], 0.0) + _seconds(r)
     return out
 
 
@@ -113,8 +152,7 @@ def _quick_cases(baseline: str | None, failed_only: bool = False) -> set[tuple] 
     if not baseline:
         return None
     keep = set()
-    for line in open(ROOT / baseline):
-        r = json.loads(line)
+    for r in read_rows(ROOT / baseline):
         if "frac" not in r:
             continue
         key = (r["seed"], r["viewer"], r["frac"])
@@ -122,7 +160,7 @@ def _quick_cases(baseline: str | None, failed_only: bool = False) -> set[tuple] 
             if not r["ok"]:
                 keep.add(key)
             continue
-        if not r["ok"] or (r.get("restarts") or 0) > 0 or (r.get("seconds") or 0) > 2 or r.get("end_ignored") \
+        if not r["ok"] or (r.get("restarts") or 0) > 0 or _seconds(r) > 2 or r.get("end_ignored") \
                 or zlib.crc32(f"{key[0]} {key[1]} {key[2]}".encode()) % 10 == 0:
             keep.add(key)
     return keep
@@ -211,10 +249,9 @@ def main() -> int:
                 line += f"\n    ! {other.group(1)} reconstructions of other games: not compared, run not made the baseline"
             failed |= broke != 0 or bool(other)
             if (broke == 0 and not other or args.accept) and not (args.quick or args.failed):
-                base[name] = str(out.relative_to(ROOT))
+                store_baseline(name, out)
         elif not (args.quick or args.failed):
-            base[name] = str(out.relative_to(ROOT))
-        BASELINES.write_text(json.dumps(base, indent=1) + "\n")
+            store_baseline(name, out)
         print(line, flush=True)
     print(f"done in {time.time() - t0:.0f}s", flush=True)
     return 1 if failed else 0
