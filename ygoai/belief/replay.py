@@ -1436,6 +1436,13 @@ class BeliefReplay:
                         fix = ("swap", cp, a, b)
             hinted = exp if exp["type"] == "CARD_HINT" and got["type"] != "CARD_HINT" else \
                 got if got["type"] == "CARD_HINT" and exp["type"] != "CARD_HINT" else None
+            if hinted is None and fix is None and exp["type"] == got["type"] == "CARD_HINT" \
+                    and not any(it[0] == "msg" and it[1].get("type") == "CARD_HINT" and infer.same_loc(it[1], got)
+                                for it in self.items[self.pos:self.pos + 12]):
+                # (the replay shows a hint on a card where the real game shows none: that
+                # card is the wrong copy, e.g. the newly added one discarded instead of
+                # an older copy)
+                hinted = got
             if fix is None and hinted is not None:
                 # the hint belongs to another copy than the one it is on in the
                 # replay (e.g. which copy, the one added to the hand this turn or an
