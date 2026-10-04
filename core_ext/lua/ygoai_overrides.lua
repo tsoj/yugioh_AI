@@ -120,3 +120,44 @@ do
 	-- assigning the materials already selected (e.g. by the player, one by one) to slots
 	Fusion.CheckMixRepSelectedCond = memoised(Fusion.CheckMixRepSelectedCond, "sel")
 end
+
+-- Synchro Materials (proc_synchro.lua): Synchro.CheckP41 adds Tuners and
+-- Synchro.CheckP42 non-Tuners one at a time, trying every remaining candidate at
+-- every step, so the same materials are reached in every order (a few non-Tuners
+-- among many candidates took the Lua budget). The answer depends only on the
+-- state reached: the card added, the materials chosen so far (sg, and as Tuners
+-- tsg and non-Tuners ntsg) and the candidates left (tg, ntg); the other arguments
+-- stay the same during one top-level call, for which the answers are remembered.
+do
+	local check_p41 = Synchro.CheckP41
+	local check_p42 = Synchro.CheckP42
+	local smemo = nil
+
+	local function memoised(f, name, ngroups)
+		return function(c, ...)
+			local top = smemo == nil
+			if top then smemo = {} end
+			local groups = {...}
+			local parts = {name, tostring(c:GetCardID())}
+			for i = 1, ngroups do
+				parts[#parts + 1] = group_key(groups[i])
+			end
+			local key = table.concat(parts, "|")
+			local hit = smemo[key]
+			if hit == nil then
+				local ok, res = pcall(f, c, ...)
+				if not ok then
+					if top then smemo = nil end
+					error(res, 0)
+				end
+				hit = {res}
+				smemo[key] = hit
+			end
+			if top then smemo = nil end
+			return hit[1]
+		end
+	end
+	-- (c, tg, ntg, tsg, ntsg, sg, ...) and (c, ntg, tsg, ntsg, sg, ...)
+	Synchro.CheckP41 = memoised(check_p41, "t", 5)
+	Synchro.CheckP42 = memoised(check_p42, "n", 4)
+end

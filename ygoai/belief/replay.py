@@ -1487,7 +1487,14 @@ class BeliefReplay:
                         and le["loc"] == lg["loc"]
                         and le["loc"] in (*HIDDEN_PILES, C.LOCATION_GRAVE, C.LOCATION_REMOVED)):
                     if le["seq"] != lg["seq"]:
-                        fix = self._swap_fix(cp, msgs, idx, le, lg, duel)
+                        if le["con"] == self.viewer and le["loc"] == C.LOCATION_DECK and lg["seq"] < le["seq"] \
+                                and not self._viewer_prompted():
+                            # (the viewer's own deck, no selection of the viewer: the engine
+                            # took the first matching card, so none is further down; the
+                            # copies are alike)
+                            fix = self._exclude_fix(le, msgs[idx].get("code"))
+                        if fix is None:
+                            fix = self._swap_fix(cp, msgs, idx, le, lg, duel)
                         if (fix is None or self._has_swap(fix)) and lg["seq"] < le["seq"]:
                             # the replay's scan hit this code lower down than the real one
                             fix = self._exclude_fix(le, msgs[idx].get("code"))
@@ -2754,6 +2761,14 @@ class BeliefReplay:
         _, at, a, b = fix
         lst = self.swaps.get(at, ())
         return (a, b) in lst or (b, a) in lst
+
+    def _viewer_prompted(self) -> bool:
+        """Whether the viewer answered a prompt since the chain link (or action) that
+        is being processed began."""
+        for j in range(self.pos - 1, max(-1, self._link_start() - 1), -1):
+            if self.items[j][0] == "prompt":
+                return True
+        return False
 
     def _exclude_fix(self, loc: dict, code: int) -> tuple | None:
         """The real game took the card at `loc` although the replay has the same
