@@ -151,3 +151,12 @@ def reveals_itself(code: int) -> bool:
     Cubic Lord: 3 other Cubic cards)."""
     text = _script_text(code)
     return bool(re.search(r"Group\.FromCards\(c\)|:IsContains\(c\)", text))
+
+
+@lru_cache(maxsize=None)
+def unsummonable(code: int) -> bool:
+    """Whether the card cannot be Normal Summoned or Set by its own script (e.g. "Must
+    be Special Summoned by ..."): Card.EnableUnsummonable, EFFECT_UNSUMMONABLE_CARD,
+    and Card.EnableReviveLimit (on a Main Deck monster: Special Summon only)."""
+    text = _script_text(code)
+    return bool(re.search(r"EnableUnsummonable\(|EFFECT_UNSUMMONABLE_CARD|EnableReviveLimit\(", text))

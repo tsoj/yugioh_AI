@@ -78,6 +78,7 @@ _BOUNDARIES = frozenset(("CHAIN_SOLVED", "CHAIN_END", "NEW_PHASE", "NEW_TURN", "
 # messages by which the real game goes on after an effect did (nothing) more
 _NOTHING_MORE = frozenset(("CHAIN_SOLVED", "CHAIN_END", "PLAYER_HINT", "NEW_PHASE", "NEW_TURN"))
 UNORDERED_HINTS = ("PLAYER_HINT", "CARD_HINT")
+SUMMON_SELECT_MSGS = (508, 509)  # HINTMSG_SUMMON, HINTMSG_SPSUMMON: the selection shows (the summon)
 BATTLE_START_EVENT = 28  # (HINT_EVENT of the chain window in the Battle Phase's start step)
 _SHUFFLE_LOCS = {"SHUFFLE_HAND": C.LOCATION_HAND, "SHUFFLE_DECK": C.LOCATION_DECK,
                  "SHUFFLE_EXTRA": C.LOCATION_EXTRA}
@@ -1331,6 +1332,8 @@ class BeliefReplay:
                     if self.overrides.get(dkey) != passing:
                         fix = ("decide", dkey, passing)
                         break
+            if fix is None and exp["type"] == "SHUFFLE_HAND" and got.get("type") == "CHAIN_SOLVED":
+                fix = self._activated_copy_fix(exp, duel, cp)
             if fix is None and exp["type"] == "MOVE" and got.get("type") in ("CHAIN_SOLVED", "CHAIN_SOLVING", "CHAIN_END") \
                     and exp["from"]["loc"] in HIDDEN_PILES:
                 # (the replay's effect ended without moving it)
@@ -2363,6 +2366,29 @@ class BeliefReplay:
             return None
         return ("identify", *entry)
 
+    def _activated_copy_fix(self, exp: dict, duel: Duel, cp: tuple) -> tuple | None:
+        """The real game shuffles the hand as a chain link activated from it ends:
+        the activated card is still in the hand (the core shuffles it then), where
+        the replay's effect moved it, e.g. summoned it among other copies: another
+        copy was the activated one."""
+        n = next((self.items[j][1]["chain_count"] for j in range(self.pos - 1, max(-1, self.pos - 40), -1)
+                  if self.items[j][0] == "msg" and self.items[j][1]["type"] == "CHAIN_SOLVING"), None)
+        ch = next((self.items[j][1] for j in range(self.pos - 1, max(-1, self.pos - 80), -1)
+                   if self.items[j][0] == "msg" and self.items[j][1]["type"] == "CHAINING"
+                   and self.items[j][1].get("chain_count") == n), None) if n is not None else None
+        if ch is None or ch["trigger_loc"] != C.LOCATION_HAND or ch["trigger_con"] != exp["player"]:
+            return None
+        cards = duel.all_cards()[0]
+        in_hand = [cid for code, cid in cards.get((exp["player"], C.LOCATION_HAND), []) if code == ch["code"]]
+        moved = [cid for (p, loc), lst in cards.items() if loc != C.LOCATION_HAND
+                 for code, cid in lst if cid and code == ch["code"]]
+        for a in moved:
+            for b in in_hand:
+                fix = self._history_swap(a, b, cp)
+                if fix is not None and fix[1] != (0, 0):
+                    return fix
+        return None
+
     def _unmoved_copy_fix(self, exp: dict, duel: Duel, cp: tuple) -> tuple | None:
         """The real game moves a hidden card that the replay has right there but
         does not move: another copy has its role (e.g. the copy revealed for an
@@ -3130,9 +3156,15 @@ class BeliefReplay:
                 trib_locs = [x["from"] for x in up[:i] if x["type"] == "MOVE" and x["reason"] & C.REASON_RELEASE
                              and x["from"]["loc"] == C.LOCATION_MZONE and x["from"]["con"] == src["con"]]
 
+                from . import script_index
+
                 def fits(code):
+                    # (a card that cannot be Normal Summoned or Set at all cannot be the one;
+                    # the engine's check with assumed properties keeps the actual card's
+                    # restrictions, so it does not see this)
                     card = self.db.get(code)
-                    return card is not None and card.level in levels
+                    return card is not None and card.level in levels and not card.type & C.TYPE_RITUAL \
+                        and not script_index.unsummonable(code)
             else:
                 field_zone = m["seq"] == 5
 
@@ -3323,10 +3355,11 @@ class BeliefReplay:
                          f"if t then g:AddCard(t) end end")
         check = f"Duel.CanPlayerSetMonster({li['con']},{sumtype},c)"
         if trib_locs:
-            # (and it must need Tributes at all: e.g. a Level lowered in the hand by an
-            # effect can need none, where the real card needed some)
+            # (and it must take Tributes at all: e.g. a Level lowered in the hand by an
+            # effect can take none, where the real card took some; an effect can also
+            # allow fewer, the Tributes optional then)
             check += f" and Duel.CheckTribute(c,{len(trib_locs)},{len(trib_locs)},g)" \
-                     " and select(1,c:GetTributeRequirement())>=1"
+                     " and select(2,c:GetTributeRequirement())>=1"
         for code in dict.fromkeys(codes):
             if code is None:
                 lines.append(f"Debug.Message('none '..tostring({check}))")
@@ -3363,8 +3396,13 @@ class BeliefReplay:
                 xs = [byid.get(a) for a in v.allowed]
                 codes = [x.fixed_code if x.fixed_code is not None else x.code for x in xs if x is not None]
                 return sorted(set(codes)) if codes and all(codes) and len(codes) == len(xs) else []
-            if v.pool is None or len(v.pool.members) != 1:
+            if v.pool is None:
                 return []
+            if len(v.pool.members) != 1:
+                # (every card the shuffle mixed is known, e.g. a deck the viewer has seen
+                # entirely: the slot holds one of them)
+                codes = [m.fixed_code if m.fixed_code is not None else m.code for m in v.pool.members]
+                return sorted(set(codes)) if codes and all(codes) else []
             v = v.pool.members[0]
         return []
 
@@ -3714,6 +3752,31 @@ class BeliefReplay:
             cards = prompt["cards"] if "cards" in prompt else prompt["select_cards"] + prompt["unselect_cards"]
             ids = infer.card_ids(duel, cards)
             self._check_assumption(duel, prompt, up, ids)
+        if prompt["type"] == "SELECT_CARD" and prompt["min"] >= 1 and self.depth == 0 and prompt["cards"] \
+                and self._select_msg() in SUMMON_SELECT_MSGS \
+                and all(c["con"] == self.opponent and (c["loc"] & (C.LOCATION_DECK | C.LOCATION_HAND | C.LOCATION_EXTRA)
+                                                       or not c.get("pos", C.POS_FACEUP) & C.POS_FACEUP)
+                        for c in prompt["cards"]):
+            first = next((m for m in up if m["type"] not in ("HINT", "CARD_HINT")), None)
+            later = []
+            for m in up[:15]:
+                if m["type"] in ("NEW_PHASE", "NEW_TURN", "WIN"):
+                    break
+                later.append(m)
+            ids_offered = set(infer.card_ids(duel, prompt["cards"]))
+            summoned = any(m["type"] == "MOVE" and m["to"]["loc"] == C.LOCATION_MZONE and m["to"]["con"] == self.opponent
+                           for m in later)
+            if first is not None and first["type"] in ("CHAIN_SOLVED", "CHAIN_END") and not summoned \
+                    and not ids_offered & set(infer.LocMap(duel).references(later)):
+                # a selection of a card to summon among the opponent's hidden cards with
+                # no consequence at all (the chain link ends right away, and nothing until
+                # the phase ends refers to them, e.g. the summon it granted): in the real
+                # game none of them qualified (e.g. "Normal Summon 1 monster" with none
+                # summonable), the replay's hidden cards do: let them match nothing
+                span = self._nomatch_span(self._chain_start())
+                if span is not None:
+                    raise Divergence(self.pos, "opponent selects among hidden cards without consequence",
+                                     fix=("nomatchpile", *span))
         cands, certain = self._candidates(duel, prompt, up, ids)
         # inference only orders: every other legal answer stays available behind
         # its candidates (for backtracking, and when none of them works)

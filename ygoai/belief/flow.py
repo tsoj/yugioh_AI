@@ -81,6 +81,27 @@ class FlowSolver:
         from .completion import fits_need
         return self.db is not None and fits_need(self.db.get(code), need, usual)
 
+    def _joint_need_codes(self) -> set[int]:
+        """Cards for slots whose requirement differs in kind from those of all the
+        cards they can be (e.g. a monster Set with a Tribute from among cards that
+        were Set as Spells/Traps): no wildcard has both kinds, only a card that fits
+        both can (a monster that can be Set as a Spell, e.g. Sunlit Sentinel)."""
+        if self.db is None:
+            return set()
+        from .completion import fits_need, monster_sset_codes
+        out: set[int] = set()
+        for v in self.t.all_vars:
+            if v.need is None or v.kind != "claim" or v.pool is None:
+                continue
+            needs = {m.need for m in v.pool.members}
+            if None in needs or all(n[0] == v.need[0] for n in needs):
+                continue
+            for code in monster_sset_codes():
+                card = self.db.get(code)
+                if card is not None and fits_need(card, v.need, False) and all(fits_need(card, n, False) for n in needs):
+                    out.add(code)
+        return out
+
     # -- model ----------------------------------------------------------------------
     def solve(self) -> Hypothesis:
         t = self.t
@@ -108,6 +129,7 @@ class FlowSolver:
             c = v.fixed_code if v.fixed_code is not None else v.code
             if c:
                 known.add(c)
+        known |= self._joint_need_codes()
         # cards named by hints that no card of that player is known to be: its
         # deck contains a copy (not for cards of the viewer's own deck list: the
         # hint can come from the viewer's effect)
