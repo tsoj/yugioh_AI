@@ -1134,6 +1134,8 @@ class BeliefReplay:
                     if self.depth > 0:
                         check_forced()
                         return
+                    if self.stopped:
+                        return  # (the arbiter stopped the game somewhere after what was observed)
                     raise Divergence(self.pos, "replay produced more messages than observed", None, o)
                 item = self.items[self.pos]
                 if item[0] != "msg" or item[1] != o:
@@ -1553,9 +1555,15 @@ class BeliefReplay:
                         and exp["from"]["loc"] == got["from"]["loc"]):
                 # the replay took a hidden card of the opponent where the real game
                 # took none from there (e.g. "each player adds a Normal Monster from
-                # their Deck" with none in the real Deck): none of them fits
+                # their Deck" with none in the real Deck): none of them fits (also from
+                # where the action began, e.g. an End Phase effect right after the
+                # phase changed)
                 start = self._chain_start()
                 span = self._nomatch_span(start)
+                if span is None:
+                    span = (self._action_start(), self.pos)
+                    if span in self.nomatch_piles or span in self.match_piles:
+                        span = None
                 if span is not None:
                     fix = ("nomatchpile", *span)
                 else:
@@ -1692,7 +1700,21 @@ class BeliefReplay:
                 # (e.g. "in the End Phase, if a Dragon is in your Deck, add one", shown
                 # as a card hint: scripts send it to player 0 whoever's card it is):
                 # the hidden (filler) cards fit, so let them match nothing
-                for span in (self._nomatch_span(self._chain_start()), (self._action_start(), self.pos)):
+                # (from the latest phase change: the effects of a phase start, e.g.
+                # "during the End Phase, if your Deck has ...", are collected there)
+                phase = next((j for j in range(self.pos - 1, max(-1, self.pos - 12), -1)
+                              if self.items[j][0] == "msg" and self.items[j][1]["type"] in ("NEW_PHASE", "NEW_TURN")),
+                             None)
+                spans = [self._nomatch_span(self._chain_start()), (self._action_start(), self.pos)]
+                if phase is not None:
+                    # (to the next phase change: such effects are offered again after each
+                    # one of them; first outside of chains, a narrower span only postpones
+                    # the effect)
+                    end = next((j for j in range(self.pos, min(len(self.items), self.pos + 60))
+                                if self.items[j][0] == "msg"
+                                and self.items[j][1]["type"] in ("NEW_PHASE", "NEW_TURN")), self.pos)
+                    spans.insert(0 if self._chain_start() is None else 2, (phase, max(end, self.pos)))
+                for span in spans:
                     if fix is None and span is not None and span not in self.nomatch_piles \
                             and span not in self.match_piles:
                         fix = ("nomatchpile", *span)

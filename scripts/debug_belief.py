@@ -82,7 +82,8 @@ def main():
     if args.completion == "corpus":
         from ygoai.belief.corpus import CorpusCompletion
         completion = CorpusCompletion()
-    br = BeliefReplay(args.viewer, init_info(rec, args.viewer), items[:cut], completion=completion)
+    stopped = cut == len(items) and (rec.result or {}).get("reason") in ("turn_limit", "decision_limit", "time_limit")
+    br = BeliefReplay(args.viewer, init_info(rec, args.viewer), items[:cut], completion=completion, stopped=stopped)
     if args.max_restarts is not None:
         br.max_restarts = args.max_restarts
         br.read_guided = False  # (to inspect the attempt itself)
