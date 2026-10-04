@@ -1654,6 +1654,18 @@ class BeliefReplay:
                 # one did not announce (e.g. a card that turned itself face-up in the
                 # deck): that card is not the top one
                 fix = self._not_top_fix(got["player"])
+            if fix is None and got["type"] == "HINT" and got["hint_type"] in (C.HINT_SELECTMSG, C.HINT_CARD) \
+                    and (got["hint_type"] == C.HINT_CARD or got["player"] == self.opponent) \
+                    and exp["type"] != "HINT" and not any(it[0] == "msg" and it[1]["type"] == "HINT" and it[1] == got
+                                for it in self.items[self.pos:self.pos + 6]):
+                # the replay's opponent goes on to select where the real game does not
+                # (e.g. "in the End Phase, if a Dragon is in your Deck, add one", shown
+                # as a card hint: scripts send it to player 0 whoever's card it is):
+                # the hidden (filler) cards fit, so let them match nothing
+                for span in (self._nomatch_span(self._chain_start()), (self._action_start(), self.pos)):
+                    if fix is None and span is not None and span not in self.nomatch_piles \
+                            and span not in self.match_piles:
+                        fix = ("nomatchpile", *span)
             if fix is None and got["type"] == "CARD_SELECTED" and exp["type"] != "CARD_SELECTED":
                 # the replay announced a selection the real game did not make (it had
                 # nothing to choose from, e.g. "if you control another copy, show the

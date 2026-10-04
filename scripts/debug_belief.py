@@ -85,6 +85,7 @@ def main():
     br = BeliefReplay(args.viewer, init_info(rec, args.viewer), items[:cut], completion=completion)
     if args.max_restarts is not None:
         br.max_restarts = args.max_restarts
+        br.read_guided = False  # (to inspect the attempt itself)
     br.trace = []
     br.sim_log = []
     br.log = lambda text: print("  ..", text[:220], flush=True)

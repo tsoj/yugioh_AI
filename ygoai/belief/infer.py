@@ -742,6 +742,7 @@ def selection_window(up: list[dict]) -> list[dict]:
 
 
 HINTMSG_DESTROY = 502  # (the select message "Select the card(s) to destroy")
+HINTMSG_SUMMON_MSGS = (508, 509)  # "Select the monster(s) to (Special) Summon"
 
 
 def infer_cards(prompt: dict, up: list[dict], duel, ids: list | None = None,
@@ -856,6 +857,22 @@ def infer_cards(prompt: dict, up: list[dict], duel, ids: list | None = None,
             c = {"indices": sorted(chosen + list(sub))}
             if c not in cands:
                 cands.append(c)
+    if t == "SELECT_CARD" and select_msg in HINTMSG_SUMMON_MSGS and hi == 1 and cands:
+        # the monster to summon is the one summoned, even where other cards are used
+        # first (e.g. a Ritual Monster: the Tributes come before it)
+        lm2, summoned = LocMap(duel), None
+        for m in up:
+            if m["type"] in ("CHAIN_SOLVED", "CHAIN_END"):
+                break
+            if m["type"] == "MOVE":
+                cid = lm2.at(m["from"])
+                if m["to"]["loc"] == C.LOCATION_MZONE and cid in ids:
+                    summoned = ids.index(cid)
+                    break
+                lm2.move(m)
+        if summoned is not None and cands[0] != {"indices": [summoned]}:
+            cands = [{"indices": [summoned]}] + [c for c in cands if c != {"indices": [summoned]}]
+            certain = False
     if t == "SELECT_CARD" and (hi == 1 or lo == 1):
         # (substitutes last)
         for i in sorted(range(n), key=lambda i: ids[i] in substitutes):
