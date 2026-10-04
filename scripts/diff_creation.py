@@ -99,7 +99,7 @@ def main() -> None:
     ap.add_argument("-n", type=int, default=200)
     ap.add_argument("--start", type=int, default=3000)
     ap.add_argument("--pairs", help="agent pairings as in check_belief.py, e.g. setter-greedy,mixed-random")
-    ap.add_argument("--decks", choices=["random", "diverse", "cards", "new"], default="random")
+    ap.add_argument("--decks", choices=["random", "diverse", "cards", "new", "new-cards", "new-mixed"], default="random")
     ap.add_argument("--book", help="opening book (scripts/make_book.py)")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
