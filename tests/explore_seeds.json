@@ -1,0 +1,57 @@
+{
+ "--book build/book.jsonl --completion vanilla": [
+  100001
+ ],
+ "--book build/book.jsonl --pairs setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter --completion corpus": [
+  100007
+ ],
+ "--decks cards --pairs setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter --completion corpus": [
+  100005,
+  100014,
+  100017,
+  100019
+ ],
+ "--decks diverse --completion corpus": [
+  100039
+ ],
+ "--decks diverse --pairs setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter --completion corpus": [
+  100035
+ ],
+ "--decks new --pairs setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter --completion corpus": [
+  100043,
+  100047,
+  100050,
+  100058,
+  100059
+ ],
+ "--decks new-cards --pairs setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter --completion corpus": [
+  100000,
+  100003,
+  100006,
+  100009,
+  100023,
+  100062
+ ],
+ "--decks new-cards --pairs setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter --completion vanilla": [
+  100010,
+  100063
+ ],
+ "--decks new-mixed --completion corpus": [
+  100057
+ ],
+ "--decks random --completion corpus": [
+  100020
+ ],
+ "--decks random --pairs setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter --completion corpus": [
+  100011,
+  100022,
+  100032,
+  100041,
+  100044,
+  100052,
+  100060
+ ],
+ "--decks random --pairs setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter --completion vanilla": [
+  100004
+ ]
+}

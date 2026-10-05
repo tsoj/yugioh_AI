@@ -9,6 +9,7 @@ with the cards of the best matching decks, weighted by their score.
 from __future__ import annotations
 
 import random
+import zlib
 from collections import Counter
 from pathlib import Path
 
@@ -83,7 +84,10 @@ class CorpusCompletion(DeckCompletion):
         known = Counter(canonical_code(self.db, c) for c in known_main + known_extra)
         scores = self._scores(known)
         if scores.max() <= 0:
-            best = np.array(self.rng.sample(range(self.n), self.top_k))
+            # (drawn from the known cards: the same in every call for the same cards,
+            # whatever was completed before in this process)
+            rng = random.Random(zlib.crc32(repr(sorted(known.items())).encode()))
+            best = np.array(rng.sample(range(self.n), self.top_k))
         else:
             best = np.argsort(-scores)[:self.top_k]
         weights: Counter = Counter()

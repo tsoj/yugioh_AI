@@ -86,9 +86,30 @@ RANGES: dict[str, tuple[int, int, list[str]]] = {
 }
 
 
+EXPLORE_SEEDS = ROOT / "tests" / "explore_seeds.json"
+
+
+def explored() -> dict[str, tuple[list[int], list[str]]]:
+    """The regression set from scripts/explore.py: games of fresh seeds worth
+    checking again, per settings: range name -> (seeds, flags)."""
+    try:
+        groups = json.loads(EXPLORE_SEEDS.read_text())
+    except (OSError, ValueError):
+        return {}
+    return {f"x{zlib.crc32(flags.encode()) & 0xffffff:06x}": (seeds, flags.split()) for flags, seeds in groups.items()}
+
+
+def all_ranges() -> dict[str, list[str]]:
+    """Range name -> its check_belief arguments (the fixed ranges and the explored games)."""
+    out = {name: ["-n", str(n), "--start", str(start), *flags] for name, (n, start, flags) in RANGES.items()}
+    for name, (seeds, flags) in explored().items():
+        out[name] = ["--seeds", ",".join(map(str, seeds)), *flags]
+    return out
+
+
 def load_baselines() -> dict[str, str]:
     """Range name -> its baseline file (relative to the repository root)."""
-    return {name: str((BASE_DIR / f"{name}.jsonl.gz").relative_to(ROOT)) for name in RANGES
+    return {name: str((BASE_DIR / f"{name}.jsonl.gz").relative_to(ROOT)) for name in all_ranges()
             if (BASE_DIR / f"{name}.jsonl.gz").exists()}
 
 
@@ -145,7 +166,7 @@ def _cost(baseline: str | None) -> dict[int, float]:
     return out
 
 
-def _quick_cases(baseline: str | None, failed_only: bool = False) -> set[tuple] | None:
+def _quick_cases(baseline: str | None, failed_only: bool = False, sample: bool = True) -> set[tuple] | None:
     """The quick tier's reconstructions of a range: those that failed, needed
     restarts, took long or ended in an unfinished action in the baseline (where
     regressions show), and a fixed tenth of the others."""
@@ -161,7 +182,7 @@ def _quick_cases(baseline: str | None, failed_only: bool = False) -> set[tuple] 
                 keep.add(key)
             continue
         if not r["ok"] or (r.get("restarts") or 0) > 0 or _seconds(r) > 2 or r.get("end_ignored") \
-                or zlib.crc32(f"{key[0]} {key[1]} {key[2]}".encode()) % 10 == 0:
+                or sample and zlib.crc32(f"{key[0]} {key[1]} {key[2]}".encode()) % 10 == 0:
             keep.add(key)
     return keep
 
@@ -176,15 +197,18 @@ def main() -> int:
     ap.add_argument("--quick", action="store_true",
                     help="only the reconstructions where regressions show (see _quick_cases); its runs never "
                          "become baselines")
+    ap.add_argument("--regression", action="store_true",
+                    help="the regression set: as --quick, without the sample of the others (never made baselines)")
     ap.add_argument("--failed", action="store_true", help="only the reconstructions that failed in the baselines "
                                                           "(never made baselines)")
     args = ap.parse_args()
     base = load_baselines()
+    ranges = all_ranges()
     if args.list or not args.tag:
-        for name, (n, start, flags) in RANGES.items():
-            print(f"{name:12s} -n {n} --start {start} {' '.join(flags):70s} {base.get(name, '(no baseline)')}")
+        for name, argv in ranges.items():
+            print(f"{name:12s} {' '.join(argv)[:110]:110s} {base.get(name, '(no baseline)')}")
         return 0
-    unknown = [r for r in args.ranges if r not in RANGES]
+    unknown = [r for r in args.ranges if r not in ranges]
     if unknown:
         sys.exit(f"unknown ranges: {unknown}")
     sys.path.insert(0, str(ROOT / "scripts"))
@@ -193,18 +217,18 @@ def main() -> int:
     SUITE_DIR.mkdir(parents=True, exist_ok=True)
     # all ranges' games in one pool, the slowest (by the baselines) first: no range
     # waits for its last few slow cases while the other workers are idle
-    names = args.ranges or list(RANGES)
+    names = args.ranges or list(ranges)
     owner: dict[int, str] = {}
     left: dict[str, int] = {}
     outs, results, tasks = {}, {}, []
     for name in names:
-        n, start, flags = RANGES[name]
-        argv = ["-n", str(n), "--start", str(start), *flags]
+        argv = list(ranges[name])
         if base.get(name):
             argv += ["--previous", str(ROOT / base[name])]
         cost = _cost(base.get(name))
         median = sorted(cost.values())[len(cost) // 2] if cost else 1.0
-        quick = _quick_cases(base.get(name), args.failed) if args.quick or args.failed else None
+        quick = (_quick_cases(base.get(name), args.failed, sample=not args.regression)
+                 if args.quick or args.failed or args.regression else None)
         for t in cb.build_tasks(cb.make_parser().parse_args(argv)):
             if quick is not None:
                 cases = [(v, f) for v, f in t[1] if (t[0], v, f) in quick]
@@ -248,9 +272,9 @@ def main() -> int:
                 # (not compared: not silently a baseline either)
                 line += f"\n    ! {other.group(1)} reconstructions of other games: not compared, run not made the baseline"
             failed |= broke != 0 or bool(other)
-            if (broke == 0 and not other or args.accept) and not (args.quick or args.failed):
+            if (broke == 0 and not other or args.accept) and not (args.quick or args.failed or args.regression):
                 store_baseline(name, out)
-        elif not (args.quick or args.failed):
+        elif not (args.quick or args.failed or args.regression):
             store_baseline(name, out)
         print(line, flush=True)
     print(f"done in {time.time() - t0:.0f}s", flush=True)
