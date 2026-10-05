@@ -956,6 +956,9 @@ class BeliefReplay:
             if fix in self.__dict__.setdefault("_matchsets", set()):
                 return False
             self._matchsets.add(fix)
+            # (it refines a span over which all hidden cards matched, ending here:
+            # that one would let the others match too)
+            self.match_piles -= {sp for sp in self.match_piles if sp[1] == b and sp[0] <= a}
             for at in range(a, b + 1):
                 lst = self.matches.setdefault(at, [])
                 lst.extend(c for c in taken if c not in lst)
@@ -1826,8 +1829,11 @@ class BeliefReplay:
                 if fix is None and not exp.get("code"):
                     # several hidden cards must qualify together (e.g. differently
                     # named cards set as a group): let all of them qualify (a card
-                    # whose code shows can be assumed instead)
+                    # whose code shows can be assumed instead; also by an effect of the
+                    # viewer's, e.g. "banish all monsters from both Decks")
                     start = self._chain_start()
+                    if start is None:
+                        start = self._resolving_link()
                     if start is not None and (start, self.pos) not in self.match_piles:
                         fix = ("matchpile", start, self.pos)
             elif fix is None and exp["type"] == "MOVE" and exp["from"]["con"] == self.opponent \
@@ -3197,7 +3203,19 @@ class BeliefReplay:
             options = prompt["activatable"]
         if any(o["code"] == ch["code"] and o.get("desc", ch["desc"]) == ch["desc"] for o in options):
             return
-        fix = self._force_fix(ch)
+        fix = None
+        start = self._prev_chain_start() if t in ("SELECT_IDLECMD", "SELECT_BATTLECMD") else None
+        if start is not None and ch["trigger_con"] == self.opponent:
+            from . import script_index
+            if script_index.has_trigger(ch["code"]) and (start, self.pos) not in self.match_piles \
+                    and (start, self.pos) not in self.nomatch_piles:
+                # (a trigger of the opponent's, right after a chain, that did not come
+                # in the replay: its event can depend on hidden cards, e.g. raised only
+                # if the deck holds a fitting card as a monster is summoned: let them
+                # qualify since that chain began, as for the viewer's prompts)
+                fix = ("matchpile", start, self.pos)
+        if fix is None:
+            fix = self._force_fix(ch)
         key = (self.opponent, ch["code"], ch["desc"])
         if fix is None and t in ("SELECT_IDLECMD", "SELECT_BATTLECMD") and key in self._active_forces \
                 and not any(o.get("code") == ch["code"] for o in options):
@@ -3697,6 +3715,16 @@ class BeliefReplay:
                     if base is not None and now.get("level") is not None and base.level:
                         delta = now["level"] - base.level
                 codes.sort(key=lambda c: self.db.get(c).level + delta not in usual)
+            if duel is not None and src["loc"] == C.LOCATION_HAND and any(
+                    a[:4] == (self.pos, src["con"], src["loc"], src["seq"]) for a in self.failed_assumptions):
+                # (another card failed here: first the cards the hypothesis has in the
+                # setter's deck, which can be known up to its order, e.g. after it was
+                # revealed, and then only those can have been drawn)
+                # (not the stand-ins the completion put there: they tell nothing)
+                pile = [c for c, _ in duel.location_cards(src["con"], C.LOCATION_DECK)
+                        if c and c not in filler_codes and fits(c) and self.db.get(c).type & want]
+                pile = list(dict.fromkeys(pile))
+                codes = pile + [c for c in codes if c not in pile]
             if kind == "msetable" and duel is not None and src["loc"] == C.LOCATION_HAND:
                 # (the engine's answer first: the card in that slot, its properties
                 # assumed to be the candidate's, e.g. Zombie World allows only Zombies

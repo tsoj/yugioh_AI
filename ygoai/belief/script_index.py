@@ -154,6 +154,12 @@ def reveals_itself(code: int) -> bool:
 
 
 @lru_cache(maxsize=None)
+def has_trigger(code: int) -> bool:
+    """Whether the card's script has a trigger effect (EFFECT_TYPE_TRIGGER_O/F)."""
+    return "EFFECT_TYPE_TRIGGER_" in _script_text(code)
+
+
+@lru_cache(maxsize=None)
 def unsummonable(code: int) -> bool:
     """Whether the card cannot be Normal Summoned or Set by its own script (e.g. "Must
     be Special Summoned by ..."): Card.EnableUnsummonable, EFFECT_UNSUMMONABLE_CARD,

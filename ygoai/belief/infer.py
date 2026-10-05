@@ -752,6 +752,7 @@ def selection_window(up: list[dict]) -> list[dict]:
 
 HINTMSG_DESTROY = 502  # (the select message "Select the card(s) to destroy")
 HINTMSG_SUMMON_MSGS = (508, 509)  # "Select the monster(s) to (Special) Summon"
+HINTMSG_DESREPLACE = 521  # "Select the card to protect by the replacement"
 
 
 def infer_cards(prompt: dict, up: list[dict], duel, ids: list | None = None,
@@ -881,6 +882,25 @@ def infer_cards(prompt: dict, up: list[dict], duel, ids: list | None = None,
                 lm2.move(m)
         if summoned is not None and cands[0] != {"indices": [summoned]}:
             cands = [{"indices": [summoned]}] + [c for c in cands if c != {"indices": [summoned]}]
+            certain = False
+    if t == "SELECT_CARD" and select_msg == HINTMSG_DESREPLACE and hi == 1:
+        # the card a replacement protects, among cards being destroyed, is the one
+        # that stays: first the cards that do not move before the chain link ends
+        # (not when the selection picks the substitute, e.g. a card banished from
+        # the GY instead: none of the offered cards is destroyed then)
+        lm2, moved, destroyed = LocMap(duel), set(), set()
+        for m in up:
+            if m["type"] in ("CHAIN_SOLVED", "CHAIN_END", "NEW_PHASE", "NEW_TURN"):
+                break
+            if m["type"] == "MOVE":
+                cid = lm2.at(m["from"])
+                moved.add(cid)
+                if m["reason"] & C.REASON_DESTROY:
+                    destroyed.add(cid)
+                lm2.move(m)
+        stays = [{"indices": [i]} for i in range(n) if ids[i] not in moved]
+        if stays and destroyed & set(ids):
+            cands = stays + [c for c in cands if c not in stays]
             certain = False
     if t == "SELECT_CARD" and (hi == 1 or lo == 1):
         # (substitutes last)
