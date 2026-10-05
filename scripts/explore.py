@@ -60,6 +60,25 @@ def interesting(r: dict) -> bool:
     return not r["ok"] or bool(r.get("restarts")) or (r.get("seconds") or 0) > 2 or bool(r.get("end_ignored"))
 
 
+def solo_seconds(r: dict, flags: str, limit: int = 900) -> str:
+    """Replays a timed-out reconstruction alone, with a longer limit: its time
+    there, or whether it still runs out (a hang rather than load)."""
+    import subprocess
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d) / "solo.jsonl"
+        subprocess.run([sys.executable, str(ROOT / "scripts" / "check_belief.py"), "--seeds", str(r["seed"]),
+                        "--fractions", str(r["frac"]), "--turns", "", "--timeout", str(limit), "-j", "1",
+                        "-o", str(out), *flags.split()], cwd=ROOT, capture_output=True)
+        rows = [json.loads(line) for line in out.open()] if out.exists() else []
+    row = next((x for x in rows if x.get("viewer") == r.get("viewer")), None)
+    if row is None:
+        return "could not run"
+    if row.get("error") == "timeout":
+        return f"timeout after {limit}s too"
+    return f"{row.get('seconds', 0):.0f}s, {'consistent' if row['ok'] else (row.get('error') or '')[:80]}"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--start", type=int, help="first seed (default: where the last run stopped)")
@@ -120,9 +139,17 @@ def main() -> int:
         SEEDS.write_text(json.dumps({k: sorted(v) for k, v in sorted(regression.items())}, indent=1) + "\n")
         print(f"{played} games ({seeds[0]}-{seeds[-1]}), {time.time() - t0:.0f}s: {len(failures)} failing", flush=True)
         if failures:
+            load = os.getloadavg()[0]
             for flags, r in failures:
-                print(f"  seed={r['seed']} viewer={r.get('viewer')} frac={r.get('frac')} [{flags}]: "
-                      f"{(r.get('error') or '')[:150]}")
+                if r.get("error") == "timeout":
+                    # (timeouts apart: the machine's load can cause them; the case alone,
+                    # with a longer limit, shows how slow it really is)
+                    alone = solo_seconds(r, flags)
+                    print(f"  TIMEOUT seed={r['seed']} viewer={r.get('viewer')} frac={r.get('frac')} [{flags}] "
+                          f"(load {load:.1f}; alone: {alone})")
+                else:
+                    print(f"  seed={r['seed']} viewer={r.get('viewer')} frac={r.get('frac')} [{flags}]: "
+                          f"{(r.get('error') or '')[:150]}")
             return 1
     return 0
 

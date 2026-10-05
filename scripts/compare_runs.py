@@ -96,8 +96,22 @@ def main() -> int:
             for k in keys:
                 print(f"    seed={k[0]} viewer={k[1]} frac={k[2]}: {run[k].get('error', '')[:120]}")
 
-    show("broke (new errors)", broke, new)
-    show("still failing (new errors)", still, new)
+    def seconds(r: dict) -> str:
+        if "seconds" in r and r["seconds"] is not None:
+            return f"{r['seconds']:.0f}s"
+        return f"~{2.0 ** r['cost']:.0f}s" if "cost" in r else "?"
+
+    # (timeouts apart: first find out why the case is slower than before, e.g. the
+    # machine's load, before treating it as a failure)
+    timeouts = [k for k in broke + still if new[k].get("error") == "timeout"]
+    show("broke (new errors)", [k for k in broke if k not in timeouts], new)
+    show("still failing (new errors)", [k for k in still if k not in timeouts], new)
+    if timeouts:
+        print(f"\ntimeouts ({len(timeouts)}; check why slower before treating as failures):")
+        for k in timeouts:
+            o = old[k]
+            before = seconds(o) if o["ok"] else f"failed before: {o.get('error', '')[:50]}"
+            print(f"    seed={k[0]} viewer={k[1]} frac={k[2]}: before {before}")
     if args.verbose:
         show("fixed (old errors)", fixed, old)
     return 0
