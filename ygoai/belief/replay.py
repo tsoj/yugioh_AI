@@ -1212,6 +1212,20 @@ class BeliefReplay:
                                 break
                     if fix is None and item[0] == "msg":
                         fix = self._granted_set_fix(item[1], duel)
+                    if fix is None and item[0] == "prompt" and item[1].get("chains") is not None \
+                            and fp.get("chains") is not None:
+                        # (an effect the viewer's card has in one game only, e.g. "add it to
+                        # the hand in the End Phase" on the card the opponent picked silently
+                        # long before, Painful Return: the other answers of that choice)
+                        live = infer.LocMap(duel)
+                        key = lambda c: (c["con"], c["loc"], c["seq"])  # noqa: E731
+                        exp_n = Counter(key(c) for c in item[1]["chains"])
+                        got_n = Counter(key(c) for c in fp["chains"])
+                        # (the cards the replay lacks first, then the ones it has too many of)
+                        for k in list(exp_n - got_n) + list(got_n - exp_n):
+                            fix = self._silent_choice_fix(live.at({"con": k[0], "loc": k[1], "seq": k[2]}))
+                            if fix is not None:
+                                break
                     if fix is None and item[0] == "prompt":
                         fix = self._prompt_copy_fix(item[1], fp, duel, cp) \
                             or self._hidden_candidates_fix(item[1], fp, duel) \
@@ -1235,6 +1249,14 @@ class BeliefReplay:
                     if got != item[2]:
                         fix = self._state_copy_fix(item[2], got, duel, cp) or self._public_arrival_fix(item[2], got) \
                             or self._public_hidden_fix(item[2], got) or self._stat_fix(item[2], got, duel)
+                        if fix is None and item[2].get("phase") != got.get("phase"):
+                            # (the same messages in another phase or step: an activation of the
+                            # opponent came in another chain window, e.g. at the end of the
+                            # Battle Phase instead of in the Battle Step)
+                            for dkey, ans in sorted(self._window_activations + self._window_choices, reverse=True):
+                                if self.overrides.get(dkey) != ans:
+                                    fix = ("decide", dkey, ans)
+                                    break
                         raise Divergence(self.pos, "state mismatch: " + str(first_difference(item[2], got)),
                                          item[2], got, fix)
                     if self.depth == 0:
@@ -1904,7 +1926,7 @@ class BeliefReplay:
             # (nothing shows which card was chosen before the action ends: its
             # consequence can come much later, e.g. "it returns to the hand during
             # the End Phase")
-            self._silent_choices.append((dkey, ids, len(valid), i))
+            self._silent_choices.append((dkey, ids, len(valid), i, list(valid)))
 
     def _property_fix(self, code: int, duel: Duel) -> tuple | None:
         """The opponent's card checks values of several of its hidden cards (e.g.
@@ -2003,13 +2025,21 @@ class BeliefReplay:
     def _silent_choice_fix(self, cid: int | None) -> tuple | None:
         if not cid:
             return None
-        for dkey, ids, n, i in reversed(self._silent_choices):
-            # (older than the decision search's window: nearer ones are its business)
-            if cid in ids and dkey[0] < self.pos - _DECISION_WINDOW:
-                for k in range(n):
-                    if k != i and (dkey, k) not in self.tried_silent:
-                        self.tried_silent.add((dkey, k))
-                        return ("decide", dkey, k)
+        # (older than the decision search's window: nearer ones are its business)
+        choices = [c for c in reversed(self._silent_choices) if cid in c[1] and c[0][0] < self.pos - _DECISION_WINDOW]
+        # first, in each choice, the answer that picks that very card (several choices
+        # can have picked it, e.g. two Painful Returns); then the other answers
+        for dkey, ids, n, i, valid in choices:
+            pick = {"indices": [ids.index(cid)]} if valid else None
+            k = valid.index(pick) if valid and pick in valid else None
+            if k is not None and k != i and self.overrides.get(dkey) != k and (dkey, k) not in self.tried_silent:
+                self.tried_silent.add((dkey, k))
+                return ("decide", dkey, k)
+        for dkey, ids, n, i, valid in choices:
+            for k in range(n):
+                if k != i and (dkey, k) not in self.tried_silent:
+                    self.tried_silent.add((dkey, k))
+                    return ("decide", dkey, k)
         return None
 
     def _hidden_pick_fallback(self) -> tuple[tuple | None, int]:
@@ -4132,7 +4162,7 @@ class BeliefReplay:
             if chain:
                 cid = infer.LocMap(duel).at(chain[-1]["handler"])
                 if cid:
-                    self._silent_choices.append((dkey, [cid], len(valid), valid.index(resp)))
+                    self._silent_choices.append((dkey, [cid], len(valid), valid.index(resp), None))
         if dkey is not None and prompt["type"] in CARD_PROMPTS and any(
                 c["con"] == self.opponent and c["loc"] & (C.LOCATION_DECK | C.LOCATION_HAND | C.LOCATION_EXTRA)
                 for c in prompt.get("cards") or prompt.get("select_cards") or []):
