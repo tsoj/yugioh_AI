@@ -63,10 +63,10 @@ def main() -> int:
     ap.add_argument("seed", type=int)
     ap.add_argument("viewer", type=int)
     ap.add_argument("frac", type=float)
-    ap.add_argument("flags", nargs=argparse.REMAINDER)
     ap.add_argument("--back", default="5,15,40,100", help="commits back to try first")
     ap.add_argument("--timeout", type=int, default=180)
-    args = ap.parse_args()
+    args, flags = ap.parse_known_args()  # (the rest: check_belief's flags of the case)
+    args.flags = flags
     commits = git("rev-list", "--first-parent", "HEAD").split()
     run = lambda c: passes(c, args.seed, args.viewer, args.frac, args.flags, args.timeout)  # noqa: E731
     bad = 0  # index into commits (0 = HEAD), known failing
