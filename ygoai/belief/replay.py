@@ -323,6 +323,10 @@ class BeliefReplay:
         self._folded_swaps: set = set()
         self.swaps: dict[int, list[tuple[int, int]]] = {}
         self.matches: dict[int, list[int]] = {}  # control point -> card ids matching all filters
+        # (move position, slot) -> candidate codes to test in the engine before that
+        # move, from the stream position given (see _run_code_tests)
+        self.code_tests: dict[tuple, tuple] = {}
+        self.code_tests_done: set[tuple] = set()
         self.match_piles: set[tuple[int, int]] = set()  # stream positions (from, to): hidden piles match
         # (start, end, slot): the opponent's hidden card in that slot matches no filter
         self.nomatch_cards: set[tuple] = set()
@@ -951,6 +955,12 @@ class BeliefReplay:
             lst.append(cid)
             self.stats.assumptions += 1
             return True
+        if kind == "codetest":
+            _, start, at, slot, codes = fix
+            if (at, slot) in self.code_tests or (at, slot) in self.code_tests_done:
+                return False
+            self.code_tests[(at, slot)] = (start, codes)
+            return True
         if kind == "matchset":
             _, (a, b), taken, rest = fix
             if fix in self.__dict__.setdefault("_matchsets", set()):
@@ -1165,6 +1175,11 @@ class BeliefReplay:
                         return  # (the arbiter stopped the game somewhere after what was observed)
                     raise Divergence(self.pos, "replay produced more messages than observed", None, o)
                 item = self.items[self.pos]
+                if o["type"] == "SHUFFLE_HAND" and o["player"] == getattr(self, "_skip_shuffle_hand", None) \
+                        and self.depth > 0:
+                    self._skip_shuffle_hand = None
+                    if item[0] != "msg" or item[1] != o:
+                        continue  # (a code test's own card arrival, see _run_code_tests)
                 if item[0] != "msg" or item[1] != o:
                     if not self._match_unordered_hint(o):
                         raise self._mismatch(cp, msgs, idx, item, o, duel)
@@ -3375,10 +3390,52 @@ class BeliefReplay:
         # (at this point: the slot can hold another card at another point)
         tried = {a[4] for a in self.assumptions if a[:4] == (self.pos, *key)} | {
             a[4] for a in self.failed_assumptions if a[:4] == (self.pos, *key)}
+        checked = 0
         for code in codes:
             if code and code not in tried:
+                # (only codes the flow model admits there: an impossible one would
+                # cost a restart to find out, e.g. a fourth copy of a card)
+                if checked < 40:
+                    checked += 1
+                    if not self._feasible((self.pos, *key, code)):
+                        continue
                 return ("assume", self.pos, *key, code)
         return None
+
+    def _feasible(self, entry: tuple) -> bool:
+        """Whether the hypothesis can be built with the assumption `entry` (position,
+        player, location, sequence, code) added to the current ones."""
+        if self.depth > 0:
+            return True  # (a probe only reports that a repair exists; no solver in a forked process)
+        cache = self.__dict__.setdefault("_feasible_cache", {})
+        key = (tuple(sorted(self.assumptions)), tuple(sorted(self.exclusions)), tuple(self.identities), entry)
+        if key in cache:
+            return cache[key]
+        saved = (self.assumptions, self.hypothesis, getattr(self, "_solved", None),
+                 getattr(self, "_assumed_vars", {}), getattr(self, "_assume_conflict", None))
+        # (as applying it would: it replaces an assumption for the same slot and point)
+        self.assumptions = [a for a in self.assumptions if a[:4] != entry[:4]] + [entry]
+        try:
+            self.build_hypothesis()
+            ok = True
+        except TrackerError:
+            ok = False
+        finally:
+            (self.assumptions, self.hypothesis, self._solved, self._assumed_vars,
+             self._assume_conflict) = saved
+        if len(cache) > 2000:
+            cache.clear()
+        cache[key] = ok
+        return ok
+
+    def _known_codes(self, player: int) -> set[int]:
+        """The codes of the player's cards that the stream has shown (main deck)."""
+        out = set()
+        for v in self.lockstep.all_vars:
+            c = v.fixed_code if v.fixed_code is not None else v.code
+            if c and v.owner == player:
+                out.add(c)
+        return out
 
     def _hidden_monster_fix(self, exp: dict, got: dict) -> tuple | None:
         """The opponent puts a hidden hand card on the field as a monster (e.g. Set
@@ -3409,27 +3466,51 @@ class BeliefReplay:
         if ref:
             from . import script_index
             names = set(script_index.candidates(ref, self.db))
-            # (those sharing an Attribute or Type with the link's targets first, e.g.
-            # "a Charmer with the same Attribute as the targeted monster")
-            view = next((it[2] for it in reversed(self.items[:self.pos + 1])
-                         if it[0] == "prompt" and it[2] is not None), None)
-            on_field = {(p, i): c for p, pl in enumerate((view or {}).get("players", ()))
-                        for i, c in enumerate(pl["mzone"]) if c}
-            targets = [on_field.get((t["con"], t["seq"])) for it in self.items[link:self.pos]
-                       if it[0] == "msg" and it[1]["type"] == "BECOME_TARGET"
-                       for t in it[1]["cards"] if t["loc"] == C.LOCATION_MZONE]
-            attrs = {t.get("attribute") for t in targets if t} - {None, 0}
-            races = {t.get("race") for t in targets if t} - {None, 0}
-
-            def unlike(code):
-                card = self.db.get(code)
-                return not (card.attribute in attrs or card.race in races)
-            listed = sorted((c for c in seen if c in names and monster(c)), key=unlike)
-            listed += sorted((c for c in names if c not in listed and monster(c)),
-                             key=lambda c: (unlike(c), c))[:max(0, 8 - len(listed))]
+            listed = [c for c in seen if c in names and monster(c)]
+            listed += [c for c in sorted(names) if c not in listed and monster(c)]
+            slot = (frm["con"], frm["loc"], frm["seq"])
+            if listed and (self.pos, slot) not in self.code_tests and (self.pos, slot) not in self.code_tests_done:
+                # (which of them the effect takes, the engine tells: each in that
+                # hand slot, from before the link resolves, see _run_code_tests)
+                return ("codetest", link, self.pos, slot, tuple(listed[:30]))
+            listed = listed[:8]
         codes = listed + [c for c in seen if fits(c) and c not in listed]
         codes += [c for c in list(filler.vanillas) + list(filler.settable_monsters_all) if fits(c) and c not in codes]
         return self._assume_fix(frm, codes[:len(listed) + 12])
+
+    def _run_code_tests(self, duel: Duel, prompt: dict, resp: dict) -> None:
+        """Runs the pending engine tests of candidate codes for a hidden hand card
+        (at the opponent's last decision before the move they are for): in a probe,
+        a new card of each code takes that hand slot, and the first one that makes
+        the replay reproduce the move becomes an assumption."""
+        for (at, slot), (start, codes) in list(self.code_tests.items()):
+            if not start <= self.pos < at:
+                continue
+            # (in the chain window after the link was chained, nothing chained on
+            # top of it any more: the last decisions before it resolves)
+            chained = next((j for j in range(start, at) if self.items[j][0] == "msg"
+                            and self.items[j][1]["type"] == "CHAINED"), None)
+            if chained is None or self.pos <= chained or any(
+                    it[0] == "msg" and it[1]["type"] == "CHAINING" for it in self.items[self.pos:at]):
+                continue
+            del self.code_tests[(at, slot)]
+            self.code_tests_done.add((at, slot))
+            con, loc, seq = slot
+            for code in codes:
+                def setup(d, code=code):
+                    self._skip_shuffle_hand = con  # (the new card's arrival shuffles the hand)
+                    before = {cid for _, cid in d.location_cards(con, loc)}
+                    d.new_card(con, code, loc)
+                    new = [cid for _, cid in d.location_cards(con, loc) if cid not in before]
+                    hand = d.location_cards(con, loc)
+                    if new and seq < len(hand):
+                        d.swap_cards(new[0], hand[seq][1])
+                self._probe(duel, prompt, resp, setup=setup)
+                if self.last_probe_reached > at:
+                    fix = ("assume", at, con, loc, seq, code)
+                    if fix[1:] not in self.failed_assumptions and fix[1:] not in self.assumptions:
+                        raise Divergence(self.pos, "the engine takes this card for the hidden one", fix=fix)
+            return
 
     def _resolving_link(self) -> int | None:
         """Stream position of the CHAINING of the link being resolved (None outside
@@ -3715,16 +3796,15 @@ class BeliefReplay:
                     if base is not None and now.get("level") is not None and base.level:
                         delta = now["level"] - base.level
                 codes.sort(key=lambda c: self.db.get(c).level + delta not in usual)
-            if duel is not None and src["loc"] == C.LOCATION_HAND and any(
-                    a[:4] == (self.pos, src["con"], src["loc"], src["seq"]) for a in self.failed_assumptions):
-                # (another card failed here: first the cards the hypothesis has in the
-                # setter's deck, which can be known up to its order, e.g. after it was
-                # revealed, and then only those can have been drawn)
-                # (not the stand-ins the completion put there: they tell nothing)
-                pile = [c for c, _ in duel.location_cards(src["con"], C.LOCATION_DECK)
-                        if c and c not in filler_codes and fits(c) and self.db.get(c).type & want]
-                pile = list(dict.fromkeys(pile))
-                codes = pile + [c for c in codes if c not in pile]
+            if src["loc"] == C.LOCATION_HAND:
+                # (a card no slot is known to be can only be there as an unknown card:
+                # if the flow model admits none in that slot, e.g. the deck was seen
+                # in full, the slot holds one of the setter's known cards)
+                known = self._known_codes(src["con"])
+                unknown = next((c for c in codes if c not in known), None)
+                if unknown is not None and not self._feasible((self.pos, src["con"], src["loc"], src["seq"], unknown)):
+                    codes = [c for c in sorted(known) if fits(c) and self.db.get(c).type & want
+                             and not self.db.get(c).is_extra_deck]
             if kind == "msetable" and duel is not None and src["loc"] == C.LOCATION_HAND:
                 # (the engine's answer first: the card in that slot, its properties
                 # assumed to be the candidate's, e.g. Zombie World allows only Zombies
@@ -4137,6 +4217,8 @@ class BeliefReplay:
             else:
                 self._plan = []
         resp = self._decide_memo(duel, prompt, up)
+        if self.depth == 0 and self.code_tests:
+            self._run_code_tests(duel, prompt, resp)
         if self._planned is not None and resp != self._planned:
             self._plan = []  # (decided otherwise, e.g. by a repair: the rest no longer applies)
         if self.depth > 0 and self.depth == self._report_depth:
@@ -4419,7 +4501,7 @@ class BeliefReplay:
             return 0
         return int.from_bytes(self._probe_counter[:8], "little")
 
-    def _probe(self, duel: Duel, prompt: dict, response: dict) -> int:
+    def _probe(self, duel: Duel, prompt: dict, response: dict, setup=None) -> int:
         """Checks a candidate response in a forked copy of the process.
 
         Returns PROBE_OK if the candidate reproduced the stream (up to the
@@ -4452,6 +4534,8 @@ class BeliefReplay:
                 self._probe_decisions = []
                 self._plan = []
                 self.check_state = False  # the main line checks states; probes only choose
+                if setup is not None:
+                    setup(duel)
                 # (a probe making many decisions without reproducing anything loops)
                 self.max_stall = min(self.max_stall, 50)
                 self.probe_start = self.pos
