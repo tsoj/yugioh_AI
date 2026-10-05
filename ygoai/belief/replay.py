@@ -195,6 +195,7 @@ _DECISION_WINDOW = 10  # stream positions a decision stays a candidate for retry
 _DECISION_TRIES = 24  # alternatives tried for one mismatch
 _TAIL_RESTARTS = 4  # repairs for a mismatch in the unfinished action a game ended in
 _PROBE_BUDGET = 48  # probes a probe of the main line may start in all (nested)
+_PROBE_STEPS = 2000  # engine steps a probe may take (they take 16, at most ~140)
 
 
 def first_difference(a, b, path: str = "") -> str | None:
@@ -1051,6 +1052,12 @@ class BeliefReplay:
             if self.on_process is not None and not getattr(duel, "reads_on", False):
                 duel.read_log(True)
                 duel.reads_on = True
+            if self.depth > 0:
+                # (a probe's work is bounded by engine steps, not time: the same in every
+                # run, however loaded the machine is)
+                self._probe_steps += 1
+                if self._probe_steps > _PROBE_STEPS:
+                    os._exit(3)
             status = duel.process()
             if self.on_process is not None:
                 self.on_process(duel)
@@ -4211,8 +4218,10 @@ class BeliefReplay:
             try:
                 signal.signal(signal.SIGALRM, lambda *_: os._exit(3))
                 # nested probes get less time, so they cannot eat their parent's time
-                signal.alarm(max(2, self.probe_timeout >> self.depth))  # (depth of the parent)
+                # (only a safety net: the step budget bounds a probe the same way everywhere)
+                signal.alarm(max(10, (self.probe_timeout * 6) >> self.depth))  # (depth of the parent)
                 self.depth += 1
+                self._probe_steps = 0
                 self._report_depth = self.depth
                 self._probe_decisions = []
                 self._plan = []

@@ -451,7 +451,9 @@ class FlowSolver:
         a = coo_matrix((vals, (rows, colsi)), shape=(r, ncol)).tocsr()
         res = milp(c=np.array(cost), constraints=LinearConstraint(a, np.array(rlo), np.array(rhi)),
                    integrality=np.ones(ncol), bounds=Bounds(np.array(lo), np.array(hi)),
-                   options={"time_limit": 20.0})
+                   # (a time limit makes the result depend on the machine's load: only one
+                   # far beyond any check's own, for a pathological model)
+                   options={"time_limit": 600.0})
         if res.status != 0 or res.x is None:
             raise TrackerError(f"observations are inconsistent (flow model: {res.message})")
         x = np.rint(res.x).astype(int)
