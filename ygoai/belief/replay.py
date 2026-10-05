@@ -3669,6 +3669,32 @@ class BeliefReplay:
             return e.fix
         return None
 
+    def _check_procedure_assumption(self, prompt: dict, up: list[dict], duel: Duel) -> None:
+        """The opponent Special Summons a hand card by its own procedure (its code
+        shows as it arrives, after the procedure's costs) that the replay's hand
+        does not have: one of the hidden hand cards is that card."""
+        code = None
+        for i, m in enumerate(up):
+            if m["type"] in ("CHAINING", "NEW_PHASE", "NEW_TURN", "SUMMONING", "FLIPSUMMONING", "SET"):
+                return
+            if m["type"] == "SPSUMMONING":
+                mv = next((x for x in reversed(up[:i]) if x["type"] == "MOVE"), None)
+                if mv is None or not mv["code"] or mv["from"]["con"] != self.opponent \
+                        or mv["from"]["loc"] != C.LOCATION_HAND or mv["to"]["loc"] != C.LOCATION_MZONE:
+                    return
+                code = mv["code"]
+                break
+        if code is None or any(e["code"] == code and e["loc"] == C.LOCATION_HAND for e in prompt.get("spsummonable", ())):
+            return
+        hand = duel.location_cards(self.opponent, C.LOCATION_HAND)
+        if any(c == code for c, _ in hand):
+            return  # (the card is there: its procedure's condition is the question)
+        for seq in range(len(hand)):
+            fix = self._assume_fix({"con": self.opponent, "loc": C.LOCATION_HAND, "seq": seq}, [code])
+            if fix is not None:
+                raise Divergence(self.pos, "the opponent summons a hand card by its procedure that the "
+                                 "hypothesis does not have", fix=fix)
+
     def _check_idle_assumption(self, prompt: dict, up: list[dict], duel: Duel | None = None) -> None:
         """The opponent set a hidden hand card that has the wrong kind in the hypothesis."""
         for i, m in enumerate(up):
@@ -4264,6 +4290,7 @@ class BeliefReplay:
         self._check_force(prompt, up, duel)
         if prompt["type"] == "SELECT_IDLECMD":
             self._check_idle_assumption(prompt, up, duel)
+            self._check_procedure_assumption(prompt, up, duel)
             self._check_summon_condition(duel, prompt, up)
         if self.depth == 0:
             n = self._decisions_at.get(self.pos, 0)

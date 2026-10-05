@@ -835,7 +835,8 @@ def infer_cards(prompt: dict, up: list[dict], duel, ids: list | None = None,
     elif chosen:
         # the cards referenced before the action ends are the selection; later
         # references may belong to other decisions
-        near = [ids.index(cid) for cid in LocMap(duel).references(selection_window(up)) if cid in ids]
+        near = [ids.index(cid) for cid in LocMap(duel).references(selection_window(up))
+                if cid in ids and cid not in substitutes]
         kn = min(len(near), hi)
         if near and kn >= lo:
             cands.append({"indices": sorted(near[:kn])})
