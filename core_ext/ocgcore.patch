@@ -405,20 +405,6 @@ diff -ruN core_a/card.h core_b/card.h
  	static bool match_setcode(uint16_t set_code, uint16_t to_match) {
  		return (set_code & 0xfffu) == (to_match & 0xfffu) && (set_code & to_match) == set_code;
  	}
-diff -ruN core_a/containers_fwd.h core_b/containers_fwd.h
---- core_a/containers_fwd.h	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/containers_fwd.h	2026-10-05 02:59:41.317208313 +0200
-@@ -41,7 +41,9 @@
- using chain_array = std::vector<chain>;
- using chain_list = std::list<chain>;
- 
--using instant_f_list = std::map<effect*, chain>;
-+// (ordered by creation, not by address: the order the forced effects are handled
-+// in must not differ from one process to the next)
-+using instant_f_list = std::map<effect*, chain, effect_sort_by_initial_id>;
- 
- struct tevent;
- using event_list = std::list<tevent>;
 diff -ruN core_a/duel.cpp core_b/duel.cpp
 --- core_a/duel.cpp	2026-09-29 02:25:58.000000000 +0200
 +++ core_b/duel.cpp	2026-10-05 02:59:30.271842052 +0200
@@ -476,7 +462,7 @@ diff -ruN core_a/duel.h core_b/duel.h
  	inline int read_script(const char* name) {
 diff -ruN core_a/effect.cpp core_b/effect.cpp
 --- core_a/effect.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/effect.cpp	2026-10-05 02:59:30.272091562 +0200
++++ core_b/effect.cpp	2026-10-05 04:51:41.285057087 +0200
 @@ -10,6 +10,7 @@
  #include "effect.h"
  #include "field.h"
@@ -543,7 +529,7 @@ diff -ruN core_a/effect.cpp core_b/effect.cpp
  	pduel->game_field->restore_lp_cost();
 diff -ruN core_a/field.cpp core_b/field.cpp
 --- core_a/field.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/field.cpp	2026-10-05 02:59:30.272430404 +0200
++++ core_b/field.cpp	2026-10-05 04:53:19.561884714 +0200
 @@ -12,6 +12,7 @@
  #include "duel.h"
  #include "effect.h"
@@ -763,6 +749,15 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  		if(!pcard->is_status(STATUS_TO_ENABLE | STATUS_TO_DISABLE)) { // prevent loop
  			int32_t pre_disable = pcard->get_status(STATUS_DISABLED | STATUS_FORBIDDEN);
  			pcard->refresh_disable_status();
+@@ -2123,7 +2163,7 @@
+ 	int32_t p = infos.turn_player;
+ 	for(int32_t p1 = 0; p1 < 2; ++p1) {
+ 		std::vector<card*> uniq_set;
+-		for(auto& ucard : core.unique_cards[p]) {
++		for(auto& ucard : unique_cards_in_order(p)) {
+ 			if(ucard->is_position(POS_FACEUP) && ucard->get_status(STATUS_EFFECT_ENABLED)
+ 					&& !ucard->get_status(STATUS_DISABLED | STATUS_FORBIDDEN)) {
+ 				card_set cset;
 @@ -2155,14 +2195,14 @@
  				cset.insert(pcard);
  		}
@@ -806,7 +801,24 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  			auto it = eit.second->find(pcard);
  			pcard->remove_effect(it->second);
  			eit.second->erase(it);
-@@ -2288,7 +2328,7 @@
+@@ -2247,8 +2287,15 @@
+ 		core.unique_cards[1 - con].erase(pcard);
+ }
+ // return: pcard->unique_effect or 0
++// (by card id, not by address: the order of the checks must not differ from
++// one process to the next)
++std::vector<card*> field::unique_cards_in_order(uint8_t playerid) {
++	std::vector<card*> out(core.unique_cards[playerid].begin(), core.unique_cards[playerid].end());
++	std::sort(out.begin(), out.end(), [](card* c1, card* c2) { return c1->cardid < c2->cardid; });
++	return out;
++}
+ effect* field::check_unique_onfield(card* pcard, uint8_t controler, uint8_t location, card* icard) {
+-	for(auto& ucard : core.unique_cards[controler]) {
++	for(auto& ucard : unique_cards_in_order(controler)) {
+ 		if((ucard != pcard) && (ucard != icard) && ucard->is_position(POS_FACEUP) && ucard->get_status(STATUS_EFFECT_ENABLED)
+ 			&& !ucard->get_status(STATUS_DISABLED | STATUS_FORBIDDEN)
+ 			&& ucard->unique_fieldid && ucard->check_unique_code(pcard) && (ucard->unique_location & location))
+@@ -2288,7 +2335,7 @@
  		auto& player_counter = info.player_amount[playerid];
  		if(player_counter != 0)
  			continue;
@@ -817,16 +829,7 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  				++player_counter;
 diff -ruN core_a/field.h core_b/field.h
 --- core_a/field.h	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/field.h	2026-10-05 02:59:41.317320354 +0200
-@@ -284,7 +284,7 @@
- 	effect_set_v extra_szone_effects;
- 	std::set<effect*> reseted_effects;
- 	std::unordered_map<card*, uint32_t> readjust_map;
--	std::unordered_set<card*> unique_cards[2];
-+	card_set unique_cards[2];  // (by card id, not by address: the checks' order)
- 	effect_count_map effect_count_code;
- 	effect_count_map effect_count_code_duel;
- 	effect_count_map effect_count_code_chain;
++++ core_b/field.h	2026-10-05 04:53:44.572074109 +0200
 @@ -301,6 +301,7 @@
  	uint8_t win_player{ 5 };
  	uint8_t win_reason;
@@ -844,7 +847,15 @@ diff -ruN core_a/field.h core_b/field.h
  	std::vector<uint8_t> dice_results;
  	std::vector<bool> coin_results;
  	bool to_bp;
-@@ -579,6 +582,7 @@
+@@ -499,6 +502,7 @@
+ 	void add_unique_card(card* pcard);
+ 	void remove_unique_card(card* pcard);
+ 	effect* check_unique_onfield(card* pcard, uint8_t controler, uint8_t location, card* icard = nullptr);
++	std::vector<card*> unique_cards_in_order(uint8_t playerid);
+ 	int32_t check_spsummon_once(card* pcard, uint8_t playerid);
+ 	void check_card_counter(card* pcard, ActivityType counter_type, int32_t playerid);
+ 	void check_card_counter(group* pgroup, ActivityType counter_type, int32_t playerid);
+@@ -579,6 +583,7 @@
  	void calculate_battle_damage(effect** pdamchange, card** preason_card, std::array<bool, 2>* battle_destroyed);
  	int32_t break_effect(bool clear_sent = true);
  	void adjust_instant();
@@ -2888,8 +2899,22 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			}
 diff -ruN core_a/processor.cpp core_b/processor.cpp
 --- core_a/processor.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/processor.cpp	2026-10-05 03:05:31.965787095 +0200
-@@ -2574,7 +2574,7 @@
++++ core_b/processor.cpp	2026-10-05 04:51:50.313729287 +0200
+@@ -962,6 +962,13 @@
+ 			}
+ 			++ifit;
+ 		}
++		// (the map is ordered by address: the options in the order the effects were
++		// created, the same in every process)
++		core.select_chains.sort([](const chain& a, const chain& b) {  // (stable)
++			if(a.triggering_effect->initial_id != b.triggering_effect->initial_id)
++				return a.triggering_effect->initial_id < b.triggering_effect->initial_id;
++			return a.triggering_effect->id < b.triggering_effect->id;
++		});
+ 		if(core.select_chains.size() == 0)
+ 			returns.set<int32_t>(0, -1);
+ 		else if(core.select_chains.size() == 1)
+@@ -2574,7 +2581,7 @@
  	case 30: {
  		auto des = arg.cards_destroyed_by_battle;
  		if(des && des->container.size()) {
@@ -2898,7 +2923,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  				pcard->set_status(STATUS_BATTLE_DESTROYED, TRUE);
  				pcard->set_status(STATUS_DESTROY_CONFIRMED, FALSE);
  				pcard->filter_disable_related_cards();
-@@ -2642,10 +2642,9 @@
+@@ -2642,10 +2649,9 @@
  	case 33: {
  		auto des = arg.cards_destroyed_by_battle;
  		if(des) {
@@ -2912,7 +2937,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  			}
  			emplace_process<Processors::Destroy>(Step{ 3 }, des, nullptr, REASON_BATTLE, PLAYER_NONE);
  		}
-@@ -3259,6 +3258,7 @@
+@@ -3259,6 +3265,7 @@
  	switch(arg.step) {
  	case 0: {
  		//Pre Draw
@@ -2920,7 +2945,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  		core.used_event.clear();
  		for(auto& peffect : core.reseted_effects) {
  			pduel->delete_effect(peffect);
-@@ -3832,7 +3832,7 @@
+@@ -3832,7 +3839,7 @@
  		card* phandler = peffect->get_handler();
  		if(clit.target_cards && clit.target_cards->container.size()) {
  			if(peffect->is_flag(EFFECT_FLAG_CARD_TARGET)) {
@@ -2929,7 +2954,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  					raise_single_event(pcard, nullptr, EVENT_BECOME_TARGET, peffect, 0, clit.triggering_player, 0, clit.chain_count);
  				process_single_event();
  				if(clit.target_cards->container.size())
-@@ -3880,7 +3880,7 @@
+@@ -3880,7 +3887,7 @@
  						// indecates that it is the opponent that special summons the target monsters
  						if(peffect->is_flag(EFFECT_FLAG_CARD_TARGET) && optarget.op_player == 0x10)
  							sumplayer = 1 - sumplayer;
@@ -2938,7 +2963,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  							if(pcard->spsummon_code) {
  								++core.spsummon_once_map[sumplayer][pcard->spsummon_code];
  								++core.spsummon_once_map_rst[sumplayer][pcard->spsummon_code];
-@@ -4246,7 +4246,7 @@
+@@ -4246,7 +4253,7 @@
  							// indecates that it is the opponent that special summons the target monsters
  							if(cait->triggering_effect->is_flag(EFFECT_FLAG_CARD_TARGET) && optarget.op_player == 0x10)
  								sumplayer = 1 - sumplayer;
@@ -2947,7 +2972,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  								if(is_flag(DUEL_SPSUMMON_ONCE_OLD_NEGATE) && (core.global_flag & GLOBALFLAG_SPSUMMON_ONCE) && ptarget->spsummon_code)
  									++core.spsummon_once_map[sumplayer][ptarget->spsummon_code];
  								check_card_counter(ptarget, ACTIVITY_SPSUMMON, sumplayer);
-@@ -4285,7 +4285,7 @@
+@@ -4285,7 +4292,7 @@
  		if((cait->flag & CHAIN_HAND_EFFECT) && !pcard->is_position(POS_FACEUP) && (pcard->current.location == LOCATION_HAND))
  			shuffle(pcard->current.controler, LOCATION_HAND);
  		if(cait->target_cards && cait->target_cards->container.size()) {
@@ -2956,7 +2981,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  				ptarget->release_relation(*cait);
  		}
  		if((pcard->data.type & TYPE_EQUIP) && (peffect->type & EFFECT_TYPE_ACTIVATE)
-@@ -4302,7 +4302,7 @@
+@@ -4302,7 +4309,7 @@
  		peffect->active_type = 0;
  		peffect->active_handler = nullptr;
  		pcard->release_relation(*cait);
@@ -2965,7 +2990,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  			if(cit->current.location == LOCATION_MZONE)
  				cit->enable_field_effect(true);
  		}
-@@ -4325,10 +4325,9 @@
+@@ -4325,10 +4332,9 @@
  		return FALSE;
  	}
  	case 11: {
@@ -2979,7 +3004,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  		}
  		if(core.leave_confirmed.size())
  			send_to(core.leave_confirmed, nullptr, REASON_RULE, PLAYER_NONE, PLAYER_NONE, LOCATION_GRAVE, 0, POS_FACEUP);
-@@ -4434,8 +4433,46 @@
+@@ -4434,8 +4440,46 @@
  	}
  	return 0;
  }
@@ -3026,7 +3051,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  	adjust_disable_check_list();
  	adjust_self_destroy_set();
  }
-@@ -4650,6 +4687,7 @@
+@@ -4650,6 +4694,7 @@
  	switch(arg.step) {
  	case 0: {
  		core.re_adjust = false;
@@ -3034,7 +3059,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  		return FALSE;
  	}
  	case 1: {
-@@ -4783,7 +4821,7 @@
+@@ -4783,7 +4828,7 @@
  			core.re_adjust = true;
  			get_control(core.control_adjust_set[1 - infos.turn_player], nullptr, PLAYER_NONE, infos.turn_player, 0, 0, 0xff);
  			get_control(core.control_adjust_set[infos.turn_player], nullptr, PLAYER_NONE, 1 - infos.turn_player, 0, 0, 0xff);
@@ -3043,7 +3068,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  				++core.readjust_map[rcard];
  				if(core.readjust_map[rcard] > 3)
  					destroy(rcard, nullptr, REASON_RULE, PLAYER_NONE);
-@@ -4896,18 +4934,35 @@
+@@ -4896,18 +4941,35 @@
  	}
  	case 12: {
  		//shuffle check
@@ -3081,7 +3106,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  		if(core.shuffle_hand_check[infos.turn_player])
  			shuffle(infos.turn_player, LOCATION_HAND);
  		if(core.shuffle_hand_check[1 - infos.turn_player])
-@@ -4992,6 +5047,11 @@
+@@ -4992,6 +5054,11 @@
  			arg.step = Processors::restart;
  			return FALSE;
  		}
