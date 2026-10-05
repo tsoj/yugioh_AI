@@ -883,7 +883,7 @@ diff -ruN core_a/group.h core_b/group.h
  	
 diff -ruN core_a/interpreter.cpp core_b/interpreter.cpp
 --- core_a/interpreter.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/interpreter.cpp	2026-10-05 15:24:47.041790844 +0200
++++ core_b/interpreter.cpp	2026-10-05 20:04:07.532307656 +0200
 @@ -15,6 +15,7 @@
  #include "lua_obj.h"
  #include "group.h"
@@ -930,7 +930,32 @@ diff -ruN core_a/interpreter.cpp core_b/interpreter.cpp
  	// Open basic and used functionality
  	auto open_lib = [L=lua_state](const char* libname, lua_CFunction openf) {
  		ensure_luaL_stack(luaL_requiref, L, libname, openf, 1);
-@@ -448,7 +469,30 @@
+@@ -221,15 +242,19 @@
+ 	if(!buffer)
+ 		return false;
+ 	++no_action;
+-	if(ensure_luaL_stack(luaL_loadbuffer, current_state, buffer, len, script_name) != LUA_OK
+-	   || lua_pcall(current_state, 0, 0, 0) != LUA_OK) {
++	// (the chunk is one top-level call: properties it assumes for cards last until
++	// it ends, not until the first script function it calls returns)
++	++call_depth;
++	const bool ok = ensure_luaL_stack(luaL_loadbuffer, current_state, buffer, len, script_name) == LUA_OK
++	   && lua_pcall(current_state, 0, 0, 0) == LUA_OK;
++	if(!ok) {
+ 		pduel->handle_message(lua_get_string_or_empty(current_state, -1), OCG_LOG_TYPE_ERROR);
+ 		lua_pop(current_state, 1);
+-		--no_action;
+-		return false;
+ 	}
++	if(--call_depth == 0)
++		pduel->restore_assumes();
+ 	--no_action;
+-	return true;
++	return ok;
+ }
+ //Load a card script (if not already loaded) and push the corresponding cXXXXXX table on the stack, +1 -0
+ bool interpreter::load_card_script(uint32_t code) {
+@@ -448,7 +473,30 @@
  	for(int i = 0; i < amount; ++i)
  		lua_pushvalue(L, idx + i);
  }
@@ -961,7 +986,7 @@ diff -ruN core_a/interpreter.cpp core_b/interpreter.cpp
  	luaL_checkstack(current_state, extraargs + 2, nullptr);
  	lua_pushvalue(current_state, findex);
  	pushobject(current_state, pcard);
-@@ -459,11 +503,15 @@
+@@ -459,11 +507,15 @@
  	} else
  		result = lua_toboolean(current_state, -1);
  	lua_pop(current_state, 1);
@@ -977,7 +1002,7 @@ diff -ruN core_a/interpreter.cpp core_b/interpreter.cpp
  	luaL_checkstack(current_state, 2, nullptr);
  	lua_pushvalue(current_state, findex);
  	pushobject(current_state, pcard);
-@@ -474,6 +522,8 @@
+@@ -474,6 +526,8 @@
  	} else
  		result = lua_toboolean(current_state, -1);
  	lua_pop(current_state, 1);

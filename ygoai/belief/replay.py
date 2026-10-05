@@ -3024,6 +3024,9 @@ class BeliefReplay:
                 entry = (self.pos, loc[0], loc[1], (loc[2],), code)
                 if code and entry not in self.exclusions and entry not in self.failed_exclusions:
                     return ("exclude", *entry)
+        # (a face-down card the real game offers and the replay does not: an
+        # eligible card, as in the hidden piles below)
+        field_missing = sorted(x for x in want - have if x[1] in (C.LOCATION_MZONE, C.LOCATION_SZONE))
         want = {x for x in want if x[1] in HIDDEN_PILES}
         have = {x for x in have if x[1] in HIDDEN_PILES}
         if have - want and duel is not None:
@@ -3037,15 +3040,38 @@ class BeliefReplay:
                     k = self._card_decisions.get(dkey, {}).get(cid)
                     if k is not None and k != i:
                         return ("decide", dkey, k)
-        # an eligible code, taken from one of the replay's eligible cards
+        # an eligible code, taken from one of the replay's eligible cards (also those
+        # eligible in both games: the engine shows their codes qualify in this prompt)
         codes = []
-        for c in have - want:
+        both = {(c["con"], c["loc"], c["seq"]) for c in exp[key] if hidden(c)} & \
+            {(c["con"], c["loc"], c["seq"]) for c in got[key] if hidden(c)}
+        for c in sorted(have - want) + sorted(both):
             var = self.lockstep.var_at(*c)
             code = self.hypothesis.var_codes.get(var.id) if var is not None else None
             if code:
                 codes.append(code)
+        if field_missing and exp["type"] == "SELECT_TRIBUTE" and duel is not None:
+            # (which codes make the face-down card a Tribute for the viewer's summon
+            # here, the engine tells: e.g. "Zombie monsters your opponent controls")
+            summoned = self._summoning_card()
+            if summoned is not None:
+                loc = dict(zip(("con", "loc", "seq"), field_missing[0]))
+                seen_races = Counter(self.db.get(c).race for c in self._opp_seen_codes()
+                                     if self.db.get(c) and self.db.get(c).type & C.TYPE_MONSTER)
+                pool = sorted((c.code for c in self.db.cards.values()
+                               if c.type & C.TYPE_MONSTER and not c.alias and c.ot & 0x3 and not c.is_extra_deck
+                               and not c.type & C.TYPE_TOKEN),
+                              key=lambda c: (-seen_races[self.db.get(c).race],
+                                             not self.db.get(c).type & C.TYPE_NORMAL, c))
+                found = [c for c in codes if self._tributable_as(duel, summoned, loc, [c]).get(c)]
+                for k in range(0, len(pool), 400):
+                    if len(found) >= 3:
+                        break
+                    ok = self._tributable_as(duel, summoned, loc, pool[k:k + 400])
+                    found += [c for c in pool[k:k + 400] if ok.get(c) and c not in found]
+                codes = found
         try:
-            for loc in sorted(want - have):
+            for loc in sorted(want - have) + field_missing:
                 self._assume({"con": loc[0], "loc": loc[1], "seq": loc[2]}, codes,
                              "the viewer's selection shows an eligible hidden card")
             for loc in sorted(have - want):
@@ -3054,6 +3080,44 @@ class BeliefReplay:
         except Divergence as d:
             return d.fix
         return None
+
+    def _summoning_card(self) -> dict | None:
+        """The viewer's card being Normal Summoned or Set: from its latest answer."""
+        for j in range(self.pos - 1, max(-1, self.pos - 20), -1):
+            it = self.items[j]
+            if it[0] == "response" and it[1].get("kind") in ("summon", "mset"):
+                prompt = next((self.items[k][1] for k in range(j - 1, max(-1, j - 5), -1)
+                               if self.items[k][0] == "prompt"), None)
+                key = "summonable" if it[1]["kind"] == "summon" else "msetable"
+                lst = (prompt or {}).get(key) or []
+                i = it[1].get("index", -1)
+                return lst[i] if 0 <= i < len(lst) else None
+        return None
+
+    def _tributable_as(self, duel: Duel, summoned: dict, li: dict, codes: list) -> dict:
+        """Whether the face-down monster at `li` could be Tributed for the summon of
+        `summoned` if it had each candidate's properties (assumed, then reset)."""
+        out: dict = {}
+        lines = [f"local c=Duel.GetFieldCard({summoned['con']},{summoned['loc']},{summoned['seq']})",
+                 f"local t=Duel.GetFieldCard({li['con']},{li['loc']},{li['seq']})",
+                 "if not c or not t then return end"]
+        for code in dict.fromkeys(codes):
+            card = self.db.get(code)
+            if card is None:
+                continue
+            lines.append(
+                f"t:AssumeProperty(ASSUME_CODE,{code}) t:AssumeProperty(ASSUME_TYPE,{card.type}) "
+                f"t:AssumeProperty(ASSUME_LEVEL,{card.level}) t:AssumeProperty(ASSUME_ATTRIBUTE,{card.attribute}) "
+                f"t:AssumeProperty(ASSUME_RACE,{card.race}) t:AssumeProperty(ASSUME_ATTACK,{max(card.attack, 0)}) "
+                f"t:AssumeProperty(ASSUME_DEFENSE,{max(card.defense, 0)}) "
+                f"Debug.Message('{code} '..tostring(Duel.GetTributeGroup(c):IsContains(t))) Duel.AssumeReset()")
+        try:
+            for text in duel.lua_messages("\n".join(lines)):
+                code, res = text.split()
+                out[int(code)] = res == "true"
+        except (ValueError, CoreError):
+            return {}
+        return out
 
     def _other_copy_fix(self, cp: int, msgs: list[dict], idx: int, loc: dict) -> tuple | None:
         """Swap the card at `loc` with another copy of it from the same pile."""
