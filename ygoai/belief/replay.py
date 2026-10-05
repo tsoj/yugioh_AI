@@ -410,6 +410,7 @@ class BeliefReplay:
     def build_hypothesis(self) -> Hypothesis:
         tracker = Tracker(self.viewer, self.init)
         self._assumed_vars: dict[int, tuple] = {}  # slot var id -> the assumption that named its code
+        self._assume_conflict: tuple | None = None
         pending = sorted(self.assumptions)
         excl = sorted(self.exclusions)
         k = j = 0
@@ -417,7 +418,12 @@ class BeliefReplay:
             while k < len(pending) and pending[k][0] == i:
                 _, con, loc, seq, code = pending[k]
                 av = tracker.var_at(con, loc, seq)
-                tracker.observe(av, code)
+                try:
+                    tracker.observe(av, code)
+                except TrackerError:
+                    # (the card another assumption named earlier: which one fails)
+                    self._assume_conflict = self._assumed_vars.get(av.id) if av is not None else None
+                    raise
                 if av is not None:
                     self._assumed_vars[av.id] = pending[k]
                 k += 1
@@ -608,6 +614,17 @@ class BeliefReplay:
                         continue
                     if not self.assumptions:
                         raise
+                    older = getattr(self, "_assume_conflict", None)
+                    if older is not None and older in self.assumptions[:-1]:
+                        # the latest assumption names another code for a card an
+                        # earlier one named, at a later point (e.g. a code the viewer
+                        # saw when it took control of the card): the earlier one fails
+                        self.assumptions.remove(older)
+                        self.failed_assumptions.add(older)
+                        if self.log:
+                            self.log(f"restart {self.stats.restarts}: hypothesis failed ({te}) -> drop {older}")
+                        self.stats.restarts += 1
+                        continue
                     # the last assumption is impossible (e.g. too many copies)
                     self.failed_assumptions.add(self.assumptions.pop())
                     if self.log:
@@ -1437,6 +1454,8 @@ class BeliefReplay:
                           and a[2] not in (C.LOCATION_DECK, C.LOCATION_EXTRA)]
                 if recent:
                     fix = ("unassume", recent[-1])
+            if fix is None and exp["type"] == "MOVE" and got.get("type") == "MOVE":
+                fix = self._hand_slot_fix(exp, got)
             if fix is None and exp["type"] == "MOVE":
                 fix = self._hidden_monster_fix(exp, got)
             if fix is None and exp["type"] == "MOVE" and exp["reason"] & C.REASON_RELEASE \
@@ -2224,8 +2243,9 @@ class BeliefReplay:
             var = self.lockstep.var_at(*key)
         except TrackerError:
             return None
-        tried = {a[4] for a in self.assumptions if a[1:4] == key} | {
-            a[4] for a in self.failed_assumptions if a[1:4] == key}
+        # (at this point: the slot can hold another card at another point)
+        tried = {a[4] for a in self.assumptions if a[:4] == (self.pos, *key)} | {
+            a[4] for a in self.failed_assumptions if a[:4] == (self.pos, *key)}
         if var is None or code in tried:
             return None
         return ("assume", self.pos, *key, code)
@@ -2273,6 +2293,43 @@ class BeliefReplay:
         if member is None:
             return None
         entry = (self.pos, (slot["con"], slot["loc"], slot["seq"]), ("not", member.id))
+        if entry in self.identities or entry in self.failed_identities:
+            return None
+        return ("identify", *entry)
+
+    def _hand_slot_fix(self, exp: dict, got: dict) -> tuple | None:
+        """The real game moves a hidden hand card from another place of the hand
+        than the replay, to the same place: the card in the real slot is the
+        physical card the replay moved (e.g. the one an effect summons, "this
+        card", the hand shuffled since: the shuffle placed it elsewhere)."""
+        e, g = exp["from"], got["from"]
+        if e["con"] != self.opponent or e["loc"] != C.LOCATION_HAND or g["loc"] != C.LOCATION_HAND \
+                or g["con"] != e["con"] or e["seq"] == g["seq"] or exp["code"] or got["code"] \
+                or exp["to"] != got["to"]:
+            return None
+        solved = getattr(self, "_solved", None)
+        if solved is None:
+            return None
+        try:
+            ve = self.lockstep.var_at(e["con"], e["loc"], e["seq"])
+            vg = self.lockstep.var_at(g["con"], g["loc"], g["seq"])
+        except TrackerError:
+            return None
+        if ve is None or vg is None or ve.kind != "claim" or ve.pool is None:
+            return None
+        byid = {v.id: v for v in solved.all_vars}
+        sv, se = byid.get(vg.id), byid.get(ve.id)
+        member = sv.assigned if sv is not None and sv.kind == "claim" else None
+        if member is None or not any(m.id == member.id for m in ve.pool.members):
+            return None
+
+        def code(v):
+            while v is not None and v.kind == "claim":
+                v = v.assigned
+            return None if v is None else v.resolved
+        if se is None or code(se) == code(member):
+            return None  # (copies of one card: a swap of the two)
+        entry = (self.pos, (e["con"], e["loc"], e["seq"]), member.id)
         if entry in self.identities or entry in self.failed_identities:
             return None
         return ("identify", *entry)
@@ -3297,8 +3354,9 @@ class BeliefReplay:
         if var is None or (var.id in self.hypothesis.observed
                            and not any(a[:4] == (self.pos, *key) for a in self.assumptions)):
             return None  # (observed, other than by an assumption at this slot and point)
-        tried = {a[4] for a in self.assumptions if a[1:4] == key} | {
-            a[4] for a in self.failed_assumptions if a[1:4] == key}
+        # (at this point: the slot can hold another card at another point)
+        tried = {a[4] for a in self.assumptions if a[:4] == (self.pos, *key)} | {
+            a[4] for a in self.failed_assumptions if a[:4] == (self.pos, *key)}
         for code in codes:
             if code and code not in tried:
                 return ("assume", self.pos, *key, code)
@@ -3316,14 +3374,61 @@ class BeliefReplay:
         if got.get("type") == "MOVE" and infer.same_loc(got["from"], frm):
             return None
 
-        def fits(code):
+        def monster(code):
             card = self.db.get(code)
             return card is not None and card.type & C.TYPE_MONSTER and not card.is_extra_deck \
-                and not card.type & C.TYPE_TOKEN and 1 <= card.level <= 4
+                and not card.type & C.TYPE_TOKEN
+
+        def fits(code):
+            return monster(code) and 1 <= self.db.get(code).level <= 4
         filler = self._filler()
-        codes = [c for c in self._opp_seen_codes() if fits(c)]
+        seen = self._opp_seen_codes()
+        # (first the cards the script of the chain link being resolved refers to, e.g.
+        # Possessed Destiny summons a Charmer: the opponent's shown ones first)
+        link = self._resolving_link()
+        ref = self.items[link][1].get("code") if link is not None else None
+        listed = []
+        if ref:
+            from . import script_index
+            names = set(script_index.candidates(ref, self.db))
+            # (those sharing an Attribute or Type with the link's targets first, e.g.
+            # "a Charmer with the same Attribute as the targeted monster")
+            view = next((it[2] for it in reversed(self.items[:self.pos + 1])
+                         if it[0] == "prompt" and it[2] is not None), None)
+            on_field = {(p, i): c for p, pl in enumerate((view or {}).get("players", ()))
+                        for i, c in enumerate(pl["mzone"]) if c}
+            targets = [on_field.get((t["con"], t["seq"])) for it in self.items[link:self.pos]
+                       if it[0] == "msg" and it[1]["type"] == "BECOME_TARGET"
+                       for t in it[1]["cards"] if t["loc"] == C.LOCATION_MZONE]
+            attrs = {t.get("attribute") for t in targets if t} - {None, 0}
+            races = {t.get("race") for t in targets if t} - {None, 0}
+
+            def unlike(code):
+                card = self.db.get(code)
+                return not (card.attribute in attrs or card.race in races)
+            listed = sorted((c for c in seen if c in names and monster(c)), key=unlike)
+            listed += sorted((c for c in names if c not in listed and monster(c)),
+                             key=lambda c: (unlike(c), c))[:max(0, 8 - len(listed))]
+        codes = listed + [c for c in seen if fits(c) and c not in listed]
         codes += [c for c in list(filler.vanillas) + list(filler.settable_monsters_all) if fits(c) and c not in codes]
-        return self._assume_fix(frm, codes[:12])
+        return self._assume_fix(frm, codes[:len(listed) + 12])
+
+    def _resolving_link(self) -> int | None:
+        """Stream position of the CHAINING of the link being resolved (None outside
+        a resolution)."""
+        n = None
+        for j in range(self.pos - 1, max(-1, self.pos - 200), -1):
+            it = self.items[j]
+            if it[0] != "msg":
+                continue
+            m = it[1]
+            if m["type"] in ("CHAIN_END", "NEW_PHASE", "NEW_TURN") or (n is None and m["type"] == "CHAIN_SOLVED"):
+                return None
+            if n is None and m["type"] == "CHAIN_SOLVING":
+                n = m["chain_count"]
+            elif n is not None and m["type"] == "CHAINING" and m.get("chain_count") == n:
+                return j
+        return None
 
     def _race_stand_ins(self, race: int, fits) -> list[int]:
         """Main deck monsters of a race that fit (the lowest codes), when no filler has it."""
