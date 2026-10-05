@@ -1210,6 +1210,8 @@ class BeliefReplay:
                             if self.overrides.get(dkey) != passing:
                                 fix = ("decide", dkey, passing)
                                 break
+                    if fix is None and item[0] == "msg":
+                        fix = self._granted_set_fix(item[1], duel)
                     if fix is None and item[0] == "prompt":
                         fix = self._prompt_copy_fix(item[1], fp, duel, cp) \
                             or self._hidden_candidates_fix(item[1], fp, duel) \
@@ -1428,6 +1430,8 @@ class BeliefReplay:
                 key = (self.pos, got["from"]["con"], C.LOCATION_HAND, (got["from"]["seq"],), code)
                 if code and key not in self.exclusions and key not in self.failed_exclusions:
                     fix = ("exclude", *key)
+            if fix is None and got.get("type") != "MOVE":
+                fix = self._granted_set_fix(exp, duel)
             if fix is None and exp["type"] == "MOVE" and got.get("type") == "MOVE":
                 fix = self._summon_copy_fix(exp, got)
             if fix is None and exp["type"] == "MOVE" and got["type"] == "MOVE" \
@@ -1545,6 +1549,9 @@ class BeliefReplay:
                         if (fix is None or self._has_swap(fix)) and lg["seq"] < le["seq"]:
                             # the replay's scan hit this code lower down than the real one
                             fix = self._exclude_fix(le, msgs[idx].get("code"))
+                        if (fix is None or self._has_swap(fix)) and le["con"] == self.opponent \
+                                and le["loc"] == C.LOCATION_DECK and exp.get("code"):
+                            fix = self._all_copies_fix(exp, le, duel) or fix
                     elif exp.get("code"):
                         # right card, wrong copy (the copies differ in hidden history)
                         fix = self._other_copy_fix(cp, msgs, idx, le)
@@ -3316,6 +3323,54 @@ class BeliefReplay:
             self._filler_cache = _vanilla(self.db)
         return self._filler_cache
 
+    def _all_copies_fix(self, exp: dict, le: dict, duel: Duel) -> tuple | None:
+        """The real game moves every copy of a card out of the opponent's Deck, then
+        shuffles it (e.g. Chain Dispel, Chain Destruction): the copies it moved are all
+        there were, so none of the guessed (filler) cards of that Deck is one."""
+        code, moved = exp["code"], set()
+        for it in self.items[self.pos:self.pos + 20]:
+            m = it[1]
+            if it[0] != "msg" or m["type"] in ("HINT", "CARD_HINT"):
+                continue
+            if m["type"] == "MOVE" and m.get("code") == code and m["reason"] == exp["reason"] \
+                    and (m["from"]["con"], m["from"]["loc"]) == (le["con"], le["loc"]):
+                moved.add(m["from"]["seq"])
+                continue
+            if m["type"] != "SHUFFLE_DECK" or m["player"] != le["con"]:
+                return None
+            break
+        else:
+            return None
+        guessed = []
+        for seq in range(len(duel.location_cards(le["con"], le["loc"]))):
+            if seq in moved:
+                continue
+            try:
+                v = self.lockstep.var_at(le["con"], le["loc"], seq)
+            except TrackerError:
+                continue
+            if v is not None and v.code is None and v.fixed_code is None:
+                guessed.append(seq)
+        key = (self.pos, le["con"], le["loc"], tuple(guessed), code)
+        if guessed and key not in self.exclusions and key not in self.failed_exclusions:
+            return ("exclude", *key)
+        return None
+
+    def _granted_set_fix(self, exp: dict, duel: Duel) -> tuple | None:
+        """The real game Tributes the opponent's monsters for a Summon or Set the replay
+        does not make (e.g. one an effect grants, "Normal Summon or Set 1 monster from
+        your hand"): the hidden card cannot be Summoned or Set that way in the
+        hypothesis (as for a Set from the command prompt)."""
+        if exp["type"] != "MOVE" or exp["from"]["con"] != self.opponent \
+                or exp["reason"] & (C.REASON_RELEASE | C.REASON_SUMMON) != C.REASON_RELEASE | C.REASON_SUMMON:
+            return None
+        up = [it[1] for it in self.items[self.pos:self.pos + 16] if it[0] == "msg"]
+        try:
+            self._check_idle_assumption(None, up, duel)
+        except Divergence as e:
+            return e.fix
+        return None
+
     def _check_idle_assumption(self, prompt: dict, up: list[dict], duel: Duel | None = None) -> None:
         """The opponent set a hidden hand card that has the wrong kind in the hypothesis."""
         for i, m in enumerate(up):
@@ -3328,10 +3383,17 @@ class BeliefReplay:
                 continue  # (e.g. drawn when a Tribute leaves the field, before the Set itself)
             if m["type"] != "SET":
                 return
-            src = infer.source_of(m, up[:i])
+            if m["loc"] == C.LOCATION_HAND:
+                # (the Set failed, no zone left, e.g. the Tributes' zones disabled by
+                # Phantom Dragon: the card stays in the hand, the message names it there)
+                src = {"con": m["con"], "loc": m["loc"], "seq": m["seq"]}
+                failed_monster = any(x["type"] == "MOVE" and x["reason"] & C.REASON_RELEASE for x in up[:i]) \
+                    or m.get("pos") == C.POS_FACEDOWN_DEFENSE
+            else:
+                src, failed_monster = infer.source_of(m, up[:i]), False
             if src is None or src["con"] != self.opponent or src["loc"] not in HIDDEN_PILES:
                 return
-            kind = "msetable" if m["loc"] == C.LOCATION_MZONE else "ssetable"
+            kind = "msetable" if m["loc"] == C.LOCATION_MZONE or failed_monster else "ssetable"
             filler = self._filler()
             if kind == "msetable":
                 tributes = sum(1 for x in up[:i] if x["type"] == "MOVE" and x["from"]["loc"] != C.LOCATION_HAND
@@ -3362,7 +3424,8 @@ class BeliefReplay:
                 def fits(code):
                     card = self.db.get(code)
                     return card is not None and bool(card.type & C.TYPE_FIELD) == field_zone
-            entries = [e for e in prompt[kind] if infer.same_loc(e, src)]
+            # (no prompt: a Summon or Set an effect grants, which the replay did not make)
+            entries = [e for e in prompt[kind] if infer.same_loc(e, src)] if prompt else []
             foreign_moves = [x for x in up[:i] if kind == "msetable" and x["type"] == "MOVE"
                              and x["reason"] & C.REASON_RELEASE and x["from"]["con"] != src["con"]]
             # (unless an effect allows Tributing the opponent's monsters for any
@@ -3436,7 +3499,7 @@ class BeliefReplay:
                                                             or now["code"] not in filler_codes or not tributes):
                     return  # (lowered by an effect to fit, or a usual Level)
             usual = {0: range(1, 5), 1: range(5, 7)}.get(tributes, range(7, 13)) if kind == "msetable" else None
-            codes = [e["code"] for e in prompt[kind] if fits(e["code"])]
+            codes = [e["code"] for e in prompt[kind] if fits(e["code"])] if prompt else []
             if kind == "msetable" and earlier_need == ("st",):
                 from .completion import monster_sset_codes
                 codes += sorted(c for c in monster_sset_codes() if self.db.get(c) and fits(c))

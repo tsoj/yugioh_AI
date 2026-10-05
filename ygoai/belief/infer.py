@@ -372,6 +372,15 @@ def infer_place(prompt: dict, up: list[dict], up_ext: list[dict] | None = None) 
                 # one?" in between: any of those not chosen yet)
                 import itertools
                 return [{"places": list(sub)} for sub in itertools.combinations(chosen, prompt["count"])][:20], False
+        if m["type"] == "SWAP":
+            # (a control swap: each card takes the other's zone, e.g. Creature Swap
+            # placing the received monster where the given one was)
+            for loc in (m["loc1"], m["loc2"]):
+                key = (loc["con"], loc["loc"], loc["seq"])
+                if key in avail and key not in places:
+                    places.append(key)
+                    if len(places) == prompt["count"]:
+                        return [{"places": [list(p) for p in places]}], True
         if m["type"] == "MOVE":
             to = m["to"]
             key = (to["con"], to["loc"], to["seq"])
