@@ -1,6 +1,6 @@
 diff -ruN core_a/card.cpp core_b/card.cpp
 --- core_a/card.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/card.cpp	2026-10-05 15:24:54.795123922 +0200
++++ core_b/card.cpp	2026-10-06 13:04:11.480940583 +0200
 @@ -75,6 +75,25 @@
  			return c1->current.sequence < c2->current.sequence;
  	}
@@ -396,7 +396,7 @@ diff -ruN core_a/card.cpp core_b/card.cpp
  			peffect = eit->second;
 diff -ruN core_a/card.h core_b/card.h
 --- core_a/card.h	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/card.h	2026-10-05 15:24:47.040646881 +0200
++++ core_b/card.h	2026-10-06 13:04:11.481269936 +0200
 @@ -182,6 +182,13 @@
  	explicit card(duel* pd);
  	~card() = default;
@@ -413,7 +413,7 @@ diff -ruN core_a/card.h core_b/card.h
  	}
 diff -ruN core_a/duel.cpp core_b/duel.cpp
 --- core_a/duel.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/duel.cpp	2026-10-05 15:24:47.040727263 +0200
++++ core_b/duel.cpp	2026-10-06 13:04:11.481322432 +0200
 @@ -10,6 +10,7 @@
  #include "duel.h"
  #include "effect.h"
@@ -432,7 +432,7 @@ diff -ruN core_a/duel.cpp core_b/duel.cpp
  	for(auto& pgroup : groups) {
 diff -ruN core_a/duel.h core_b/duel.h
 --- core_a/duel.h	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/duel.h	2026-10-05 15:24:47.040790332 +0200
++++ core_b/duel.h	2026-10-06 13:04:11.481362417 +0200
 @@ -62,6 +62,16 @@
  	};
  	std::vector<uint8_t> buff;
@@ -468,7 +468,7 @@ diff -ruN core_a/duel.h core_b/duel.h
  	inline int read_script(const char* name) {
 diff -ruN core_a/effect.cpp core_b/effect.cpp
 --- core_a/effect.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/effect.cpp	2026-10-06 01:56:11.055176001 +0200
++++ core_b/effect.cpp	2026-10-06 13:04:11.481425568 +0200
 @@ -10,6 +10,7 @@
  #include "effect.h"
  #include "field.h"
@@ -538,7 +538,7 @@ diff -ruN core_a/effect.cpp core_b/effect.cpp
  	pduel->game_field->restore_lp_cost();
 diff -ruN core_a/field.cpp core_b/field.cpp
 --- core_a/field.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/field.cpp	2026-10-06 04:37:26.758874713 +0200
++++ core_b/field.cpp	2026-10-06 13:04:11.481631210 +0200
 @@ -11,7 +11,9 @@
  #include "card.h"
  #include "duel.h"
@@ -884,7 +884,7 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  	if(acc <= 0)
 diff -ruN core_a/field.h core_b/field.h
 --- core_a/field.h	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/field.h	2026-10-05 15:24:47.041587788 +0200
++++ core_b/field.h	2026-10-06 23:32:30.259449569 +0200
 @@ -301,6 +301,7 @@
  	uint8_t win_player{ 5 };
  	uint8_t win_reason;
@@ -910,17 +910,20 @@ diff -ruN core_a/field.h core_b/field.h
  	int32_t check_spsummon_once(card* pcard, uint8_t playerid);
  	void check_card_counter(card* pcard, ActivityType counter_type, int32_t playerid);
  	void check_card_counter(group* pgroup, ActivityType counter_type, int32_t playerid);
-@@ -579,6 +583,7 @@
+@@ -579,6 +583,10 @@
  	void calculate_battle_damage(effect** pdamchange, card** preason_card, std::array<bool, 2>* battle_destroyed);
  	int32_t break_effect(bool clear_sent = true);
  	void adjust_instant();
 +	void refresh_effect_conditions();
++	// the effects offered as options (core.select_effects / select_options, after
++	// the leading options without an effect) in public order: by description
++	void sort_select_options();
  	void adjust_all();
  	void refresh_location_info_instant();
  	void solve_continuous(uint8_t playerid, effect* peffect, const tevent& e);
 diff -ruN core_a/group.h core_b/group.h
 --- core_a/group.h	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/group.h	2026-10-05 15:24:47.041684014 +0200
++++ core_b/group.h	2026-10-06 13:04:11.481908951 +0200
 @@ -20,6 +20,8 @@
  public:
  	card_set container;
@@ -932,7 +935,7 @@ diff -ruN core_a/group.h core_b/group.h
  	
 diff -ruN core_a/interpreter.cpp core_b/interpreter.cpp
 --- core_a/interpreter.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/interpreter.cpp	2026-10-05 20:04:07.532307656 +0200
++++ core_b/interpreter.cpp	2026-10-06 13:04:11.481940580 +0200
 @@ -15,6 +15,7 @@
  #include "lua_obj.h"
  #include "group.h"
@@ -1062,7 +1065,7 @@ diff -ruN core_a/interpreter.cpp core_b/interpreter.cpp
  lua_Integer interpreter::get_operation_value(card* pcard, int32_t findex, int32_t extraargs) {
 diff -ruN core_a/libcard.cpp core_b/libcard.cpp
 --- core_a/libcard.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/libcard.cpp	2026-10-05 15:24:47.042018338 +0200
++++ core_b/libcard.cpp	2026-10-06 13:04:11.482111672 +0200
 @@ -116,6 +116,7 @@
  	return static_cast<int32_t>(setcodes.size());
  }
@@ -1304,7 +1307,7 @@ diff -ruN core_a/libcard.cpp core_b/libcard.cpp
  	if(countertype == 0)
 diff -ruN core_a/libduel.cpp core_b/libduel.cpp
 --- core_a/libduel.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/libduel.cpp	2026-10-05 15:24:47.042523921 +0200
++++ core_b/libduel.cpp	2026-10-06 13:04:11.482393608 +0200
 @@ -12,6 +12,7 @@
  #include "duel.h"
  #include "effect.h"
@@ -1469,7 +1472,7 @@ diff -ruN core_a/libduel.cpp core_b/libduel.cpp
  	return 0;
 diff -ruN core_a/libgroup.cpp core_b/libgroup.cpp
 --- core_a/libgroup.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/libgroup.cpp	2026-10-05 15:24:47.042963700 +0200
++++ core_b/libgroup.cpp	2026-10-06 13:04:11.482611376 +0200
 @@ -13,6 +13,7 @@
  #include "card.h"
  #include "duel.h"
@@ -1662,7 +1665,7 @@ diff -ruN core_a/libgroup.cpp core_b/libgroup.cpp
  	return 1;
 diff -ruN core_a/lua/luaconf-customize.h core_b/lua/luaconf-customize.h
 --- core_a/lua/luaconf-customize.h	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/lua/luaconf-customize.h	2026-10-05 15:24:47.043121878 +0200
++++ core_b/lua/luaconf-customize.h	2026-10-06 13:04:11.482687822 +0200
 @@ -5,3 +5,8 @@
  #if defined(__ANDROID__)
  #define lua_getlocaledecpoint() '.'
@@ -1674,7 +1677,7 @@ diff -ruN core_a/lua/luaconf-customize.h core_b/lua/luaconf-customize.h
 +
 diff -ruN core_a/meson.build core_b/meson.build
 --- core_a/meson.build	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/meson.build	2026-10-05 15:24:47.043179314 +0200
++++ core_b/meson.build	2026-10-06 13:04:11.482717054 +0200
 @@ -31,6 +31,7 @@
  	'libeffect.cpp',
  	'libgroup.cpp',
@@ -1685,7 +1688,7 @@ diff -ruN core_a/meson.build core_b/meson.build
  	'processor.cpp',
 diff -ruN core_a/ocgapi.cpp core_b/ocgapi.cpp
 --- core_a/ocgapi.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/ocgapi.cpp	2026-10-05 15:24:47.043257111 +0200
++++ core_b/ocgapi.cpp	2026-10-06 13:04:11.482755788 +0200
 @@ -111,6 +111,7 @@
  int OCG_DuelProcess(OCG_Duel ocg_duel) {
  	auto* pduel = static_cast<duel*>(ocg_duel);
@@ -1696,7 +1699,7 @@ diff -ruN core_a/ocgapi.cpp core_b/ocgapi.cpp
  		flag = pduel->game_field->process();
 diff -ruN core_a/operations.cpp core_b/operations.cpp
 --- core_a/operations.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/operations.cpp	2026-10-05 15:32:12.757945684 +0200
++++ core_b/operations.cpp	2026-10-06 23:32:49.713114107 +0200
 @@ -14,6 +14,7 @@
  #include "duel.h"
  #include "effect.h"
@@ -1751,7 +1754,31 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  				if(pcard->owner != pcard->current.controler) {
  					effect* deffect = pduel->new_effect();
  					deffect->owner = pcard;
-@@ -928,7 +929,7 @@
+@@ -732,6 +733,7 @@
+ 				core.select_effects.push_back(peffect);
+ 			}
+ 		}
++		sort_select_options();
+ 		if(core.select_options.size() == 0)
+ 			return TRUE;
+ 		if(core.select_options.size() == 1)
+@@ -802,6 +804,7 @@
+ 				core.select_effects.push_back(peffect);
+ 			}
+ 		}
++		sort_select_options();
+ 		returns.set<int32_t>(0, 0);
+ 		if(core.select_options.size() == 0)
+ 			return TRUE;
+@@ -885,6 +888,7 @@
+ 				core.select_effects.push_back(peffect);
+ 			}
+ 		}
++		sort_select_options();
+ 		returns.set<int32_t>(0, 0);
+ 		if(core.select_options.size() == 0)
+ 			return TRUE;
+@@ -928,7 +932,7 @@
  		core.select_cards.clear();
  		card_set cset;
  		get_overlay_group(rplayer, self, oppo, &cset, pgroup);
@@ -1760,7 +1787,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			core.select_cards.push_back(xcard);
  		auto message = pduel->new_message(MSG_HINT);
  		message->write<uint8_t>(HINT_SELECTMSG);
-@@ -954,14 +955,14 @@
+@@ -954,14 +958,14 @@
  	auto send_materials_to_grave = arg.send_materials_to_grave;
  	switch(arg.step) {
  	case 0: {
@@ -1777,7 +1804,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			to_grave.insert(pcard->xyz_materials.begin(), pcard->xyz_materials.end());
  		}
  		send_to(std::move(to_grave), nullptr, REASON_RULE + REASON_LOST_TARGET, PLAYER_NONE, PLAYER_NONE, LOCATION_GRAVE, 0, POS_FACEUP);
-@@ -974,14 +975,16 @@
+@@ -974,14 +978,16 @@
  		std::copy_if(materials->container.begin(), materials->container.end(), std::back_inserter(cv), [target](const card* pcard) { return pcard->overlay_target != target; });
  		if(!send_materials_to_grave) {
  			const auto prev_size = cv.size();
@@ -1797,7 +1824,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  		}
  		duel::duel_message* decktop[2] = { nullptr, nullptr };
  		const size_t s[2] = { player[0].list_main.size(), player[1].list_main.size() };
-@@ -1003,8 +1006,7 @@
+@@ -1003,8 +1009,7 @@
  				remove_unique_card(pcard);
  			if(pcard->equiping_target)
  				pcard->unequip();
@@ -1807,7 +1834,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  				des.insert(equipc);
  				equipc->unequip();
  			}
-@@ -1070,8 +1072,7 @@
+@@ -1070,8 +1075,7 @@
  	switch(arg.step) {
  	case 0: {
  		arg.destroy_set.clear();
@@ -1817,7 +1844,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			pcard->filter_disable_related_cards();
  			bool change = true;
  			if(pcard->overlay_target)
-@@ -1099,7 +1100,7 @@
+@@ -1099,7 +1103,7 @@
  		}
  		if((int32_t)targets->container.size() > fcount) {
  			core.select_cards.clear();
@@ -1826,7 +1853,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  				core.select_cards.push_back(pcard);
  			auto message = pduel->new_message(MSG_HINT);
  			message->write<uint8_t>(HINT_SELECTMSG);
-@@ -1118,37 +1119,36 @@
+@@ -1118,37 +1122,36 @@
  		return FALSE;
  	}
  	case 2: {
@@ -1871,7 +1898,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			if(!(pcard->current.location & LOCATION_ONFIELD)) {
  				targets->container.erase(pcard);
  				continue;
-@@ -1195,16 +1195,16 @@
+@@ -1195,16 +1198,16 @@
  			return FALSE;
  		if(targets1->container.size() != targets2->container.size())
  			return FALSE;
@@ -1891,7 +1918,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			if(pcard->overlay_target)
  				return FALSE;
  			if(pcard->current.controler != p1)
-@@ -1216,7 +1216,7 @@
+@@ -1216,7 +1219,7 @@
  			if((reason_effect && !pcard->is_affect_by_effect(reason_effect)))
  				return FALSE;
  		}
@@ -1900,7 +1927,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			if(pcard->overlay_target)
  				return FALSE;
  			if(pcard->current.controler != p2)
-@@ -1229,44 +1229,44 @@
+@@ -1229,44 +1232,44 @@
  				return FALSE;
  		}
  		int32_t ct = get_useable_count(nullptr, p1, LOCATION_MZONE, reason_player, LOCATION_REASON::CONTROL);
@@ -1954,7 +1981,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  		auto message = pduel->new_message(MSG_HINT);
  		message->write<uint8_t>(HINT_SELECTMSG);
  		message->write<uint8_t>(p1);
-@@ -1276,13 +1276,13 @@
+@@ -1276,13 +1279,13 @@
  	}
  	case 2: {
  		arg.self_selected_sequence = returns.at<int8_t>(2);
@@ -1970,7 +1997,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  		auto message = pduel->new_message(MSG_HINT);
  		message->write<uint8_t>(HINT_SELECTMSG);
  		message->write<uint8_t>(p2);
-@@ -1291,8 +1291,8 @@
+@@ -1291,8 +1294,8 @@
  		return FALSE;
  	}
  	case 3: {
@@ -1981,7 +2008,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  		uint8_t p1 = pcard1->current.controler, p2 = pcard2->current.controler;
  		uint8_t new_s1 = arg.self_selected_sequence;
  		uint8_t new_s2 = returns.at<int8_t>(2);
-@@ -1303,14 +1303,14 @@
+@@ -1303,14 +1306,14 @@
  		set_control(pcard2, p1, reset_phase, reset_count);
  		pcard1->set_status(STATUS_ATTACK_CANCELED, TRUE);
  		pcard2->set_status(STATUS_ATTACK_CANCELED, TRUE);
@@ -1999,7 +2026,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			pcard->filter_disable_related_cards();
  			if(pcard->unique_code && (pcard->unique_location & LOCATION_MZONE))
  				add_unique_card(pcard);
-@@ -1405,9 +1405,12 @@
+@@ -1405,9 +1408,12 @@
  			if(pcard->unique_code && (pcard->unique_location & LOCATION_MZONE))
  				remove_unique_card(pcard);
  		}
@@ -2015,7 +2042,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			card* pcard1 = *cit1++;
  			card* pcard2 = *cit2++;
  			swap_card(pcard1, pcard2);
-@@ -1416,17 +1419,16 @@
+@@ -1416,17 +1422,16 @@
  		}
  		auto& adjust_set = arg.adjust_set;
  		adjust_set.clear();
@@ -2037,7 +2064,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  		pcard->reset(RESET_CONTROL, RESET_EVENT);
  		move_to_field(pcard, 1 - pcard->current.controler, 1 - pcard->current.controler, LOCATION_MZONE, pcard->current.position);
  		arg.step = 2;
-@@ -1434,8 +1436,7 @@
+@@ -1434,8 +1439,7 @@
  	}
  	case 4: {
  		core.control_adjust_set[0].insert(core.control_adjust_set[1].begin(), core.control_adjust_set[1].end());
@@ -2047,7 +2074,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			if(!(pcard->current.location & LOCATION_ONFIELD)) {
  				core.control_adjust_set[0].erase(pcard);
  				continue;
-@@ -1481,27 +1482,27 @@
+@@ -1481,27 +1485,27 @@
  			unique_card->unique_fieldid = (*cit)->fieldid;
  		} else {
  			core.select_cards.clear();
@@ -2079,7 +2106,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  					if(pcard->current.controler == playerid)
  						core.select_cards.push_back(pcard);
  				}
-@@ -1527,7 +1528,7 @@
+@@ -1527,7 +1531,7 @@
  		card* mcard = return_cards.list.front();
  		unique_card->unique_fieldid = mcard->fieldid;
  		cset.erase(mcard);
@@ -2088,7 +2115,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			pcard->temp.reason_effect = pcard->current.reason_effect;
  			pcard->temp.reason_player = pcard->current.reason_player;
  			pcard->current.reason_effect = unique_card->unique_effect;
-@@ -1548,8 +1549,7 @@
+@@ -1548,8 +1552,7 @@
  	case 0: {
  		if(core.self_destroy_set.empty())
  			return FALSE;
@@ -2098,7 +2125,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  		effect* peffect = pcard->is_affected_by_effect(EFFECT_SELF_DESTROY);
  		if(peffect) {
  			pcard->temp.reason_effect = pcard->current.reason_effect;
-@@ -1558,7 +1558,7 @@
+@@ -1558,7 +1561,7 @@
  			pcard->current.reason_player = peffect->get_handler_player();
  			destroy(pcard, peffect, REASON_EFFECT, PLAYER_SELFDES);
  		}
@@ -2107,7 +2134,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  		arg.step = Processors::restart;
  		return FALSE;
  	}
-@@ -1575,8 +1575,7 @@
+@@ -1575,8 +1578,7 @@
  	case 0: {
  		if(core.self_tograve_set.empty())
  			return FALSE;
@@ -2117,7 +2144,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  		effect* peffect = pcard->is_affected_by_effect(EFFECT_SELF_TOGRAVE);
  		if(peffect) {
  			pcard->temp.reason_effect = pcard->current.reason_effect;
-@@ -1585,7 +1584,7 @@
+@@ -1585,7 +1587,7 @@
  			pcard->current.reason_player = peffect->get_handler_player();
  			send_to(pcard, nullptr, REASON_EFFECT, PLAYER_NONE, PLAYER_NONE, LOCATION_GRAVE, 0, POS_FACEUP);
  		}
@@ -2126,7 +2153,23 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  		arg.step = Processors::restart;
  		return FALSE;
  	}
-@@ -2089,7 +2088,7 @@
+@@ -1818,6 +1820,7 @@
+ 					core.select_effects.push_back(peff);
+ 					core.select_options.push_back(peff->description);
+ 				}
++				sort_select_options();
+ 				if(core.select_options.empty())
+ 					return TRUE;
+ 				if(core.select_options.size() == 1)
+@@ -1896,6 +1899,7 @@
+ 				core.select_options.push_back(peff->description);
+ 			}
+ 		}
++		sort_select_options();
+ 		if(core.select_options.size() == 1)
+ 			returns.set<int32_t>(0, 0);
+ 		else
+@@ -2089,7 +2093,7 @@
  		target->summon.type = SUMMON_TYPE_NORMAL;
  		target->summon.pzone = false;
  		if(!tributes.empty()) {
@@ -2135,7 +2178,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  				pcard->current.reason_card = target;
  			target->set_material(tributes);
  			release(std::move(tributes), nullptr, REASON_SUMMON | REASON_MATERIAL, sumplayer);
-@@ -2246,7 +2245,7 @@
+@@ -2246,7 +2250,7 @@
  			check_card_counter(target, ACTIVITY_NORMALSUMMON, sumplayer);
  		}
  		if (target->material_cards.size()) {
@@ -2144,7 +2187,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  				raise_single_event(mcard, nullptr, EVENT_BE_PRE_MATERIAL, summon_procedure_effect, REASON_SUMMON, sumplayer, sumplayer, 0);
  			raise_event(target->material_cards, EVENT_BE_PRE_MATERIAL, summon_procedure_effect, REASON_SUMMON, sumplayer, sumplayer, 0);
  		}
-@@ -2309,7 +2308,7 @@
+@@ -2309,7 +2313,7 @@
  		pduel->new_message(MSG_SUMMONED);
  		adjust_instant();
  		if(target->material_cards.size()) {
@@ -2153,7 +2196,23 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  				raise_single_event(mcard, nullptr, EVENT_BE_MATERIAL, summon_procedure_effect, REASON_SUMMON, sumplayer, sumplayer, 0);
  			raise_event(target->material_cards, EVENT_BE_MATERIAL, summon_procedure_effect, REASON_SUMMON, sumplayer, sumplayer, 0);
  		}
-@@ -2628,7 +2627,7 @@
+@@ -2464,6 +2468,7 @@
+ 				core.select_effects.push_back(peff);
+ 				core.select_options.push_back(peff->description);
+ 			}
++			sort_select_options();
+ 			if(core.select_options.size() == 1)
+ 				returns.set<int32_t>(0, 0);
+ 			else
+@@ -2525,6 +2530,7 @@
+ 				core.select_options.push_back(peff->description);
+ 			}
+ 		}
++		sort_select_options();
+ 		if(core.select_options.size() == 1)
+ 			returns.set<int32_t>(0, 0);
+ 		else
+@@ -2628,7 +2634,7 @@
  		target->summon.pzone = false;
  		target->summon.type = SUMMON_TYPE_NORMAL;
  		if(!tributes.empty()) {
@@ -2162,7 +2221,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  				pcard->current.reason_card = target;
  			target->set_material(tributes);
  			release(std::move(tributes), nullptr, REASON_SUMMON | REASON_MATERIAL, setplayer);
-@@ -2826,7 +2825,7 @@
+@@ -2826,7 +2832,7 @@
  	switch(arg.step) {
  	case 0: {
  		core.operated_set.clear();
@@ -2171,7 +2230,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			if((!(target->data.type & TYPE_FIELD) && get_useable_count(target, toplayer, LOCATION_SZONE, setplayer, LOCATION_REASON::TOFIELD) <= 0)
  				|| (target->data.type & TYPE_MONSTER && !target->is_affected_by_effect(EFFECT_MONSTER_SSET))
  				|| (target->current.location == LOCATION_SZONE)
-@@ -2841,7 +2840,7 @@
+@@ -2841,7 +2847,7 @@
  			return TRUE;
  		}
  		effect_set eset;
@@ -2180,7 +2239,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			eset.clear();
  			pcard->filter_effect(EFFECT_SSET_COST, &eset);
  			for(const auto& peff : eset) {
-@@ -2853,12 +2852,13 @@
+@@ -2853,12 +2859,13 @@
  		}
  		core.set_group_pre_set.clear();
  		core.set_group_set.clear();
@@ -2195,7 +2254,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  		if(target->data.type & TYPE_FIELD) {
  			returns.set<int8_t>(2, 5);
  			return FALSE;
-@@ -2880,9 +2880,10 @@
+@@ -2880,9 +2887,10 @@
  		return FALSE;
  	}
  	case 2: {
@@ -2207,7 +2266,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  		core.set_group_pre_set.insert(target);
  		core.set_group_used_zones |= (1 << seq);
  		set_cards.erase(target);
-@@ -2891,7 +2892,8 @@
+@@ -2891,7 +2899,8 @@
  		return FALSE;
  	}
  	case 3: {
@@ -2217,7 +2276,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  		target->enable_field_effect(false);
  		uint32_t zone{};
  		if(target->data.type & TYPE_FIELD) {
-@@ -2909,7 +2911,7 @@
+@@ -2909,7 +2918,7 @@
  		return FALSE;
  	}
  	case 4: {
@@ -2226,7 +2285,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  		target->set_status(STATUS_SET_TURN, TRUE);
  		if(target->data.type & TYPE_MONSTER) {
  			effect* peffect = target->is_affected_by_effect(EFFECT_MONSTER_SSET);
-@@ -2933,10 +2935,14 @@
+@@ -2933,10 +2942,14 @@
  	}
  	case 5: {
  		if(confirm) {
@@ -2243,7 +2302,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  				message->write<uint32_t>(pcard->data.code);
  				message->write<uint8_t>(pcard->current.controler);
  				message->write<uint8_t>(pcard->current.location);
-@@ -2947,7 +2953,7 @@
+@@ -2947,7 +2960,7 @@
  	}
  	case 6: {
  		core.operated_set.clear();
@@ -2252,7 +2311,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			core.operated_set.insert(pcard);
  		}
  		uint8_t ct = static_cast<uint8_t>(core.operated_set.size());
-@@ -2958,18 +2964,28 @@
+@@ -2958,18 +2971,28 @@
  		auto message = pduel->new_message(MSG_SHUFFLE_SET_CARD);
  		message->write<uint8_t>(LOCATION_SZONE);
  		message->write<uint8_t>(ct);
@@ -2285,7 +2344,15 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  		return FALSE;
  	}
  	case 7: {
-@@ -3159,7 +3175,7 @@
+@@ -3015,6 +3038,7 @@
+ 			core.select_effects.push_back(peff);
+ 			core.select_options.push_back(peff->description);
+ 		}
++		sort_select_options();
+ 		if(core.select_options.size() == 1)
+ 			returns.set<int32_t>(0, 0);
+ 		else
+@@ -3159,7 +3183,7 @@
  		else if(proc->value == SUMMON_TYPE_LINK)
  			matreason = REASON_LINK;
  		if (target->material_cards.size()) {
@@ -2294,7 +2361,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  				raise_single_event(mcard, nullptr, EVENT_BE_PRE_MATERIAL, proc, matreason, sumplayer, sumplayer, 0);
  		}
  		raise_event(target->material_cards, EVENT_BE_PRE_MATERIAL, proc, matreason, sumplayer, sumplayer, 0);
-@@ -3231,7 +3247,7 @@
+@@ -3231,7 +3255,7 @@
  		else if(proc->value == SUMMON_TYPE_LINK)
  			matreason = REASON_LINK;
  		if(target->material_cards.size()) {
@@ -2303,7 +2370,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  				raise_single_event(mcard, nullptr, EVENT_BE_MATERIAL, proc, matreason, sumplayer, sumplayer, 0);
  		}
  		raise_event(target->material_cards, EVENT_BE_MATERIAL, proc, matreason, sumplayer, sumplayer, 0);
-@@ -3272,8 +3288,7 @@
+@@ -3272,8 +3296,7 @@
  	}
  	case 21: {
  		auto pgroup = arg.cards_to_summon_g;
@@ -2313,7 +2380,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			if(!(pcard->data.type & TYPE_MONSTER)
  				|| (pcard->current.location == LOCATION_MZONE)
  				|| check_unique_onfield(pcard, sumplayer, LOCATION_MZONE)
-@@ -3297,13 +3312,14 @@
+@@ -3297,13 +3320,14 @@
  		if(pgroup->container.size() == 0)
  			return TRUE;
  		core.phase_action = true;
@@ -2330,7 +2397,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  		pcard->enable_field_effect(false);
  		pcard->current.reason = REASON_SPSUMMON;
  		pcard->current.reason_effect = proc;
-@@ -3338,8 +3354,8 @@
+@@ -3338,8 +3362,8 @@
  		uint32_t flag1, flag2;
  		int32_t ct1 = get_tofield_count(pcard, sumplayer, LOCATION_MZONE, sumplayer, LOCATION_REASON::TOFIELD, zone, &flag1);
  		int32_t ct2 = get_spsummonable_count_fromex(pcard, sumplayer, sumplayer, zone, &flag2);
@@ -2341,7 +2408,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  				--ct1;
  			else
  				--ct2;
-@@ -3356,7 +3372,7 @@
+@@ -3356,7 +3380,7 @@
  	}
  	case 24: {
  		auto pgroup = arg.cards_to_summon_g;
@@ -2350,7 +2417,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  		auto message = pduel->new_message(MSG_SPSUMMONING);
  		if((pcard->current.position & POS_FACEDOWN) == 0) {
  			message->write<uint32_t>(pcard->data.code);
-@@ -3366,7 +3382,7 @@
+@@ -3366,7 +3390,7 @@
  		message->write(pcard->get_info_location());
  		set_control(pcard, pcard->current.controler, 0, 0);
  		pcard->set_status(STATUS_SPSUMMON_STEP, TRUE);
@@ -2359,7 +2426,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			arg.step = 22;
  		return FALSE;
  	}
-@@ -3377,7 +3393,7 @@
+@@ -3377,7 +3401,7 @@
  		}
  		if(is_flag(DUEL_SPSUMMON_ONCE_OLD_NEGATE)) {
  			std::set<uint32_t> spsummon_once_set;
@@ -2368,7 +2435,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  				if(pcard->spsummon_code)
  					spsummon_once_set.insert(pcard->spsummon_code);
  			}
-@@ -3386,7 +3402,7 @@
+@@ -3386,7 +3410,7 @@
  		}
  		if(core.current_chain.size() == 0) {
  			card_set cset;
@@ -2377,7 +2444,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  				pcard->set_status(STATUS_SUMMONING, TRUE);
  				pcard->set_status(STATUS_SPSUMMON_STEP, FALSE);
  				if(!pcard->is_affected_by_effect(EFFECT_CANNOT_DISABLE_SPSUMMON)) {
-@@ -3399,7 +3415,7 @@
+@@ -3399,7 +3423,7 @@
  				emplace_process<Processors::PointEvent>(true, true, true);
  			}
  		} else {
@@ -2386,7 +2453,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  				pcard->set_status(STATUS_SPSUMMON_STEP, FALSE);
  			arg.step = 26;
  		}
-@@ -3408,8 +3424,7 @@
+@@ -3408,8 +3432,7 @@
  	case 26: {
  		auto pgroup = arg.cards_to_summon_g;
  		card_set cset;
@@ -2396,7 +2463,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			if(!pcard->is_status(STATUS_SUMMONING)) {
  				pgroup->container.erase(pcard);
  				if(pcard->current.location == LOCATION_MZONE)
-@@ -3440,7 +3455,7 @@
+@@ -3440,7 +3463,7 @@
  		release_oath_relation(arg.summon_proc_effect);
  		for(const auto& peffect : arg.spsummon_cost_effects)
  			release_oath_relation(peffect);
@@ -2405,7 +2472,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			pcard->set_status(STATUS_SUMMONING, FALSE);
  			pcard->set_status(STATUS_SPSUMMON_TURN, TRUE);
  			pcard->enable_field_effect(true);
-@@ -3458,14 +3473,14 @@
+@@ -3458,14 +3481,14 @@
  		}
  		if(!is_flag(DUEL_SPSUMMON_ONCE_OLD_NEGATE)) {
  			std::set<uint32_t> spsummon_once_set;
@@ -2422,7 +2489,15 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			raise_single_event(pcard, nullptr, EVENT_SPSUMMON_SUCCESS, pcard->current.reason_effect, 0, pcard->current.reason_player, pcard->summon.player, 0);
  		process_single_event();
  		raise_event(pgroup->container, EVENT_SPSUMMON_SUCCESS, arg.summon_proc_effect, 0, sumplayer, sumplayer, 0);
-@@ -3599,7 +3614,7 @@
+@@ -3513,6 +3536,7 @@
+ 			core.reason_effect = oreason;
+ 			core.reason_player = op;
+ 		}
++		sort_select_options();
+ 		if(core.select_options.empty())
+ 			return TRUE;
+ 		if(core.select_options.size() == 1)
+@@ -3599,7 +3623,7 @@
  			uint32_t flag1, flag2;
  			int32_t ct1 = get_tofield_count(target, playerid, LOCATION_MZONE, target->summon.player, LOCATION_REASON::TOFIELD, zone, &flag1);
  			int32_t ct2 = get_spsummonable_count_fromex(target, playerid, target->summon.player, zone, &flag2);
@@ -2431,7 +2506,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  				if(pcard->current.location == LOCATION_MZONE)
  					continue;
  				if(pcard->current.location != LOCATION_EXTRA)
-@@ -3657,7 +3672,7 @@
+@@ -3657,7 +3681,7 @@
  	switch(arg.step) {
  	case 0: {
  		card_vector cvs, cvo;
@@ -2440,7 +2515,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			if(pcard->summon.player == infos.turn_player)
  				cvs.push_back(pcard);
  			else
-@@ -3665,14 +3680,14 @@
+@@ -3665,14 +3689,14 @@
  		}
  		if(!cvs.empty()) {
  			if(cvs.size() > 1)
@@ -2457,7 +2532,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			core.hint_timing[1 - infos.turn_player] |= TIMING_SPSUMMON;
  			for(auto& pcard : cvo)
  				emplace_process<Processors::SpSummonStep>(targets, pcard, zone);
-@@ -3693,7 +3708,7 @@
+@@ -3693,7 +3717,7 @@
  		}
  		bool tp = false, ntp = false;
  		std::set<uint32_t> spsummon_once_set[2];
@@ -2466,7 +2541,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			if(pcard->summon.player == infos.turn_player)
  				tp = true;
  			else
-@@ -3709,7 +3724,7 @@
+@@ -3709,7 +3733,7 @@
  			++core.spsummon_once_map[0][cit];
  		for(auto& cit : spsummon_once_set[1])
  			++core.spsummon_once_map[1][cit];
@@ -2475,7 +2550,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			pcard->set_status(STATUS_SPSUMMON_STEP, FALSE);
  			pcard->set_status(STATUS_SPSUMMON_TURN, TRUE);
  			if(pcard->is_position(POS_FACEUP))
-@@ -3720,7 +3735,7 @@
+@@ -3720,7 +3744,7 @@
  	}
  	case 3: {
  		pduel->new_message(MSG_SPSUMMONED);
@@ -2484,7 +2559,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			if(!is_flag(DUEL_CANNOT_SUMMON_OATH_OLD)) {
  				check_card_counter(pcard, ACTIVITY_SPSUMMON, pcard->summon.player);
  			}
-@@ -3737,7 +3752,7 @@
+@@ -3737,7 +3761,7 @@
  					matreason = REASON_XYZ;
  				else if(summontype == SUMMON_TYPE_LINK)
  					matreason = REASON_LINK;
@@ -2493,7 +2568,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  					raise_single_event(mcard, &targets->container, EVENT_BE_MATERIAL, pcard->current.reason_effect, matreason, pcard->current.reason_player, pcard->summon.player, 0);
  				raise_event(pcard->material_cards, EVENT_BE_MATERIAL, reason_effect, matreason, reason_player, pcard->summon.player, 0);
  			}
-@@ -3798,9 +3813,8 @@
+@@ -3798,9 +3822,8 @@
  		effect_set eset;
  		card_set indestructable_set;
  		std::set<effect*, effect_sort_by_id> indestructable_effect_set;
@@ -2505,7 +2580,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			if(!pcard->is_destructable()) {
  				indestructable_set.insert(pcard);
  				continue;
-@@ -3897,14 +3911,14 @@
+@@ -3897,14 +3920,14 @@
  				}
  			}
  		}
@@ -2522,7 +2597,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			if(!targets->has_card(rep)) {
  				rep->temp.reason = rep->current.reason;
  				rep->temp.reason_effect = rep->current.reason_effect;
-@@ -3927,13 +3941,13 @@
+@@ -3927,13 +3950,13 @@
  		return FALSE;
  	}
  	case 1: {
@@ -2538,7 +2613,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			pcard->set_status(STATUS_DESTROY_CONFIRMED, FALSE);
  		core.destroy_canceled.clear();
  		return FALSE;
-@@ -3946,7 +3960,7 @@
+@@ -3946,7 +3969,7 @@
  		}
  		card_vector cv(targets->container.begin(), targets->container.end());
  		if(cv.size() > 1)
@@ -2547,7 +2622,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  		for (auto& pcard : cv) {
  			if(pcard->current.location & (LOCATION_GRAVE | LOCATION_REMOVED)) {
  				pcard->current.reason = pcard->temp.reason;
-@@ -3968,7 +3982,7 @@
+@@ -3968,7 +3991,7 @@
  	case 4: {
  		auto sendtargets = pduel->new_group(targets->container);
  		sendtargets->is_readonly = true;
@@ -2556,7 +2631,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			pcard->set_status(STATUS_DESTROY_CONFIRMED, FALSE);
  			uint32_t dest = pcard->sendto_param.location;
  			if(!dest)
-@@ -3997,9 +4011,8 @@
+@@ -3997,9 +4020,8 @@
  	}
  	case 10: {
  		effect_set eset;
@@ -2568,7 +2643,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			if(!pcard->is_destructable()) {
  				pcard->current.reason = pcard->temp.reason;
  				pcard->current.reason_effect = pcard->temp.reason_effect;
-@@ -4107,13 +4120,13 @@
+@@ -4107,13 +4129,13 @@
  		return FALSE;
  	}
  	case 11: {
@@ -2584,7 +2659,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			pcard->set_status(STATUS_DESTROY_CONFIRMED, FALSE);
  		core.destroy_canceled.clear();
  		return TRUE;
-@@ -4149,9 +4162,8 @@
+@@ -4149,9 +4171,8 @@
  	auto reason_player = arg.reason_player;
  	switch(arg.step) {
  	case 0: {
@@ -2596,7 +2671,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			if(pcard->get_status(STATUS_SUMMONING | STATUS_SPSUMMON_STEP)
  				|| ((reason & REASON_SUMMON) && !pcard->is_releasable_by_summon(reason_player, pcard->current.reason_card))
  				|| (!(pcard->current.reason & (REASON_RULE | REASON_SUMMON | REASON_COST))
-@@ -4159,7 +4171,7 @@
+@@ -4159,7 +4180,7 @@
  				pcard->current.reason = pcard->temp.reason;
  				pcard->current.reason_effect = pcard->temp.reason_effect;
  				pcard->current.reason_player = pcard->temp.reason_player;
@@ -2605,7 +2680,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  				continue;
  			}
  		}
-@@ -4169,7 +4181,7 @@
+@@ -4169,7 +4190,7 @@
  		return FALSE;
  	}
  	case 1: {
@@ -2614,7 +2689,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			emplace_process<Processors::ReleaseReplace>(targets, pcard);
  		}
  		return FALSE;
-@@ -4182,7 +4194,7 @@
+@@ -4182,7 +4203,7 @@
  		}
  		card_vector cv(targets->container.begin(), targets->container.end());
  		if(cv.size() > 1)
@@ -2623,7 +2698,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  		for (auto& pcard : cv) {
  			if(pcard->current.location & (LOCATION_GRAVE | LOCATION_REMOVED)) {
  				pcard->current.reason = pcard->temp.reason;
-@@ -4251,9 +4263,8 @@
+@@ -4251,9 +4272,8 @@
  	auto reason_player = arg.reason_player;
  	switch(arg.step) {
  	case 0: {
@@ -2635,7 +2710,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			uint8_t dest = pcard->sendto_param.location;
  			if(!(reason & REASON_RULE) &&
  				(pcard->get_status(STATUS_SUMMONING | STATUS_SPSUMMON_STEP)
-@@ -4266,7 +4277,7 @@
+@@ -4266,7 +4286,7 @@
  				pcard->current.reason = pcard->temp.reason;
  				pcard->current.reason_player = pcard->temp.reason_player;
  				pcard->current.reason_effect = pcard->temp.reason_effect;
@@ -2644,7 +2719,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  				continue;
  			}
  		}
-@@ -4276,7 +4287,7 @@
+@@ -4276,7 +4296,7 @@
  		return FALSE;
  	}
  	case 1: {
@@ -2653,7 +2728,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			emplace_process<Processors::SendToReplace>(targets, pcard);
  		}
  		return FALSE;
-@@ -4288,7 +4299,7 @@
+@@ -4288,7 +4308,7 @@
  			return TRUE;
  		}
  		card_set leave_p, destroying;
@@ -2662,7 +2737,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			if((pcard->current.location & LOCATION_ONFIELD) && !pcard->is_status(STATUS_SUMMON_DISABLED) && !pcard->is_status(STATUS_ACTIVATE_DISABLED)) {
  				raise_single_event(pcard, nullptr, EVENT_LEAVE_FIELD_P, pcard->current.reason_effect, pcard->current.reason, pcard->current.reason_player, 0, 0);
  				leave_p.insert(pcard);
-@@ -4343,10 +4354,10 @@
+@@ -4343,10 +4363,10 @@
  	}
  	case 3: {
  		uint32_t dest, redirect, redirect_seq, check_cb;
@@ -2675,7 +2750,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			dest = pcard->sendto_param.location;
  			redirect = 0;
  			redirect_seq = 0;
-@@ -4393,7 +4404,7 @@
+@@ -4393,7 +4413,7 @@
  		param->check_decktop_visibility[1] = false;
  		param->cv.assign(targets->container.begin(), targets->container.end());
  		if(param->cv.size() > 1)
@@ -2684,7 +2759,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  		if(core.global_flag & GLOBALFLAG_DECK_REVERSE_CHECK) {
  			int32_t d0 = static_cast<int32_t>(player[0].list_main.size() - 1), s0 = d0;
  			int32_t d1 = static_cast<int32_t>(player[1].list_main.size() - 1), s1 = d1;
-@@ -4600,7 +4611,7 @@
+@@ -4600,7 +4620,7 @@
  			check_decktop(0);
  			check_decktop(1);
  		}
@@ -2693,7 +2768,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			if(!(pcard->data.type & TYPE_TOKEN))
  				pcard->enable_field_effect(true);
  			uint8_t nloc = pcard->current.location;
-@@ -4618,12 +4629,14 @@
+@@ -4618,12 +4638,14 @@
  			}
  			pcard->refresh_disable_status();
  		}
@@ -2711,7 +2786,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  				if(pcard->current.location & LOCATION_MZONE)
  					raise_single_event(pcard, nullptr, EVENT_DETACH_MATERIAL, reason_effect, reason, reason_player, 0, 0);
  			}
-@@ -4642,13 +4655,12 @@
+@@ -4642,13 +4664,12 @@
  	case 10: {
  		card_set tohand, todeck, tograve, remove, discard, released, destroyed;
  		card_set equipings, overlays;
@@ -2727,7 +2802,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  					equipc->unequip();
  					if(equipc->current.location == LOCATION_SZONE)
  						equipings.insert(equipc);
-@@ -5087,9 +5099,8 @@
+@@ -5087,9 +5108,8 @@
  		if((target->current.location != LOCATION_MZONE)) {
  			if(target->equiping_cards.size()) {
  				destroy(target->equiping_cards, nullptr, REASON_LOST_TARGET + REASON_RULE, PLAYER_NONE);
@@ -2739,7 +2814,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  				}
  			}
  			if(target->xyz_materials.size()) {
-@@ -5200,8 +5211,7 @@
+@@ -5200,8 +5220,7 @@
  	auto enable = arg.enable;
  	switch(arg.step) {
  	case 0: {
@@ -2749,7 +2824,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			uint8_t npos = pcard->position_param & 0xff;
  			uint8_t opos = pcard->current.position;
  			if((pcard->current.location != LOCATION_MZONE && pcard->current.location != LOCATION_SZONE)
-@@ -5237,7 +5247,7 @@
+@@ -5237,7 +5256,7 @@
  		if(arg.oppo_selection)
  			playerid = 1 - reason_player;
  		card_set ssets;
@@ -2758,7 +2833,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			uint8_t npos = pcard->position_param & 0xff;
  			uint8_t opos = pcard->current.position;
  			if((opos & POS_FACEUP) && (npos & POS_FACEDOWN)) {
-@@ -5252,14 +5262,14 @@
+@@ -5252,14 +5271,14 @@
  			refresh_location_info_instant();
  			int32_t fcount = get_useable_count(nullptr, playerid, LOCATION_SZONE, playerid, LOCATION_REASON::NONE);
  			if(fcount <= 0) {
@@ -2775,7 +2850,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  					core.select_cards.push_back(pcard);
  				uint32_t ct = (uint32_t)ssets.size() - fcount;
  				auto message = pduel->new_message(MSG_HINT);
-@@ -5293,7 +5303,7 @@
+@@ -5293,7 +5312,7 @@
  		card_set pos_changed;
  		card_vector cv(targets->container.begin(), targets->container.end());
  		if(cv.size() > 1)
@@ -2784,7 +2859,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  		for(auto& pcard : cv) {
  			uint8_t npos = pcard->position_param & 0xff;
  			uint8_t opos = pcard->current.position;
-@@ -5351,10 +5361,9 @@
+@@ -5351,10 +5370,9 @@
  				pcard->spsummon_counter_rst[0] = pcard->spsummon_counter_rst[1] = 0;
  			}
  			if((npos & POS_FACEDOWN) && pcard->equiping_cards.size()) {
@@ -2798,7 +2873,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  				}
  			}
  			if((npos & POS_FACEDOWN) && pcard->equiping_target)
-@@ -5488,15 +5497,14 @@
+@@ -5488,15 +5506,14 @@
  	}
  	case 6: {
  		if(returns.at<int32_t>(0)) {
@@ -2821,7 +2896,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  				}
  			}
  			replace_effect->dec_count(replace_effect->get_handler_player());
-@@ -5591,15 +5599,14 @@
+@@ -5591,15 +5608,14 @@
  	}
  	case 13: {
  		if(returns.at<int32_t>(0)) {
@@ -2844,7 +2919,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  				}
  			}
  			replace_effect->dec_count(replace_effect->get_handler_player());
-@@ -5686,7 +5693,7 @@
+@@ -5686,7 +5702,7 @@
  			ct = get_useable_count(to_check, toplayer, LOCATION_MZONE, playerid, LOCATION_REASON::TOFIELD, zone);
  			if(ct < min) {
  				arg.must_choose_one = std::make_unique<card_set>();
@@ -2853,7 +2928,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  					if((pcard->current.location == LOCATION_MZONE && pcard->current.controler == toplayer && ((zone >> pcard->current.sequence) & 1)))
  						arg.must_choose_one->insert(pcard);
  				}
-@@ -5744,14 +5751,14 @@
+@@ -5744,14 +5760,14 @@
  
  		auto& must_choose = arg.must_choose_one;
  		uint32_t to_select = 0;
@@ -2870,7 +2945,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  				if(must_choose->find(pcard) != must_choose->end()) {
  					must_chosen = TRUE;
  					break;
-@@ -5846,14 +5853,14 @@
+@@ -5846,14 +5862,14 @@
  			message->write<uint64_t>(500);
  			if(core.release_cards_ex.size() + core.release_cards_ex_oneof.size() == 0) {
  				core.select_cards.clear();
@@ -2887,7 +2962,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  					core.select_cards.push_back(pcard);
  				emplace_process<Processors::SelectTributeP>(playerid, cancelable, min, max);
  				return TRUE;
-@@ -5866,7 +5873,7 @@
+@@ -5866,7 +5882,7 @@
  		zone &= (0x1f & get_forced_zones(target, toplayer, LOCATION_MZONE, playerid, LOCATION_REASON::TOFIELD));
  		int32_t ct = get_tofield_count(target, toplayer, LOCATION_MZONE, playerid, LOCATION_REASON::TOFIELD, zone);
  		card_set must_choose_one;
@@ -2896,7 +2971,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			if((pcard->current.location == LOCATION_MZONE && pcard->current.controler == toplayer && ((zone >> pcard->current.sequence) & 1)))
  				if(ct <= 0)
  					must_choose_one.insert(pcard);
-@@ -5879,7 +5886,7 @@
+@@ -5879,7 +5895,7 @@
  		if(core.release_cards_ex.empty() && core.release_cards_ex_oneof.empty() && min > rmax) {
  			if(rmax > 0) {
  				core.select_cards.clear();
@@ -2905,7 +2980,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  					core.select_cards.push_back(pcard);
  			}
  			emplace_process<Processors::SelectTributeP>(playerid, cancelable, min, max);
-@@ -5896,19 +5903,19 @@
+@@ -5896,19 +5912,19 @@
  				++it;
  		}
  		if(max - core.release_cards_ex.size() == 1 && force) {
@@ -2931,7 +3006,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  				core.select_cards.push_back(pcard);
  		}
  		emplace_process<Processors::SelectUnselectCard>(playerid, cancelable, min, max, false);
-@@ -5919,7 +5926,7 @@
+@@ -5919,7 +5935,7 @@
  	case 2: {
  		uint32_t rmin = static_cast<uint32_t>(core.operated_set.size());
  		uint32_t rmax = 0;
@@ -2940,7 +3015,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			rmax += pcard->release_param;
  		auto oldmin = min;
  		auto oldmax = max;
-@@ -5934,45 +5941,45 @@
+@@ -5934,45 +5950,45 @@
  			max -= rmin;
  		auto& must_choose_one = arg.must_choose_one;
  		bool force = !must_choose_one.empty();
@@ -2996,7 +3071,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			core.unselect_cards.push_back(pcard);
  		auto message = pduel->new_message(MSG_HINT);
  		message->write<uint8_t>(HINT_SELECTMSG);
-@@ -5998,7 +6005,7 @@
+@@ -5998,7 +6014,7 @@
  		}
  		uint32_t rmin = static_cast<uint32_t>(core.operated_set.size());
  		uint32_t rmax = 0;
@@ -3005,7 +3080,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			rmax += pcard->release_param;
  		if(rmax > min)
  			min = 0;
-@@ -6066,7 +6073,7 @@
+@@ -6066,7 +6082,7 @@
  		message->write<uint8_t>(count);
  		core.coin_results.reserve(count);
  		for(int32_t i = 0; i < count; ++i) {
@@ -3014,7 +3089,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			core.coin_results.push_back(static_cast<bool>(coin));
  			message->write<uint8_t>(coin);
  		}
-@@ -6143,7 +6150,7 @@
+@@ -6143,7 +6159,7 @@
  		message->write<uint8_t>(playerid);
  		message->write<uint8_t>(count1);
  		for(int32_t i = 0; i < count1; ++i) {
@@ -3023,7 +3098,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			core.dice_results.push_back(dice);
  			message->write<uint8_t>(dice);
  		}
-@@ -6152,7 +6159,7 @@
+@@ -6152,7 +6168,7 @@
  			message->write<uint8_t>(1 - playerid);
  			message->write<uint8_t>(count2);
  			for(int32_t i = 0; i < count2; ++i) {
@@ -3034,7 +3109,7 @@ diff -ruN core_a/operations.cpp core_b/operations.cpp
  			}
 diff -ruN core_a/playerop.cpp core_b/playerop.cpp
 --- core_a/playerop.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/playerop.cpp	2026-10-05 15:32:12.756254814 +0200
++++ core_b/playerop.cpp	2026-10-06 13:04:11.483586819 +0200
 @@ -309,7 +309,7 @@
  		message->write<uint32_t>(min);
  		message->write<uint32_t>(max);
@@ -3082,7 +3157,7 @@ diff -ruN core_a/playerop.cpp core_b/playerop.cpp
  			message->write(pcard->get_info_location());
 diff -ruN core_a/processor.cpp core_b/processor.cpp
 --- core_a/processor.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/processor.cpp	2026-10-05 15:24:47.045416500 +0200
++++ core_b/processor.cpp	2026-10-06 23:32:30.259709136 +0200
 @@ -962,6 +962,13 @@
  			}
  			++ifit;
@@ -3187,7 +3262,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  		}
  		if(core.leave_confirmed.size())
  			send_to(core.leave_confirmed, nullptr, REASON_RULE, PLAYER_NONE, PLAYER_NONE, LOCATION_GRAVE, 0, POS_FACEUP);
-@@ -4434,8 +4440,46 @@
+@@ -4434,8 +4440,69 @@
  	}
  	return 0;
  }
@@ -3228,13 +3303,36 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
 +	}
 +	core.refreshing_condition = nullptr;
 +}
++// Effect ids follow when an effect was registered or last started to apply, which
++// for the effects present from the start depends on the order the cards were
++// created in and set up (hidden, e.g. random in the arbiter's games): a list of
++// effects a player chooses from is shown in an order of what it shows instead.
++void field::sort_select_options() {
++	size_t from = 0;
++	while(from < core.select_effects.size() && !core.select_effects[from])
++		++from;
++	if(core.select_options.size() <= from + 1)
++		return;
++	std::vector<std::pair<uint64_t, effect*>> opts;
++	for(size_t i = from; i < core.select_options.size(); ++i)
++		opts.emplace_back(core.select_options[i], core.select_effects[i]);
++	std::stable_sort(opts.begin(), opts.end(), [](const auto& a, const auto& b) {
++		if(a.first != b.first)
++			return a.first < b.first;
++		return a.second && b.second && a.second->id < b.second->id;
++	});
++	for(size_t i = from; i < core.select_options.size(); ++i) {
++		core.select_options[i] = opts[i - from].first;
++		core.select_effects[i] = opts[i - from].second;
++	}
++}
  void field::adjust_instant() {
  	++infos.event_id;
 +	refresh_effect_conditions();
  	adjust_disable_check_list();
  	adjust_self_destroy_set();
  }
-@@ -4650,6 +4694,7 @@
+@@ -4650,6 +4717,7 @@
  	switch(arg.step) {
  	case 0: {
  		core.re_adjust = false;
@@ -3242,7 +3340,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  		return FALSE;
  	}
  	case 1: {
-@@ -4783,7 +4828,7 @@
+@@ -4783,7 +4851,7 @@
  			core.re_adjust = true;
  			get_control(core.control_adjust_set[1 - infos.turn_player], nullptr, PLAYER_NONE, infos.turn_player, 0, 0, 0xff);
  			get_control(core.control_adjust_set[infos.turn_player], nullptr, PLAYER_NONE, 1 - infos.turn_player, 0, 0, 0xff);
@@ -3251,7 +3349,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  				++core.readjust_map[rcard];
  				if(core.readjust_map[rcard] > 3)
  					destroy(rcard, nullptr, REASON_RULE, PLAYER_NONE);
-@@ -4896,18 +4941,35 @@
+@@ -4896,18 +4964,35 @@
  	}
  	case 12: {
  		//shuffle check
@@ -3289,7 +3387,7 @@ diff -ruN core_a/processor.cpp core_b/processor.cpp
  		if(core.shuffle_hand_check[infos.turn_player])
  			shuffle(infos.turn_player, LOCATION_HAND);
  		if(core.shuffle_hand_check[1 - infos.turn_player])
-@@ -4992,6 +5054,11 @@
+@@ -4992,6 +5077,11 @@
  			arg.step = Processors::restart;
  			return FALSE;
  		}
