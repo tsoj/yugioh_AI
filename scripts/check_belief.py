@@ -68,6 +68,10 @@ def _replay_case(record, items, seed: int, viewer: int, frac: float, timeout: in
     t0 = time.monotonic()
     try:
         r = check_prefix(record, viewer, items, cut, completion=get_completion(completion))
+        if time.monotonic() - t0 > timeout:
+            # (the alarm came while the core ran one long step: the only Python code
+            # running then is its log callback, which swallows the exception)
+            raise Timeout()
         return {"seed": seed, "viewer": viewer, "frac": frac, "cut": cut, "len": len(items),
                 "ok": r.ok, "error": r.error, "seconds": r.seconds,
                 "decisions": r.opponent_decisions, "probed": r.probed, "probes": r.probes,
