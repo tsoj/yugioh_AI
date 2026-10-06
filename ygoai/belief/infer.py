@@ -943,17 +943,27 @@ def infer_unselect(prompt: dict, up: list[dict], duel, ids: list | None = None) 
     refs = LocMap(duel).references(up)
     # (cards the selection then moves as one group, e.g. Xyz Materials attached
     # together, move in the engine's order of the group, not in the order picked)
-    lm, moved = LocMap(duel), []
+    lm, moved, unknown = LocMap(duel), [], set()
     for m in selection_window(up):
         if m["type"] == "MOVE":
             moved.append((lm.at(m["from"]), m.get("reason", 0), m["to"]["loc"]))
+            if not m.get("code"):
+                unknown.add(moved[-1][0])
             lm.move(m)
     sel_ids = set(ids[:len(sel)]) - unsel_ids
     group = [(r, loc) for cid, r, loc in moved if cid in sel_ids]
     grouped = len(group) > 1 and len(set(group)) == 1
+    # (all the cards that move as that group were offered here, their codes shown:
+    # they are the selection, and the order they are picked in shows nowhere, e.g.
+    # Future Fusion sending its materials from the deck; except as Xyz Materials,
+    # which keep the order they were picked in as their overlay positions; and with
+    # hidden cards among them, whose properties can restrict the later picks, e.g.
+    # "10 cards with different names")
+    whole = grouped and not group[0][1] & C.LOCATION_OVERLAY \
+        and all(cid in ids and cid not in unknown for cid, r, loc in moved if (r, loc) == group[0])
     # (grouped: None, "likely": the first moved is probed against the others, and
     # kept when no answer survives the probes)
-    for window, certain in ((near, None if grouped else True), (refs, False)):
+    for window, certain in ((near, True if whole or not grouped else None), (refs, False)):
         picks = [ids.index(cid) for cid in window if cid in ids[:len(sel)] and cid not in unsel_ids]
         if picks:
             # (the other used cards next: which one comes first can matter, e.g. the
