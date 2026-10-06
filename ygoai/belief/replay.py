@@ -2089,6 +2089,20 @@ class BeliefReplay:
                     return self._silent_choice_fix(infer.LocMap(duel).at({"con": p, "loc": loc, "seq": i}))
         return None
 
+    def _silent_since_view_fix(self) -> tuple | None:
+        """The other answer of a silent choice of the opponent's (nothing revealed)
+        made since the viewer's latest state view, the latest first."""
+        view = max((j for j in range(self.pos) if self.items[j][0] == "prompt" and self.items[j][2] is not None),
+                   default=-1)
+        for dkey, ids, n, i, valid in reversed(self._silent_choices):
+            if dkey[0] <= view:
+                break
+            for k in range(n):
+                if k != i and (dkey, k) not in self.tried_silent:
+                    self.tried_silent.add((dkey, k))
+                    return ("decide", dkey, k)
+        return None
+
     def _silent_choice_fix(self, cid: int | None) -> tuple | None:
         if not cid:
             return None
@@ -4088,6 +4102,13 @@ class BeliefReplay:
                 cid = lm.at(src)
                 if not cid or lm.codes.get(cid) != m["code"]:
                     return
+            # (first a silent choice of the opponent's since the viewer last saw the
+            # field: it can have changed what the condition reads, e.g. "reduce
+            # the Levels of your monsters?" before a Synchro Summon)
+            fix = self._silent_since_view_fix()
+            if fix is not None:
+                raise Divergence(self.pos, "opponent summoned a card whose condition the replay does not meet "
+                                 "(an earlier silent choice)", fix=fix)
             span = (self.prompt_cp[0], self.pos + i)
             if span not in self.match_piles:
                 raise Divergence(self.pos, "opponent summoned a card whose condition the replay does not meet",
