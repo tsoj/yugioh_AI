@@ -1667,7 +1667,7 @@ class BeliefReplay:
                             fix = self._exclude_fix(le, msgs[idx].get("code"))
                         if (fix is None or self._has_swap(fix)) and le["con"] == self.opponent \
                                 and le["loc"] == C.LOCATION_DECK and exp.get("code"):
-                            fix = self._all_copies_fix(exp, le, duel) or fix
+                            fix = self._all_copies_fix(exp, le, duel, got) or fix
                     elif exp.get("code"):
                         # right card, wrong copy (the copies differ in hidden history)
                         fix = self._other_copy_fix(cp, msgs, idx, le)
@@ -1997,6 +1997,8 @@ class BeliefReplay:
             span = self._hidden_picks[-1][1]
             if span not in self.nomatch_piles and span not in self.match_piles:
                 fix = ("nomatchpile", *span)
+        if fix is None:
+            fix = self._facedown_pick_fix()
         if fix is None:
             fix = self._hidden_set_fix(duel)
         fallback = None
@@ -2343,6 +2345,37 @@ class BeliefReplay:
         if var is None or code in tried:
             return None
         return ("assume", self.pos, *key, code)
+
+    def _facedown_pick_fix(self) -> tuple | None:
+        """In the chain link being resolved (or the action just made), the opponent
+        took a card out of a hidden pile and put it face-down, its code never shown:
+        what went wrong since can come from it being another card (identity "not
+        that card" for the slot it came from)."""
+        solved = getattr(self, "_solved", None)
+        if solved is None:
+            return None
+        start = self._link_start()
+        for j in range(self.pos - 1, max(start - 1, self.pos - 30, -1), -1):
+            it = self.items[j]
+            if it[0] != "msg" or it[1]["type"] != "MOVE":
+                continue
+            m = it[1]
+            f, t = m["from"], m["to"]
+            if m["code"] or f["con"] != self.opponent or f["loc"] not in HIDDEN_PILES \
+                    or t["loc"] not in (C.LOCATION_MZONE, C.LOCATION_SZONE) or not t.get("pos", 0) & C.POS_FACEDOWN:
+                continue
+            try:
+                v = self.lockstep.var_at(t["con"], t["loc"], t["seq"])
+            except TrackerError:
+                continue
+            sv = next((x for x in solved.all_vars if v is not None and x.id == v.id), None)
+            member = sv.assigned if sv is not None and sv.kind == "claim" else None
+            if member is None:
+                continue
+            entry = (j, (f["con"], f["loc"], f["seq"]), ("not", member.id))
+            if entry not in self.identities and entry not in self.failed_identities:
+                return ("identify", *entry)
+        return None
 
     def _unhinted_fix(self, got: dict) -> tuple | None:
         """The replay's card lost a hint as it moved from a hidden pile to a
@@ -3129,11 +3162,22 @@ class BeliefReplay:
             code = self.hypothesis.var_codes.get(var.id) if var is not None else None
             if code:
                 codes.append(code)
-        if field_missing and exp["type"] == "SELECT_TRIBUTE" and duel is not None:
-            # (which codes make the face-down card a Tribute for the viewer's summon
-            # here, the engine tells: e.g. "Zombie monsters your opponent controls")
+        # (which codes make the face-down card eligible here, the engine tells: a
+        # Tribute for the viewer's summon, e.g. "Zombie monsters your opponent
+        # controls"; an attack target, e.g. "must attack EARTH monsters")
+        check = None
+        if field_missing and duel is not None and exp["type"] == "SELECT_TRIBUTE":
             summoned = self._summoning_card()
             if summoned is not None:
+                check = (f"local c=Duel.GetFieldCard({summoned['con']},{summoned['loc']},{summoned['seq']})",
+                         "Duel.GetTributeGroup(c):IsContains(t)")
+        elif field_missing and duel is not None and exp["type"] == "SELECT_CARD" and self._select_hint() == 549:
+            attacker = self._attacking_card()
+            if attacker is not None:
+                check = (f"local c=Duel.GetFieldCard({attacker['con']},{attacker['loc']},{attacker['seq']})",
+                         "c:GetAttackableTarget():IsContains(t)")
+        if check is not None:
+            if True:
                 loc = dict(zip(("con", "loc", "seq"), field_missing[0]))
                 seen_races = Counter(self.db.get(c).race for c in self._opp_seen_codes()
                                      if self.db.get(c) and self.db.get(c).type & C.TYPE_MONSTER)
@@ -3142,11 +3186,11 @@ class BeliefReplay:
                                and not c.type & C.TYPE_TOKEN),
                               key=lambda c: (-seen_races[self.db.get(c).race],
                                              not self.db.get(c).type & C.TYPE_NORMAL, c))
-                found = [c for c in codes if self._tributable_as(duel, summoned, loc, [c]).get(c)]
+                found = [c for c in codes if self._eligible_as(duel, loc, [c], *check).get(c)]
                 for k in range(0, len(pool), 400):
                     if len(found) >= 3:
                         break
-                    ok = self._tributable_as(duel, summoned, loc, pool[k:k + 400])
+                    ok = self._eligible_as(duel, loc, pool[k:k + 400], *check)
                     found += [c for c in pool[k:k + 400] if ok.get(c) and c not in found]
                 codes = found
         try:
@@ -3173,12 +3217,34 @@ class BeliefReplay:
                 return lst[i] if 0 <= i < len(lst) else None
         return None
 
-    def _tributable_as(self, duel: Duel, summoned: dict, li: dict, codes: list) -> dict:
-        """Whether the face-down monster at `li` could be Tributed for the summon of
-        `summoned` if it had each candidate's properties (assumed, then reset)."""
+    def _select_hint(self) -> int | None:
+        """The select message (HINT_SELECTMSG) of the viewer's current prompt."""
+        j = self.pos - 1
+        while j >= 0 and self.items[j][0] == "msg" and self.items[j][1]["type"] == "HINT":
+            m = self.items[j][1]
+            if m["hint_type"] == C.HINT_SELECTMSG and m["player"] == self.viewer:
+                return m["data"]
+            j -= 1
+        return None
+
+    def _attacking_card(self) -> dict | None:
+        """The viewer's attacking monster: from its latest attack answer."""
+        for j in range(self.pos - 1, max(-1, self.pos - 12), -1):
+            it = self.items[j]
+            if it[0] == "response" and it[1].get("kind") == "attack":
+                prompt = next((self.items[k][1] for k in range(j - 1, max(-1, j - 5), -1)
+                               if self.items[k][0] == "prompt"), None)
+                lst = (prompt or {}).get("attackable") or []
+                i = it[1].get("index", -1)
+                return lst[i] if 0 <= i < len(lst) else None
+        return None
+
+    def _eligible_as(self, duel: Duel, li: dict, codes: list, setup: str, test: str) -> dict:
+        """Whether `test` (a Lua expression on `t`, the face-down card at `li`, after
+        `setup`) holds if the card had each candidate's properties (assumed, then
+        reset)."""
         out: dict = {}
-        lines = [f"local c=Duel.GetFieldCard({summoned['con']},{summoned['loc']},{summoned['seq']})",
-                 f"local t=Duel.GetFieldCard({li['con']},{li['loc']},{li['seq']})",
+        lines = [setup, f"local t=Duel.GetFieldCard({li['con']},{li['loc']},{li['seq']})",
                  "if not c or not t then return end"]
         for code in dict.fromkeys(codes):
             card = self.db.get(code)
@@ -3189,7 +3255,7 @@ class BeliefReplay:
                 f"t:AssumeProperty(ASSUME_LEVEL,{card.level}) t:AssumeProperty(ASSUME_ATTRIBUTE,{card.attribute}) "
                 f"t:AssumeProperty(ASSUME_RACE,{card.race}) t:AssumeProperty(ASSUME_ATTACK,{max(card.attack, 0)}) "
                 f"t:AssumeProperty(ASSUME_DEFENSE,{max(card.defense, 0)}) "
-                f"Debug.Message('{code} '..tostring(Duel.GetTributeGroup(c):IsContains(t))) Duel.AssumeReset()")
+                f"Debug.Message('{code} '..tostring({test})) Duel.AssumeReset()")
         try:
             for text in duel.lua_messages("\n".join(lines)):
                 code, res = text.split()
@@ -3700,7 +3766,7 @@ class BeliefReplay:
             self._filler_cache = _vanilla(self.db)
         return self._filler_cache
 
-    def _all_copies_fix(self, exp: dict, le: dict, duel: Duel) -> tuple | None:
+    def _all_copies_fix(self, exp: dict, le: dict, duel: Duel, got: dict | None = None) -> tuple | None:
         """The real game moves every copy of a card out of the opponent's Deck, then
         shuffles it (e.g. Chain Dispel, Chain Destruction): the copies it moved are all
         there were, so none of the guessed (filler) cards of that Deck is one."""
@@ -3719,7 +3785,12 @@ class BeliefReplay:
         else:
             return None
         guessed = []
-        for seq in range(len(duel.location_cards(le["con"], le["loc"]))):
+        # (the pile as it was before the replay's own move out of it)
+        n = len(duel.location_cards(le["con"], le["loc"]))
+        if got is not None and got.get("type") == "MOVE" and (got["from"]["con"], got["from"]["loc"]) == (
+                le["con"], le["loc"]) and (got["to"]["con"], got["to"]["loc"]) != (le["con"], le["loc"]):
+            n += 1
+        for seq in range(n):
             if seq in moved:
                 continue
             try:
