@@ -543,12 +543,14 @@ class FlowSolver:
             if a is not None:
                 excluded[a.id] |= v.excluded
         for p in (0, 1):
-            atoms = t.atoms[p]
-            for a in atoms:
+            for a in t.atoms[p]:
                 key = commodities[vcom[a.id]][1]
                 if isinstance(key, tuple):
                     key = key[2]  # a tagged card
                 a.resolved = a.fixed_code if a.fixed_code is not None else (None if isinstance(key, str) else key)
+        present = [a.resolved for p in (0, 1) for a in t.atoms[p] if a.resolved is not None]
+        for p in (0, 1):
+            atoms = t.atoms[p]
             wild = [a for a in atoms if a.resolved is None]
             if not wild:
                 continue
@@ -588,9 +590,9 @@ class FlowSolver:
                          for kind in ("main", "extra")}
                 try:
                     fill_main, fill_extra = comp.complete(known_main, known_extra, n_main + spare["main"],
-                                                          n_extra + spare["extra"])
+                                                          n_extra + spare["extra"], present)
                 except RuntimeError:
-                    fill_main, fill_extra = comp.complete(known_main, known_extra, n_main, n_extra)
+                    fill_main, fill_extra = comp.complete(known_main, known_extra, n_main, n_extra, present)
                 fills = {"main": list(fill_main), "extra": list(fill_extra)}
                 # (in order, except where the next code was ruled out for this slot,
                 # e.g. by a scan of the deck: a realistic completion can guess it; the

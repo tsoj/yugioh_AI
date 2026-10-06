@@ -1337,6 +1337,7 @@ class Solver:
 
         # 2. fill the remaining free atoms with guessed codes
         unknown = 0
+        present = [self._known(a) for p in (0, 1) for a in t.atoms[p] if self._known(a)]
         for p in (0, 1):
             free = [a for a in self.free_atoms[p] if a.resolved is None]
             if not free:
@@ -1348,7 +1349,7 @@ class Solver:
             n_extra = sum(1 for a in free if a.kind == "extra")
             if self.completion is None:
                 raise TrackerError("unknown opponent cards but no deck completion available")
-            fill_main, fill_extra = self.completion.complete(known_main, known_extra, n_main, n_extra)
+            fill_main, fill_extra = self.completion.complete(known_main, known_extra, n_main, n_extra, present)
             it_main, it_extra = iter(fill_main), iter(fill_extra)
             for a in free:
                 a.resolved = next(it_main) if a.kind == "main" else next(it_extra)

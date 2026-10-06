@@ -80,7 +80,7 @@ class CorpusCompletion(DeckCompletion):
             scores[self.deck[rows]] += np.minimum(self.count[rows], k)
         return scores
 
-    def complete(self, known_main, known_extra, n_main, n_extra):
+    def complete(self, known_main, known_extra, n_main, n_extra, present=()):
         known = Counter(canonical_code(self.db, c) for c in known_main + known_extra)
         scores = self._scores(known)
         if scores.max() <= 0:
@@ -94,16 +94,22 @@ class CorpusCompletion(DeckCompletion):
         mask = np.isin(self.deck, best)
         for d, code, k, is_extra in zip(self.deck[mask], self.code[mask], self.count[mask], self.extra[mask]):
             weights[(int(code), bool(is_extra))] += float(scores[d] + 1) * int(k)
-        fill_main = self._fill(weights, known, n_main, extra=False)
-        fill_extra = self._fill(weights, known, n_extra, extra=True)
+        # (no guess adds a duel-wide effect that no known card has brought into the game:
+        # by its mere presence it could change the game, see script_index.global_keys)
+        from .script_index import global_keys
+        have = set().union(*(global_keys(canonical_code(self.db, c))
+                             for c in list(present) + known_main + known_extra))
+        adds = lambda code: not global_keys(code) <= have
+        fill_main = self._fill(weights, known, n_main, extra=False, skip=adds)
+        fill_extra = self._fill(weights, known, n_extra, extra=True, skip=adds)
         return fill_main, fill_extra
 
-    def _fill(self, weights: Counter, known: Counter, n: int, extra: bool) -> list[int]:
+    def _fill(self, weights: Counter, known: Counter, n: int, extra: bool, skip=lambda code: False) -> list[int]:
         from .script_index import win_condition_codes
         wins = win_condition_codes()  # (never guessed: e.g. Exodia pieces, a guessed hand would win)
         have = Counter(known)
         ranked = sorted(((w, code) for (code, is_extra), w in weights.items()
-                         if is_extra == extra and code not in wins), reverse=True)
+                         if is_extra == extra and code not in wins and not skip(code)), reverse=True)
         out: list[int] = []
         while len(out) < n:
             progressed = False

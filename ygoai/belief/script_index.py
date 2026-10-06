@@ -183,3 +183,38 @@ def win_condition_codes() -> frozenset[int]:
             out.add(int(path.stem[1:]))
             out.update(int(x) for x in re.findall(r"\b(\d{6,9})\b", text))
     return frozenset(out)
+
+
+_FUNCTION = re.compile(r"(?ms)^(?:local\s+)?function\s+([\w.:]+)\s*\(.*?^end\b")
+_GLOBAL_REGISTRATION = re.compile(r"Effect\.GlobalEffect\(|GlobalCheck\(")
+
+
+@lru_cache(maxsize=1)
+def _global_helpers() -> frozenset[str]:
+    """Functions of the shared scripts that register a duel-wide effect once per
+    duel for whichever card calls them first (e.g. aux.EnableCheckReincarnation),
+    by the last part of their name."""
+    out: set[str] = set()
+    for path in CARD_SCRIPTS_DIR.glob("*.lua"):
+        for m in _FUNCTION.finditer(path.read_text(errors="replace")):
+            name = re.split(r"[.:]", m.group(1))[-1]
+            if name != "GlobalCheck" and _GLOBAL_REGISTRATION.search(m.group(0)):
+                out.add(name)
+    return frozenset(out)
+
+
+@lru_cache(maxsize=None)
+def global_keys(code: int) -> frozenset:
+    """The duel-wide effects a card's script registers when the card is created:
+    its own (aux.GlobalCheck, Effect.GlobalEffect: once per script, keyed by the
+    code) and a shared helper's (once per duel, keyed by the helper's name). Such an
+    effect is in the game as soon as one card with it is, wherever the card is, and
+    it can change how the engine runs (e.g. Salamangreat's grant of a Reincarnation
+    check to every Fusion, Ritual, Synchro, Xyz and Link Monster adds an adjustment
+    pass whenever one of them moves)."""
+    text = _script_text(code)
+    out: set = set()
+    if _GLOBAL_REGISTRATION.search(text):
+        out.add(code)
+    out.update(h for h in _global_helpers() if re.search(r"\b" + h + r"\s*\(", text))
+    return frozenset(out)

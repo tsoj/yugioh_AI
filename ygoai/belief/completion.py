@@ -71,7 +71,8 @@ class DeckCompletion:
     """Interface: given the known cards of a deck, guess the missing ones."""
 
     def complete(self, known_main: list[int], known_extra: list[int], n_main: int,
-                 n_extra: int) -> tuple[list[int], list[int]]:
+                 n_extra: int, present: list[int] = ()) -> tuple[list[int], list[int]]:
+        """`present`: the other known cards of the game (both players')."""
         raise NotImplementedError
 
     def stand_ins(self, need: tuple) -> list[int]:
@@ -154,6 +155,6 @@ class VanillaCompletion(DeckCompletion):
             pool = self.main_pool
         return [c for c in pool if fits_need(self.db.get(c), need)]
 
-    def complete(self, known_main, known_extra, n_main, n_extra):
+    def complete(self, known_main, known_extra, n_main, n_extra, present=()):
         return (_fill(self.main_pool, known_main, n_main, self.db),
                 _fill(self.extra_pool, known_extra, n_extra, self.db))
