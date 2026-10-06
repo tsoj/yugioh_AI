@@ -60,7 +60,8 @@
   111047,
   111057,
   111128,
-  111169
+  111169,
+  111896
  ],
  "--book build/book.jsonl --completion vanilla": [
   100001,
@@ -210,7 +211,21 @@
   111291,
   111479,
   111502,
-  111569
+  111569,
+  111584,
+  111632,
+  111656,
+  111664,
+  111689,
+  111701,
+  111704,
+  111735,
+  111746,
+  111755,
+  111780,
+  111798,
+  111825,
+  111933
  ],
  "--book build/book.jsonl --pairs setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter --completion vanilla": [
   100179,
@@ -280,7 +295,11 @@
   111036,
   111336,
   111475,
-  111521
+  111521,
+  111745,
+  111830,
+  111924,
+  112010
  ],
  "--decks cards --completion vanilla": [
   100264,
@@ -435,7 +454,9 @@
   111063,
   111249,
   111371,
-  111544
+  111544,
+  111587,
+  111659
  ],
  "--decks cards --pairs setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter --completion vanilla": [
   100184,
@@ -598,7 +619,9 @@
   111456,
   111465,
   111512,
-  111576
+  111576,
+  111887,
+  112018
  ],
  "--decks diverse --completion vanilla": [
   100228,
@@ -622,7 +645,8 @@
   108297,
   108461,
   109944,
-  110341
+  110341,
+  111945
  ],
  "--decks diverse --pairs setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter --completion corpus": [
   100035,
@@ -1091,7 +1115,36 @@
   111441,
   111519,
   111555,
-  111570
+  111570,
+  111785,
+  111789,
+  111805,
+  111810,
+  111832,
+  111834,
+  111855,
+  111879,
+  111897,
+  111905,
+  111908,
+  111915,
+  111918,
+  111937,
+  111947,
+  111954,
+  111959,
+  111993,
+  112000,
+  112009,
+  112015,
+  112028,
+  112044,
+  112054,
+  112055,
+  112066,
+  112071,
+  112080,
+  112087
  ],
  "--decks diverse --pairs setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter --completion vanilla": [
   100676,
@@ -1428,7 +1481,23 @@
   111412,
   111464,
   111514,
-  111524
+  111524,
+  111600,
+  111696,
+  111699,
+  111717,
+  111725,
+  111808,
+  111843,
+  111906,
+  111925,
+  111956,
+  111968,
+  111986,
+  112012,
+  112020,
+  112053,
+  112058
  ],
  "--decks new --completion vanilla": [
   100092,
@@ -1463,7 +1532,9 @@
   110752,
   110993,
   111361,
-  111416
+  111416,
+  112022,
+  112094
  ],
  "--decks new --pairs setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter --completion corpus": [
   100043,
@@ -2146,7 +2217,25 @@
   111525,
   111552,
   111562,
-  111583
+  111583,
+  111595,
+  111598,
+  111603,
+  111633,
+  111683,
+  111722,
+  111743,
+  111751,
+  111851,
+  111929,
+  111939,
+  111982,
+  112013,
+  112017,
+  112031,
+  112039,
+  112045,
+  112091
  ],
  "--decks new --pairs setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter --completion vanilla": [
   100149,
@@ -2286,7 +2375,11 @@
   111173,
   111203,
   111312,
-  111351
+  111351,
+  111651,
+  111819,
+  111987,
+  112023
  ],
  "--decks new-cards --completion corpus": [
   100172,
@@ -2430,7 +2523,15 @@
   111298,
   111318,
   111393,
-  111421
+  111421,
+  111676,
+  111708,
+  111716,
+  111724,
+  111728,
+  111823,
+  111868,
+  111913
  ],
  "--decks new-cards --completion vanilla": [
   100504,
@@ -2455,7 +2556,8 @@
   110304,
   110512,
   110584,
-  111024
+  111024,
+  111800
  ],
  "--decks new-cards --pairs setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter --completion corpus": [
   100000,
@@ -2956,7 +3058,20 @@
   111417,
   111535,
   111549,
-  111556
+  111556,
+  111601,
+  111669,
+  111709,
+  111757,
+  111767,
+  111775,
+  111803,
+  111844,
+  111857,
+  111958,
+  111977,
+  112025,
+  112037
  ],
  "--decks new-cards --pairs setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter --completion vanilla": [
   100010,
@@ -3009,7 +3124,10 @@
   110387,
   110619,
   110861,
-  111099
+  111099,
+  111891,
+  111921,
+  111940
  ],
  "--decks new-mixed --completion corpus": [
   100057,
@@ -3172,7 +3290,9 @@
   111506,
   111537,
   111539,
-  111548
+  111548,
+  111813,
+  111960
  ],
  "--decks new-mixed --completion vanilla": [
   100204,
@@ -3201,7 +3321,8 @@
   108947,
   110077,
   110866,
-  111190
+  111190,
+  112065
  ],
  "--decks new-mixed --pairs setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter --completion corpus": [
   100069,
@@ -3653,7 +3774,27 @@
   111546,
   111561,
   111567,
-  111578
+  111578,
+  111585,
+  111616,
+  111621,
+  111634,
+  111644,
+  111660,
+  111663,
+  111690,
+  111797,
+  111858,
+  111867,
+  111893,
+  111907,
+  111941,
+  111989,
+  111995,
+  112005,
+  112043,
+  112076,
+  112089
  ],
  "--decks new-mixed --pairs setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter --completion vanilla": [
   100319,
@@ -3804,7 +3945,10 @@
   110800,
   110992,
   111129,
-  111240
+  111240,
+  111779,
+  111841,
+  111923
  ],
  "--decks random --completion vanilla": [
   102357,
@@ -3812,7 +3956,8 @@
   107712,
   108700,
   110444,
-  110568
+  110568,
+  111824
  ],
  "--decks random --pairs setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter --completion corpus": [
   100011,
@@ -4019,7 +4164,12 @@
   111541,
   111545,
   111574,
-  111577
+  111577,
+  111729,
+  111733,
+  111903,
+  111927,
+  112006
  ],
  "--decks random --pairs setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter --completion vanilla": [
   100004,
@@ -4049,6 +4199,7 @@
   108935,
   108939,
   109946,
-  110973
+  110973,
+  111639
  ]
 }

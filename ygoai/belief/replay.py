@@ -329,6 +329,8 @@ class BeliefReplay:
         self.code_tests_done: set[tuple] = set()
         self.match_piles: set[tuple[int, int]] = set()  # stream positions (from, to): hidden piles match
         self.match_pile_from: dict[tuple, tuple] = {}  # span -> the step it starts at (within its first position)
+        # (from, to, location): the opponent's hidden cards there match no filter
+        self.nomatch_loc_piles: set[tuple[int, int, int]] = set()
         # (start, end, slot): the opponent's hidden card in that slot matches no filter
         self.nomatch_cards: set[tuple] = set()
         self.nomatch_piles: set[tuple[int, int]] = set()  # ... hidden piles match nothing
@@ -932,6 +934,13 @@ class BeliefReplay:
             self._pile_made[span] = self.pos
             self.stats.assumptions += 1
             return True
+        if kind == "nomatchloc":
+            entry = fix[1:]
+            if entry in self.nomatch_loc_piles:
+                return False
+            self.nomatch_loc_piles.add(entry)
+            self.stats.assumptions += 1
+            return True
         if kind == "nomatchid":
             entry = fix[1:]
             if entry in self.nomatch_id_spans:
@@ -1071,6 +1080,9 @@ class BeliefReplay:
                     [it[1] for it in self.items[self.pos:end + 1] if it[0] == "msg"]))
                 nomatch = [cid for cid in self._hidden_ids(duel) if cid not in used]
             nomatch = nomatch + [cid for a, b, cid in self.nomatch_id_spans if a <= cp[0] <= b]
+            for a, b, loc in self.nomatch_loc_piles:
+                if a <= cp[0] <= b:
+                    nomatch += [cid for _, cid in duel.location_cards(self.opponent, loc) if cid]
             if self.nomatch_cards:
                 lm = None
                 for a, b, slot in self.nomatch_cards:
@@ -1880,7 +1892,15 @@ class BeliefReplay:
                 start = self._chain_start()
                 span = self._nomatch_span(start)
                 if span is not None:
-                    fix = ("nomatchpile", *span)
+                    # (first one hidden pile at a time: the options can each read
+                    # another pile, e.g. "from your hand or from your Deck", where the
+                    # real game had fitting cards in one of them only)
+                    for loc in (C.LOCATION_HAND, C.LOCATION_DECK):
+                        if (*span, loc) not in self.nomatch_loc_piles:
+                            fix = ("nomatchloc", *span, loc)
+                            break
+                    else:
+                        fix = ("nomatchpile", *span)
             if fix is None and exp["type"] == "BECOME_TARGET" and exp["cards"] \
                     and (got["type"] != "BECOME_TARGET" or got["cards"] != exp["cards"]):
                 # the opponent targeted a card that the replay's filter rejects
