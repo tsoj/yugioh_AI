@@ -1695,6 +1695,11 @@ class BeliefReplay:
                 # knows nothing about (e.g. "send all monsters from the hand"): in the
                 # real game it does not fit (a filler card of the wrong kind)
                 fix = self._nomatch_card_fix(got["from"], duel, got["to"])
+            if fix is None and got["type"] == "MOVE" and got["from"]["con"] == self.opponent and got.get("code") \
+                    and (got["from"]["loc"] in HIDDEN_PILES
+                         or got["from"]["loc"] & C.LOCATION_ONFIELD and got["from"].get("pos", 0) & C.POS_FACEDOWN) \
+                    and not (exp["type"] == "MOVE" and exp["from"] == got["from"]):
+                fix = self._self_move_fix(got, duel)
             if fix is None and got["type"] == "MOVE" and got["from"]["con"] == self.opponent \
                     and got["from"]["loc"] in HIDDEN_PILES and not (
                         exp["type"] == "MOVE" and exp["from"]["con"] == got["from"]["con"]
@@ -2574,6 +2579,21 @@ class BeliefReplay:
             if entry not in self.identities and entry not in self.failed_identities:
                 return ("identify", *entry)
         return None
+
+    def _self_move_fix(self, got: dict, duel: Duel) -> tuple | None:
+        """The replay's hidden card of the opponent moved by its own effect where the
+        real game moved nothing from there (e.g. The First Sarcophagus sends itself to
+        the GY whenever it leaves the field, the real Set card that returned to the
+        hand stays there): the real card is not this one."""
+        f, t = got["from"], got["to"]
+        out = duel.lua_messages(
+            f"local c=Duel.GetFieldCard({t['con']},{t['loc']},{t['seq']}) "
+            "local re=c and c:GetReasonEffect() "
+            "Debug.Message((re and re:GetHandler()==c) and 'yes' or 'no')")
+        if out[-1:] != ["yes"]:
+            return None
+        key = (self.pos, f["con"], f["loc"], (f["seq"],), got["code"])
+        return None if key in self.exclusions or key in self.failed_exclusions else ("exclude", *key)
 
     def _hidden_set_fix(self, duel: Duel) -> tuple | None:
         """The opponent summons a card from the hand shortly (the stream shows its
