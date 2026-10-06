@@ -61,6 +61,10 @@ bool is_forced_nomatch(duel* pduel, card* pcard);
 void log_filter_read(duel* pduel, card* pcard, bool result);
 bool read_log_on(duel* pduel);
 
+// Records that a forced activation (see OCG_ExtForceActivatable) made the mandatory
+// trigger `peffect` activatable where its own checks failed (see OCG_ExtTakeForcedUsed).
+void note_forced_used(duel* pduel, effect* peffect);
+
 void on_destroy(duel* pduel);
 
 } // namespace ocgext

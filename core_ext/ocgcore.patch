@@ -468,7 +468,7 @@ diff -ruN core_a/duel.h core_b/duel.h
  	inline int read_script(const char* name) {
 diff -ruN core_a/effect.cpp core_b/effect.cpp
 --- core_a/effect.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/effect.cpp	2026-10-05 15:24:47.040891523 +0200
++++ core_b/effect.cpp	2026-10-06 01:56:11.055176001 +0200
 @@ -10,6 +10,7 @@
  #include "effect.h"
  #include "field.h"
@@ -518,7 +518,7 @@ diff -ruN core_a/effect.cpp core_b/effect.cpp
  	if(is_flag(EFFECT_FLAG_COUNT_LIMIT)) {
  		if(count_limit == 0)
  			return FALSE;
-@@ -295,8 +321,13 @@
+@@ -295,8 +321,16 @@
  	int32_t result = TRUE;
  	if(!(type & EFFECT_TYPE_CONTINUOUS))
  		result = is_action_check(playerid);
@@ -527,8 +527,11 @@ diff -ruN core_a/effect.cpp core_b/effect.cpp
  		result = is_activate_ready(playerid, e, neglect_cond, neglect_cost, neglect_target);
 +		// forced: skip the cost/target checks only if they fail (the checks can
 +		// have side effects the activation relies on, e.g. labels)
-+		if(!result && !(neglect_cost && neglect_target) && ocgext::is_forced_activatable(pduel, this, playerid))
++		if(!result && !(neglect_cost && neglect_target) && ocgext::is_forced_activatable(pduel, this, playerid)) {
 +			result = is_activate_ready(playerid, e, neglect_cond, TRUE, TRUE);
++			if(result && (type & EFFECT_TYPE_TRIGGER_F))
++				ocgext::note_forced_used(pduel, this);  // (a mandatory effect only the forcing activates)
++		}
 +	}
  	pduel->game_field->core.reason_effect = oreason;
  	pduel->game_field->core.reason_player = op;

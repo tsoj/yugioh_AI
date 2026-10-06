@@ -43,6 +43,8 @@ struct State {
 	std::deque<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> forced_set_card_shuffles;  // (ids, codes)
 	// (player, card code, effect description) whose cost/target checks are skipped
 	std::set<std::tuple<uint8_t, uint32_t, uint64_t>> forced_activatable;
+	// (card code, effect description) of mandatory triggers only the forcing made activatable
+	std::set<std::pair<uint32_t, uint64_t>> forced_used;
 	// card ids that count as matching every card filter
 	std::set<uint32_t> forced_match;
 	std::set<uint32_t> forced_nomatch;
@@ -252,6 +254,13 @@ bool is_forced_activatable(duel* pduel, effect* peffect, uint8_t playerid) {
 	return st->forced_activatable.count({ playerid, handler->data.code, peffect->description }) > 0;
 }
 
+void note_forced_used(duel* pduel, effect* peffect) {
+	auto* st = find_state(pduel);
+	card* handler = peffect ? peffect->get_handler() : nullptr;
+	if(st && handler && st->forced_used.size() < 1024)
+		st->forced_used.emplace(handler->data.code, peffect->description);
+}
+
 bool is_forced_match(duel* pduel, card* pcard) {
 	auto* st = find_state(pduel);
 	return st && !st->forced_match.empty() && pcard && st->forced_match.count(pcard->cardid) > 0;
@@ -399,6 +408,24 @@ OCGEXT_API void OCG_ExtSetReadLog(OCG_Duel ocg_duel, int viewer) {
 	auto& st = states[static_cast<duel*>(ocg_duel)];
 	st.read_viewer = viewer;
 	st.read_log.clear();
+}
+
+// Copies out and clears the mandatory triggers only the forcing made activatable
+// since the last call: pairs (card code, effect description).
+OCGEXT_API uint32_t OCG_ExtTakeForcedUsed(OCG_Duel ocg_duel, uint64_t* out, uint32_t cap) {
+	auto* st = find_state(static_cast<duel*>(ocg_duel));
+	if(!st)
+		return 0;
+	uint32_t n = 0;
+	for(const auto& [code, desc] : st->forced_used) {
+		if(n >= cap)
+			break;
+		out[2 * n] = code;
+		out[2 * n + 1] = desc;
+		++n;
+	}
+	st->forced_used.clear();
+	return n;
 }
 
 // Copies out and clears the read log: card ids and results (1 = matched).

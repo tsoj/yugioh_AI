@@ -143,6 +143,7 @@ def _load_library(path: Path) -> ct.CDLL:
         "OCG_ExtForceActivatable": (None, [vp, u8, u32, ct.c_uint64]),
         "OCG_ExtClearForceActivatable": (None, [vp]),
         "OCG_ExtSwapCards": (i32, [vp, u32, u32]),
+        "OCG_ExtTakeForcedUsed": (u32, [vp, ct.POINTER(ct.c_uint64), u32]),
         "OCG_ExtSetForcedMatch": (None, [vp, ct.POINTER(u32), u32]),
         "OCG_ExtSetForcedNoMatch": (None, [vp, ct.POINTER(u32), u32]),
         "OCG_ExtDebugPendingTriggers": (u32, [vp, ct.POINTER(ct.c_uint64), u32]),
@@ -529,6 +530,14 @@ class Duel:
     def set_forced_nomatch(self, ids: list[int]) -> None:
         arr = (ct.c_uint32 * max(1, len(ids)))(*ids)
         lib().OCG_ExtSetForcedNoMatch(self.handle, arr, len(ids))
+
+    def take_forced_used(self) -> set[tuple[int, int]]:
+        """The (card code, effect description) pairs of mandatory triggers that
+        only the forced activations made activatable since the last call."""
+        cap = 1024
+        buf = (ct.c_uint64 * (2 * cap))()
+        n = lib().OCG_ExtTakeForcedUsed(self.handle, buf, cap)
+        return {(buf[2 * i], buf[2 * i + 1]) for i in range(min(n, cap))}
 
     def swap_cards(self, id_a: int, id_b: int) -> bool:
         return bool(lib().OCG_ExtSwapCards(self.handle, id_a, id_b))

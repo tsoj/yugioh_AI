@@ -359,6 +359,8 @@ class BeliefReplay:
             self.sim_log.append((self.pos, *entry))
 
     def _reset(self) -> None:
+        self._force_enabled: set[int] = set()  # stream positions of mandatory triggers only the forcing allowed
+        self._forced_used_prev: set = set()
         if getattr(self, "sim_log", None) is not None:
             self.sim_log = []
         self.pos = 0
@@ -1096,6 +1098,16 @@ class BeliefReplay:
             if forced_match:
                 duel.set_forced_match([])
             msgs = [parse(m) for m in duel.get_messages()]
+            if self._active_forces:
+                # (mandatory triggers only the forcing made activatable: in this step,
+                # or in the step that offered the activation)
+                used = duel.take_forced_used()
+                for k, m in enumerate(msgs):
+                    if m["type"] == "CHAINING" and ((m["code"], m["desc"]) in used
+                                                    or (m["code"], m["desc"]) in self._forced_used_prev):
+                        self._force_enabled.add(self.pos + sum(1 for x in msgs[:k]
+                                                               if filter_message(x, self.viewer) is not None))
+                self._forced_used_prev = used
             if not self._roll_dirty and any(m["type"] not in _NO_MOVES for m in msgs):
                 self._roll_dirty = True
             # (the hint text the replay's next prompt comes with, possibly from an
@@ -1408,6 +1420,19 @@ class BeliefReplay:
             key = (self.opponent, got["code"], got["desc"])
             if key in self._active_forces:
                 return ("unforce", *key)
+        # (the activation itself matched, what follows does not: the force made a
+        # mandatory trigger of the card activate whose own checks failed, e.g. where
+        # the real game activated its ignition effect with the same description)
+        for j in range(self.pos - 1, max(-1, self.pos - 12), -1):
+            it = self.items[j]
+            if it[0] != "msg" or it[1]["type"] in ("CHAINED", "CHAIN_SOLVING", "CHAIN_END"):
+                break
+            if it[1]["type"] == "CHAINING":
+                m = it[1]
+                key = (self.opponent, m["code"], m["desc"])
+                if m["trigger_con"] == self.opponent and key in self._active_forces and j in self._force_enabled:
+                    return ("unforce", *key)
+                break
         return None
 
     def _mismatch(self, cp: int, msgs: list[dict], idx: int, item: tuple, got: dict, duel: Duel) -> Divergence:
@@ -2005,7 +2030,9 @@ class BeliefReplay:
                 continue
             loc = C.LOCATION_EXTRA if value[0] == "extra" else C.LOCATION_DECK
             n = len(duel.location_cards(self.opponent, loc))
-            for seq in reversed(range(n)):
+            # (from the bottom: the check needs the card in the pile, anywhere; the
+            # top cards are the next ones drawn, which later observations decide)
+            for seq in range(n):
                 if (loc, seq) in taken:
                     continue
                 try:
