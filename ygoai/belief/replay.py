@@ -1549,6 +1549,8 @@ class BeliefReplay:
                 fix = self._hand_slot_fix(exp, got)
             if fix is None and exp["type"] == "MOVE":
                 fix = self._hidden_monster_fix(exp, got)
+            if fix is None and exp["type"] == "MOVE" and exp["from"]["con"] == self.opponent:
+                fix = self._tribute_summoner_fix(exp, got, duel)
             if fix is None and exp["type"] == "MOVE" and exp["reason"] & C.REASON_RELEASE \
                     and exp["from"]["con"] == self.opponent and got.get("type") == "MOVE" \
                     and got["from"]["con"] == self.opponent and got["from"]["loc"] == C.LOCATION_HAND \
@@ -3240,22 +3242,7 @@ class BeliefReplay:
                 check = (f"local c=Duel.GetFieldCard({attacker['con']},{attacker['loc']},{attacker['seq']})",
                          "c:GetAttackableTarget():IsContains(t)")
         if check is not None:
-            if True:
-                loc = dict(zip(("con", "loc", "seq"), field_missing[0]))
-                seen_races = Counter(self.db.get(c).race for c in self._opp_seen_codes()
-                                     if self.db.get(c) and self.db.get(c).type & C.TYPE_MONSTER)
-                pool = sorted((c.code for c in self.db.cards.values()
-                               if c.type & C.TYPE_MONSTER and not c.alias and c.ot & 0x3 and not c.is_extra_deck
-                               and not c.type & C.TYPE_TOKEN),
-                              key=lambda c: (-seen_races[self.db.get(c).race],
-                                             not self.db.get(c).type & C.TYPE_NORMAL, c))
-                found = [c for c in codes if self._eligible_as(duel, loc, [c], *check).get(c)]
-                for k in range(0, len(pool), 400):
-                    if len(found) >= 3:
-                        break
-                    ok = self._eligible_as(duel, loc, pool[k:k + 400], *check)
-                    found += [c for c in pool[k:k + 400] if ok.get(c) and c not in found]
-                codes = found
+            codes = self._eligible_codes(duel, dict(zip(("con", "loc", "seq"), field_missing[0])), codes, check)
         try:
             for loc in sorted(want - have) + field_missing:
                 self._assume({"con": loc[0], "loc": loc[1], "seq": loc[2]}, codes,
@@ -3266,6 +3253,57 @@ class BeliefReplay:
         except Divergence as d:
             return d.fix
         return None
+
+    def _eligible_codes(self, duel: Duel, li: dict, codes: list, check: tuple, fits=lambda code: True) -> list:
+        """Monster codes for the hidden card at `li` that pass the engine check (see
+        _eligible_as): of `codes` first, then of all main deck monsters (the races
+        the opponent has shown first), until three are found."""
+        seen_races = Counter(self.db.get(c).race for c in self._opp_seen_codes()
+                             if self.db.get(c) and self.db.get(c).type & C.TYPE_MONSTER)
+        pool = sorted((c.code for c in self.db.cards.values()
+                       if c.type & C.TYPE_MONSTER and not c.alias and c.ot & 0x3 and not c.is_extra_deck
+                       and not c.type & C.TYPE_TOKEN and fits(c.code)),
+                      key=lambda c: (-seen_races[self.db.get(c).race], not self.db.get(c).type & C.TYPE_NORMAL, c))
+        found = [c for c in codes if fits(c) and self._eligible_as(duel, li, [c], *check).get(c)]
+        for k in range(0, len(pool), 400):
+            if len(found) >= 3:
+                break
+            ok = self._eligible_as(duel, li, pool[k:k + 400], *check)
+            found += [c for c in pool[k:k + 400] if ok.get(c) and c not in found]
+        return found
+
+    def _tribute_summoner_fix(self, exp: dict, got: dict, duel: Duel) -> tuple | None:
+        """The opponent Tributes a public monster for the summon or Set of a hidden
+        hand card, and the replay does not: the monster cannot be Tributed for the
+        replay's card (e.g. Steelswarm Scout, only for a "Steelswarm" monster). Which
+        codes it can be Tributed for, the engine tells."""
+        if not (exp["reason"] & C.REASON_RELEASE and exp["reason"] & C.REASON_SUMMON) or not exp.get("code") \
+                or exp["from"]["loc"] != C.LOCATION_MZONE or (got.get("type") == "MOVE" and got["from"] == exp["from"]):
+            return None
+        tributes, summoned = 0, None
+        for j in range(self.pos, min(len(self.items), self.pos + 10)):
+            m = self.items[j][1] if self.items[j][0] == "msg" else {}
+            if m.get("type") == "MOVE" and m["reason"] & C.REASON_RELEASE and m["reason"] & C.REASON_SUMMON:
+                tributes += 1
+            elif m.get("type") == "MOVE" and m["from"]["con"] == self.opponent \
+                    and m["from"]["loc"] == C.LOCATION_HAND and m["to"]["loc"] == C.LOCATION_MZONE:
+                summoned = m["from"]
+                break
+        for j in range(self.pos - 1, max(-1, self.pos - 4), -1):
+            m = self.items[j][1] if self.items[j][0] == "msg" else {}
+            if m.get("type") == "MOVE" and m["reason"] & C.REASON_RELEASE and m["reason"] & C.REASON_SUMMON:
+                tributes += 1
+        if summoned is None or summoned.get("code"):
+            return None
+        from .completion import tribute_levels_any
+        levels = tribute_levels_any(tributes)
+        li = {"con": summoned["con"], "loc": C.LOCATION_HAND, "seq": summoned["seq"]}
+        t = exp["from"]
+        check = (f"local c=Duel.GetFieldCard({t['con']},{t['loc']},{t['seq']})",
+                 "Duel.GetTributeGroup(t):IsContains(c)")
+        codes = self._eligible_codes(duel, li, self._opp_seen_codes(), check,
+                                     lambda code: self.db.get(code) is not None and self.db.get(code).level in levels)
+        return self._assume_fix(li, codes)
 
     def _summoning_card(self) -> dict | None:
         """The viewer's card being Normal Summoned or Set: from its latest answer."""
@@ -3307,8 +3345,12 @@ class BeliefReplay:
         `setup`) holds if the card had each candidate's properties (assumed, then
         reset)."""
         out: dict = {}
-        lines = [setup, f"local t=Duel.GetFieldCard({li['con']},{li['loc']},{li['seq']})",
-                 "if not c or not t then return end"]
+        if li["loc"] & (C.LOCATION_MZONE | C.LOCATION_SZONE):
+            get = f"local t=Duel.GetFieldCard({li['con']},{li['loc']},{li['seq']})"
+        else:
+            get = (f"local t=Duel.GetFieldGroup({li['con']},{li['loc']},0)"
+                   f":Filter(function(x) return x:GetSequence()=={li['seq']} end,nil):GetFirst()")
+        lines = [setup, get, "if not c or not t then return end"]
         for code in dict.fromkeys(codes):
             card = self.db.get(code)
             if card is None:
