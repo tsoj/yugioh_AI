@@ -738,14 +738,31 @@ _WINDOW_END = frozenset(("CHAINING", "CHAINED", "CHAIN_SOLVED", "CHAIN_END", "NE
                          "SUMMONING", "SPSUMMONING", "FLIPSUMMONING"))
 
 
+def _reveals_part_of(x: dict, sel: dict, after: list[dict]) -> bool:
+    """Whether `x` reveals only cards of the selection `sel` announces: named in
+    it, or moved with them before the chain link ends (e.g. a face-down Fusion
+    Material on the field, revealed as it is used)."""
+    if x["type"] != "CONFIRM_CARDS" or not x["cards"]:
+        return False
+    used = {(c["con"], c["loc"], c["seq"]) for c in sel["cards"]}
+    for m in after:
+        if m["type"] in _WINDOW_END or m["type"] in ("CHAIN_SOLVED", "CHAIN_END"):
+            break
+        if m["type"] == "MOVE":
+            used.add((m["from"]["con"], m["from"]["loc"], m["from"]["seq"]))
+    return all((c["con"], c["loc"], c["seq"]) in used for c in x["cards"])
+
+
 def selection_window(up: list[dict]) -> list[dict]:
     for i, m in enumerate(up):
         if m["type"] in _WINDOW_END:
             return up[:i]
         if m["type"] in ("BECOME_TARGET", "CARD_SELECTED") \
-                and any(x["type"] not in ("HINT", "CARD_HINT") for x in up[:i]):
+                and any(x["type"] not in ("HINT", "CARD_HINT") and not _reveals_part_of(x, m, up[i + 1:])
+                        for x in up[:i]):
             # (targets chosen, or cards announced, after other consequences, e.g.
-            # after the cost's moves, belong to a later selection)
+            # after the cost's moves, belong to a later selection; not the reveal of
+            # a face-down card among those very cards, e.g. a Fusion Material)
             return up[:i]
     return up
 

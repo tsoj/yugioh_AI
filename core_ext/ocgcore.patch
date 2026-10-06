@@ -538,16 +538,18 @@ diff -ruN core_a/effect.cpp core_b/effect.cpp
  	pduel->game_field->restore_lp_cost();
 diff -ruN core_a/field.cpp core_b/field.cpp
 --- core_a/field.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/field.cpp	2026-10-05 15:24:47.041232874 +0200
-@@ -12,6 +12,7 @@
++++ core_b/field.cpp	2026-10-06 04:37:26.758874713 +0200
+@@ -11,7 +11,9 @@
+ #include "card.h"
  #include "duel.h"
  #include "effect.h"
++#include <unordered_map>
  #include "field.h"
 +#include "ocgext.h"
  #include "group.h"
  #include "interpreter.h"
  
-@@ -136,6 +137,10 @@
+@@ -136,6 +138,10 @@
  	}
  	pcard->current.controler = playerid;
  	pcard->current.location = location;
@@ -558,7 +560,7 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  	switch (location) {
  	case LOCATION_MZONE: {
  		player[playerid].list_mzone[sequence] = pcard;
-@@ -952,6 +957,8 @@
+@@ -952,6 +958,8 @@
  			return;
  		}
  	}
@@ -567,7 +569,7 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  	if(location == LOCATION_HAND || !is_flag(DUEL_PSEUDO_SHUFFLE)) {
  		int32_t upper_bound = static_cast<int32_t>(to_shuffle.size());
  		if(location == LOCATION_EXTRA)
-@@ -966,17 +973,32 @@
+@@ -966,17 +974,32 @@
  			reset_sequence(playerid, location);
  		}
  	}
@@ -603,7 +605,7 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  					if(peffect->is_flag(EFFECT_FLAG_CLIENT_HINT) && !peffect->is_flag(EFFECT_FLAG_PLAYER_TARGET)) {
  						auto _message = pduel->new_message(MSG_CARD_HINT);
  						_message->write(pcard->get_info_location());
-@@ -1077,6 +1099,8 @@
+@@ -1077,6 +1100,8 @@
  	for(auto& pcard : cur_player.list_main) {
  		pcard->current.position = POS_FACEDOWN_DEFENSE;
  		pcard->current.location = LOCATION_DECK;
@@ -612,7 +614,7 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  		pcard->current.reason = REASON_EFFECT;
  		pcard->current.reason_effect = core.reason_effect;
  		pcard->current.reason_player = core.reason_player;
-@@ -1088,6 +1112,7 @@
+@@ -1088,6 +1113,7 @@
  	for(auto& pcard : ex) {
  		pcard->current.position = POS_FACEDOWN_DEFENSE;
  		pcard->current.location = LOCATION_EXTRA;
@@ -620,7 +622,7 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  		pcard->current.reason = REASON_EFFECT;
  		pcard->current.reason_effect = core.reason_effect;
  		pcard->current.reason_player = core.reason_player;
-@@ -1408,31 +1433,45 @@
+@@ -1408,31 +1434,45 @@
  	}
  }
  void field::remove_oath_effect(effect* reason_effect) {
@@ -677,7 +679,7 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  		}
  	}
  }
-@@ -1441,12 +1480,13 @@
+@@ -1441,12 +1481,13 @@
  		ensure_luaL_stack(luaL_unref, pduel->lua->lua_state, LUA_REGISTRYINDEX, ch_lim_p.function);
  	core.chain_limit_p.clear();
  	core.effect_count_code_chain.clear();
@@ -696,7 +698,7 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  	}
  }
  processor::effect_count_map& field::get_count_map(uint8_t flag) {
-@@ -1860,7 +1900,7 @@
+@@ -1860,7 +1901,7 @@
  		ct = get_useable_count(to_check, playerid, LOCATION_MZONE, to_player, LOCATION_REASON::TOFIELD, zone);
  		if(ct < min) {
  			has_to_choose_one = true;
@@ -705,7 +707,7 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  				if((pcard->current.location == LOCATION_MZONE && pcard->current.controler == playerid && ((zone >> pcard->current.sequence) & 1)))
  					must_choose_one.insert(pcard);
  			}
-@@ -1939,7 +1979,7 @@
+@@ -1939,7 +1980,7 @@
  				ex_oneof_max = pcard->release_param;
  		}
  	}
@@ -714,7 +716,7 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  		if(pcard->current.location == LOCATION_MZONE || !pcard->is_releasable_by_summon(p, target))
  			continue;
  		if(release_list)
-@@ -2038,7 +2078,7 @@
+@@ -2038,7 +2079,7 @@
  	if(!release_deck) {
  		to_grave_types |= LOCATION_DECK;
  	}
@@ -723,7 +725,7 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  		if(pcard->current.location == LOCATION_GRAVE)
  			rem.insert(pcard);
  		else if((pcard->current.location & to_grave_types) != 0)
-@@ -2052,7 +2092,7 @@
+@@ -2052,7 +2093,7 @@
  }
  void field::get_overlay_group(uint8_t playerid, uint8_t self, uint8_t oppo, card_set* pset, group* pgroup) {
  	if(pgroup) {
@@ -732,7 +734,7 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  			if(pcard && !pcard->get_status(STATUS_SUMMONING | STATUS_SPSUMMON_STEP))
  				pset->insert(pcard->xyz_materials.begin(), pcard->xyz_materials.end());
  		}
-@@ -2070,7 +2110,7 @@
+@@ -2070,7 +2111,7 @@
  int32_t field::get_overlay_count(uint8_t playerid, uint8_t self, uint8_t oppo, group* pgroup) {
  	size_t count = 0;
  	if(pgroup) {
@@ -741,7 +743,7 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  			if(pcard && !pcard->get_status(STATUS_SUMMONING | STATUS_SPSUMMON_STEP))
  				count += pcard->xyz_materials.size();
  		}
-@@ -2090,14 +2130,14 @@
+@@ -2090,14 +2131,14 @@
  void field::update_disable_check_list(effect* peffect) {
  	card_set cset;
  	filter_affected_cards(peffect, &cset);
@@ -758,7 +760,7 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  		if(!pcard->is_status(STATUS_TO_ENABLE | STATUS_TO_DISABLE)) { // prevent loop
  			int32_t pre_disable = pcard->get_status(STATUS_DISABLED | STATUS_FORBIDDEN);
  			pcard->refresh_disable_status();
-@@ -2123,7 +2163,7 @@
+@@ -2123,7 +2164,7 @@
  	int32_t p = infos.turn_player;
  	for(int32_t p1 = 0; p1 < 2; ++p1) {
  		std::vector<card*> uniq_set;
@@ -767,7 +769,7 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  			if(ucard->is_position(POS_FACEUP) && ucard->get_status(STATUS_EFFECT_ENABLED)
  					&& !ucard->get_status(STATUS_DISABLED | STATUS_FORBIDDEN)) {
  				card_set cset;
-@@ -2155,14 +2195,14 @@
+@@ -2155,14 +2196,14 @@
  				cset.insert(pcard);
  		}
  	}
@@ -784,7 +786,7 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  			effect* peffect = pcard->is_affected_by_effect(EFFECT_SELF_TOGRAVE);
  			if(peffect) {
  				core.self_tograve_set.insert(pcard);
-@@ -2202,7 +2242,7 @@
+@@ -2202,7 +2243,7 @@
  		if(peffect->is_available())
  			filter_affected_cards(peffect, &cset);
  		card_set add_set;
@@ -793,7 +795,7 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  			if(pcard->is_affect_by_effect(peffect) && !eit.second->count(pcard))
  				add_set.insert(pcard);
  		}
-@@ -2212,14 +2252,14 @@
+@@ -2212,14 +2253,14 @@
  			if(!pcard->is_affect_by_effect(peffect) || !cset.count(pcard))
  				remove_set.insert(pcard);
  		}
@@ -810,7 +812,7 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  			auto it = eit.second->find(pcard);
  			pcard->remove_effect(it->second);
  			eit.second->erase(it);
-@@ -2247,8 +2287,15 @@
+@@ -2247,8 +2288,15 @@
  		core.unique_cards[1 - con].erase(pcard);
  }
  // return: pcard->unique_effect or 0
@@ -827,7 +829,7 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  		if((ucard != pcard) && (ucard != icard) && ucard->is_position(POS_FACEUP) && ucard->get_status(STATUS_EFFECT_ENABLED)
  			&& !ucard->get_status(STATUS_DISABLED | STATUS_FORBIDDEN)
  			&& ucard->unique_fieldid && ucard->check_unique_code(pcard) && (ucard->unique_location & location))
-@@ -2288,7 +2335,7 @@
+@@ -2288,7 +2336,7 @@
  		auto& player_counter = info.player_amount[playerid];
  		if(player_counter != 0)
  			continue;
@@ -836,6 +838,50 @@ diff -ruN core_a/field.cpp core_b/field.cpp
  			pduel->lua->add_param<LuaParam::CARD>(pcard);
  			if(!pduel->lua->check_condition(info.check_function, 1)) {
  				++player_counter;
+@@ -2645,19 +2693,35 @@
+ 		return TRUE;
+ 	return FALSE;
+ }
+-int32_t field::check_with_sum_greater_limit(const card_vector& mats, int32_t acc, int32_t index, int32_t opmin, int32_t* should_continue) {
++// (the search depends only on (index, acc, opmin): memoized, it takes polynomial
++// time where it enumerated all subsets, e.g. many low-Level cards in a GY)
++static int32_t sum_greater_limit(const card_vector& mats, int32_t acc, int32_t index, int32_t opmin,
++                                 std::unordered_map<uint64_t, int32_t>& memo) {
++	const uint64_t key = (static_cast<uint64_t>(index) << 42) | (static_cast<uint64_t>(acc + 0x100000) << 21)
++	                     | static_cast<uint64_t>(opmin & 0x1fffff);
++	if(auto it = memo.find(key); it != memo.end())
++		return it->second;
++	int32_t result = FALSE;
+ 	while(index < (int32_t)mats.size()) {
+ 		int32_t op1 = mats[index]->sum_param & 0xffff;
+ 		int32_t op2 = (mats[index]->sum_param >> 16) & 0xffff;
+-		if((acc <= op1 && acc + opmin > op1) || (op2 && acc <= op2 && acc + opmin > op2))
+-			return TRUE;
++		if((acc <= op1 && acc + opmin > op1) || (op2 && acc <= op2 && acc + opmin > op2)) {
++			result = TRUE;
++			break;
++		}
+ 		++index;
+-		if(check_with_sum_greater_limit(mats, acc - op1, index, std::min(opmin, op1), should_continue))
+-			return TRUE;
+-		if(op2 && check_with_sum_greater_limit(mats, acc - op2, index, std::min(opmin, op2), should_continue))
+-			return TRUE;
++		if(sum_greater_limit(mats, acc - op1, index, std::min(opmin, op1), memo)
++		   || (op2 && sum_greater_limit(mats, acc - op2, index, std::min(opmin, op2), memo))) {
++			result = TRUE;
++			break;
++		}
+ 	}
+-	return FALSE;
++	memo.emplace(key, result);
++	return result;
++}
++int32_t field::check_with_sum_greater_limit(const card_vector& mats, int32_t acc, int32_t index, int32_t opmin, int32_t* should_continue) {
++	std::unordered_map<uint64_t, int32_t> memo;
++	return sum_greater_limit(mats, acc, index, opmin, memo);
+ }
+ int32_t field::check_with_sum_greater_limit_m(const card_vector& mats, int32_t acc, int32_t index, int32_t opmin, int32_t must_count, int32_t* should_continue) {
+ 	if(acc <= 0)
 diff -ruN core_a/field.h core_b/field.h
 --- core_a/field.h	2026-09-29 02:25:58.000000000 +0200
 +++ core_b/field.h	2026-10-05 15:24:47.041587788 +0200
