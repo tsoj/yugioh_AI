@@ -1512,9 +1512,13 @@ class BeliefReplay:
                 # a monster that mentions Junk Warrior": its condition depends on hidden
                 # cards (not an action instead of it at an idle prompt: see _check_force)
                 fix = self._unavailable_fix()
-            if fix is None and exp["type"] == got.get("type") and exp["type"] in ("FLIPSUMMONING", "POS_CHANGE") \
+            if fix is None and exp["type"] == got.get("type") and (
+                    exp["type"] in ("FLIPSUMMONING", "POS_CHANGE")
+                    or exp["type"] == "SET" and exp["loc"] == C.LOCATION_HAND) \
                     and exp["con"] == got["con"] == self.opponent and exp["loc"] == got["loc"] \
                     and exp["seq"] != got["seq"]:
+                # (also a Set that failed in the hand, no zone left: the card the real
+                # game tried to Set is in that slot)
                 # (the face-down cards were shuffled in their zones since: the card in the
                 # real zone is the physical card the replay's one there descends from,
                 # e.g. the one that was Set before this turn and so can be flipped)
