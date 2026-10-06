@@ -2131,11 +2131,30 @@ class BeliefReplay:
         for dkey, ids, n, i, valid in reversed(self._silent_choices):
             if dkey[0] <= view:
                 break
+            if self._shows_consequence(dkey[0]):
+                continue  # (its answer showed: not silent)
             for k in range(n):
                 if k != i and (dkey, k) not in self.tried_silent:
                     self.tried_silent.add((dkey, k))
                     return ("decide", dkey, k)
         return None
+
+    _SILENT_OK = frozenset(("HINT", "CARD_HINT", "PLAYER_HINT", "CHAIN_SOLVED", "CHAIN_END", "SHUFFLE_HAND",
+                            "SHUFFLE_DECK"))
+
+    def _shows_consequence(self, at: int) -> bool:
+        """Whether something visible happens between the decision at stream position
+        `at` and the end of the chain link it was made in (e.g. "add it to the
+        hand?" and the card moves)."""
+        for it in self.items[at:at + 40]:
+            if it[0] != "msg":
+                continue
+            t = it[1]["type"]
+            if t in ("CHAIN_SOLVED", "CHAIN_END", "NEW_PHASE", "NEW_TURN"):
+                return False
+            if t not in self._SILENT_OK:
+                return True
+        return False
 
     def _silent_choice_fix(self, cid: int | None) -> tuple | None:
         if not cid:
