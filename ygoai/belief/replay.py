@@ -328,6 +328,7 @@ class BeliefReplay:
         self.code_tests: dict[tuple, tuple] = {}
         self.code_tests_done: set[tuple] = set()
         self.match_piles: set[tuple[int, int]] = set()  # stream positions (from, to): hidden piles match
+        self.match_pile_from: dict[tuple, tuple] = {}  # span -> the step it starts at (within its first position)
         # (start, end, slot): the opponent's hidden card in that slot matches no filter
         self.nomatch_cards: set[tuple] = set()
         self.nomatch_piles: set[tuple[int, int]] = set()  # ... hidden piles match nothing
@@ -1056,7 +1057,7 @@ class BeliefReplay:
             # active for every step at this stream position: the selection may
             # happen in a step that shows the viewer nothing
             forced_match = self.matches.get(cp[0])
-            if any(a <= cp[0] <= b for a, b in self.match_piles):
+            if any(a <= cp[0] <= b and cp >= self.match_pile_from.get((a, b), cp) for a, b in self.match_piles):
                 forced_match = list(forced_match or ()) + self._hidden_ids(duel)
             if forced_match:
                 duel.set_forced_match(forced_match)
@@ -1412,6 +1413,11 @@ class BeliefReplay:
             return None
         if any(it[0] == "msg" and it[1]["type"] == "CHAINED" for it in self.items[start:self.pos]):
             return None
+        # (from the step of the opponent's decision to activate on: the chain window
+        # before it, at the same stream position, is the viewer's, whose own checks
+        # see the cards as they are)
+        if self.prompt_cp is not None and self.prompt_cp[0] == start:
+            self.match_pile_from[(start, self.pos)] = self.prompt_cp
         return ("matchpile", start, self.pos)
 
     def _unforce_fix(self, got: dict) -> tuple | None:
