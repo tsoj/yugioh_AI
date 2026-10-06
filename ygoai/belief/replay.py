@@ -3772,8 +3772,11 @@ class BeliefReplay:
         """The opponent set a hidden hand card that has the wrong kind in the hypothesis."""
         for i, m in enumerate(up):
             if m["type"] in infer._ACTIVATION_PRELUDE or m["type"] in ("PAY_LPCOST", "FIELD_DISABLED", "DAMAGE",
-                                                                         "RECOVER", "LPUPDATE"):
-                continue  # (e.g. zones a Tributed monster had disabled become usable, damage a Tribute causes)
+                                                                         "RECOVER", "LPUPDATE", "ADD_COUNTER",
+                                                                         "REMOVE_COUNTER"):
+                # (e.g. zones a Tributed monster had disabled become usable, damage a
+                # Tribute causes, a counter placed as monsters are Tributed)
+                continue
             if m["type"] == "SHUFFLE_HAND" and m["player"] != self.opponent:
                 continue  # (e.g. the viewer's hand no longer kept revealed once the Tributed monster left)
             if m["type"] == "DRAW":
