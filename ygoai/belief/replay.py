@@ -1441,6 +1441,23 @@ class BeliefReplay:
         if item[0] == "msg":
             exp = item[1]
             fix = self._force_fix(exp)
+            if fix is None and exp["type"] == "MOVE" and got.get("type") == "MOVE" and exp["code"] \
+                    and exp["code"] == got["code"] and exp["from"] == got["from"] \
+                    and exp["to"]["loc"] == got["to"]["loc"] and exp["to"]["con"] != got["to"]["con"] \
+                    and exp["from"]["loc"] in HIDDEN_PILES:
+                # (the same card goes to another player's pile: the other copy, owned
+                # by the other player, e.g. one received by Exchange; the copies traded
+                # places where they were last shuffled together)
+                # (the other copy wherever it is now, e.g. already summoned from there)
+                live = infer.LocMap(duel)
+                a = live.at(got["to"])
+                codes = {cid: code for lst in duel.all_cards()[0].values() for code, cid in lst if cid}
+                mixed = set(self.card_shuffled.get(a, ())) if a else set()
+                for b, at in self.card_shuffled.items():
+                    if b != a and codes.get(b) == exp["code"] and mixed & set(at):
+                        fix = self._history_swap(a, b, cp)
+                        if fix is not None:
+                            break
             if fix is None and exp["type"] == got.get("type") == "HINT" and exp["hint_type"] == C.HINT_EVENT \
                     and got.get("hint_type") == C.HINT_EVENT and exp["data"] != got.get("data"):
                 # the real game is in another step than the replay: an activation of
@@ -1477,6 +1494,15 @@ class BeliefReplay:
                 # a monster that mentions Junk Warrior": its condition depends on hidden
                 # cards (not an action instead of it at an idle prompt: see _check_force)
                 fix = self._unavailable_fix()
+            if fix is None and exp["type"] == got.get("type") and exp["type"] in ("FLIPSUMMONING", "POS_CHANGE") \
+                    and exp["con"] == got["con"] == self.opponent and exp["loc"] == got["loc"] \
+                    and exp["seq"] != got["seq"]:
+                # (the face-down cards were shuffled in their zones since: the card in the
+                # real zone is the physical card the replay's one there descends from,
+                # e.g. the one that was Set before this turn and so can be flipped)
+                fix = self._slot_identity_fix(
+                    {"con": exp["con"], "loc": exp["loc"], "seq": exp["seq"]},
+                    {"con": got["con"], "loc": got["loc"], "seq": got["seq"]}, copies=True)
             if fix is None and exp["type"] == got.get("type") and exp["type"] in ("FLIPSUMMONING", "POS_CHANGE") \
                     and exp.get("code") and exp.get("code") == got.get("code") and exp["con"] == got["con"] \
                     and exp["loc"] == got["loc"] and exp["seq"] != got["seq"] \
@@ -2359,16 +2385,10 @@ class BeliefReplay:
             return None
         return ("identify", *entry)
 
-    def _hand_slot_fix(self, exp: dict, got: dict) -> tuple | None:
-        """The real game moves a hidden hand card from another place of the hand
-        than the replay, to the same place: the card in the real slot is the
-        physical card the replay moved (e.g. the one an effect summons, "this
-        card", the hand shuffled since: the shuffle placed it elsewhere)."""
-        e, g = exp["from"], got["from"]
-        if e["con"] != self.opponent or e["loc"] != C.LOCATION_HAND or g["loc"] != C.LOCATION_HAND \
-                or g["con"] != e["con"] or e["seq"] == g["seq"] or exp["code"] or got["code"] \
-                or exp["to"] != got["to"]:
-            return None
+    def _slot_identity_fix(self, e: dict, g: dict, copies: bool = False) -> tuple | None:
+        """The card in the hidden slot `e` (in the real game) is the physical card that
+        the replay has in slot `g` (an identity at the current position); not for two
+        copies of one card unless `copies` (a swap of the two)."""
         solved = getattr(self, "_solved", None)
         if solved is None:
             return None
@@ -2389,12 +2409,24 @@ class BeliefReplay:
             while v is not None and v.kind == "claim":
                 v = v.assigned
             return None if v is None else v.resolved
-        if se is None or code(se) == code(member):
+        if se is None or (not copies and code(se) == code(member)):
             return None  # (copies of one card: a swap of the two)
         entry = (self.pos, (e["con"], e["loc"], e["seq"]), member.id)
         if entry in self.identities or entry in self.failed_identities:
             return None
         return ("identify", *entry)
+
+    def _hand_slot_fix(self, exp: dict, got: dict) -> tuple | None:
+        """The real game moves a hidden hand card from another place of the hand
+        than the replay, to the same place: the card in the real slot is the
+        physical card the replay moved (e.g. the one an effect summons, "this
+        card", the hand shuffled since: the shuffle placed it elsewhere)."""
+        e, g = exp["from"], got["from"]
+        if e["con"] != self.opponent or e["loc"] != C.LOCATION_HAND or g["loc"] != C.LOCATION_HAND \
+                or g["con"] != e["con"] or e["seq"] == g["seq"] or exp["code"] or got["code"] \
+                or exp["to"] != got["to"]:
+            return None
+        return self._slot_identity_fix(e, g)
 
     def _summon_copy_fix(self, exp: dict, got: dict) -> tuple | None:
         """The replay's Tribute Summon from the hand takes another number of
