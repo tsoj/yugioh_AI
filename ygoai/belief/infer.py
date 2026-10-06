@@ -930,6 +930,11 @@ def infer_cards(prompt: dict, up: list[dict], duel, ids: list | None = None,
         cands.append({"indices": list(range(lo))})
     if prompt.get("cancelable"):
         cands.append({"cancel": True})
+    if select_msg is not None and select_msg >= 1 << 20:
+        # (a script's own select message, e.g. "the card to Summon to your field"
+        # where another goes to the opponent's: which role the used cards play in
+        # the selection is not known, the candidates are probed)
+        certain = False
     return cands, certain
 
 
