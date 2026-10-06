@@ -3676,6 +3676,15 @@ class BeliefReplay:
             return None
         if got.get("type") == "MOVE" and infer.same_loc(got["from"], frm):
             return None
+        # (not a Tribute Set: the Set check knows the Levels the Tributes ask for)
+        for j in range(self.pos - 1, max(-1, self.pos - 12), -1):
+            it = self.items[j]
+            if it[0] == "msg" and it[1]["type"] == "MOVE" and it[1]["reason"] & C.REASON_RELEASE \
+                    and it[1]["reason"] & C.REASON_SUMMON:
+                return None
+            if it[0] != "msg" or it[1]["type"] in ("CHAIN_END", "CHAIN_SOLVED", "NEW_PHASE", "SET", "SUMMONED",
+                                                    "SPSUMMONED"):
+                break
 
         def monster(code):
             card = self.db.get(code)
@@ -3869,9 +3878,10 @@ class BeliefReplay:
         for i, m in enumerate(up):
             if m["type"] in infer._ACTIVATION_PRELUDE or m["type"] in ("PAY_LPCOST", "FIELD_DISABLED", "DAMAGE",
                                                                          "RECOVER", "LPUPDATE", "ADD_COUNTER",
-                                                                         "REMOVE_COUNTER"):
+                                                                         "REMOVE_COUNTER", "MISSED_EFFECT"):
                 # (e.g. zones a Tributed monster had disabled become usable, damage a
-                # Tribute causes, a counter placed as monsters are Tributed)
+                # Tribute causes, a counter placed as monsters are Tributed, an optional
+                # effect that missed its timing as they left)
                 continue
             if m["type"] == "SHUFFLE_HAND" and m["player"] != self.opponent:
                 continue  # (e.g. the viewer's hand no longer kept revealed once the Tributed monster left)
