@@ -196,6 +196,7 @@ _DECISION_TRIES = int(os.environ.get("YGOAI_DECISION_TRIES", 24))  # alternative
 _TAIL_RESTARTS = 4  # repairs for a mismatch in the unfinished action a game ended in
 _PROBE_BUDGET = 48  # probes a probe of the main line may start in all (nested)
 _SUSPECT_TESTS = 150  # forked tests of alternatives for the suspects of one divergence
+_ALL_SLOTS = (-1,)  # (an exclusion's slots: every slot of the pile)
 _SUSPECT_ROUNDS = 3  # rounds of suspect tests at one divergence position (changes taken one at a time)
 _PROBE_STEPS = 2000  # engine steps a probe may take (they take 16, at most ~140)
 
@@ -460,6 +461,8 @@ class BeliefReplay:
                 k += 1
             while j < len(excl) and excl[j][0] == i:
                 _, con, loc, seqs, code = excl[j]
+                if seqs == _ALL_SLOTS:
+                    seqs = range(len(tracker.lists[con].get(loc) or []))
                 for seq in seqs:
                     tracker.exclude(tracker.var_at(con, loc, seq), code)
                 j += 1
@@ -894,6 +897,13 @@ class BeliefReplay:
             return True
         if kind == "exclude":
             key = fix[1:]
+            pos, con, loc, seqs, code = key
+            if loc in HIDDEN_PILES and seqs != _ALL_SLOTS and any(
+                    x[:3] == (pos, con, loc) and x[4] == code and x[3] != seqs
+                    for x in self.exclusions + list(self.failed_exclusions)):
+                # (the code was excluded from another slot of this pile here already, and
+                # the hypothesis only moved it: it is in none of them)
+                key = (pos, con, loc, _ALL_SLOTS, code)
             if key in self.exclusions or key in self.failed_exclusions:
                 return False
             self.exclusions.append(key)
@@ -3956,6 +3966,7 @@ class BeliefReplay:
             if self.suspect_done.get(pos, 0) >= _SUSPECT_ROUNDS or self.suspect_tests is not None:
                 self.suspect_tests = None
                 return False
+
             self._suspect_log = {"pos": pos, "from": max(0, pos - rg.WINDOW - 1), "steps": [],
                                  "sig": sig}
             self._suspect_prev_hook = self.on_process
