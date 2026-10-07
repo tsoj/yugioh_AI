@@ -26,7 +26,17 @@ scripts/build_core.sh                      # builds build/libocgcore.so (patched
 python3 scripts/gen_constants.py           # only needed after updating ygopro-core
 ```
 
-Requirements: a C++17 compiler, meson, ninja, Python >= 3.11 with numpy and scipy. The human deck lists
+Requirements: a C++17 compiler, meson, ninja, Python >= 3.11 with numpy and scipy. The learned deck
+completion (`--completion neural`, ygoai/belief/neural_completion.py) also needs PyTorch and the models in
+`download_human_decks/` (`deck_existence.pt`, `deck_counts.pt`); the project environment is made with uv:
+
+```sh
+uv venv .venv --python 3.14
+uv pip install --python .venv/bin/python numpy==2.4.6 scipy==1.18.0 tqdm
+uv pip install --python .venv/bin/python "torch==2.13.0+rocm7.1" --index-url https://download.pytorch.org/whl/rocm7.1
+```
+
+and scripts are run with `.venv/bin/python` (inference on the CPU, deterministic; the GPU is for training). The human deck lists
 are expected in `download_human_decks/decks/*.ydk` (override with `YGOAI_DECKS`).
 
 ## Running things

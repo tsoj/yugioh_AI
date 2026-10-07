@@ -62,6 +62,9 @@ def get_completion(name: str):
         if name == "corpus":
             from ygoai.belief.corpus import CorpusCompletion
             _completions[name] = CorpusCompletion()
+        elif name == "neural":
+            from ygoai.belief.neural_completion import NeuralCompletion
+            _completions[name] = NeuralCompletion()
         else:
             from ygoai.belief.completion import VanillaCompletion
             _completions[name] = VanillaCompletion()
@@ -165,7 +168,7 @@ def make_parser() -> argparse.ArgumentParser:
                          "decks of random cards (\"cards\"), or the decks downloaded later in the diverse order "
                          "(\"new\")")
     ap.add_argument("--book", help="opening book (scripts/make_book.py): game seed %% openings picks the decks")
-    ap.add_argument("--completion", choices=["vanilla", "corpus"], default="corpus",
+    ap.add_argument("--completion", choices=["vanilla", "corpus", "neural"], default="corpus",
                     help="how unknown opponent cards are guessed")
     return ap
 

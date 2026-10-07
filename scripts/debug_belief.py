@@ -69,7 +69,7 @@ def main():
     ap.add_argument("--pairs", help="agent pairings as in check_belief.py, e.g. setter-greedy,mixed-random")
     ap.add_argument("--decks", choices=["random", "diverse", "cards", "new", "new-cards", "new-mixed"], default="random")
     ap.add_argument("--book", help="opening book (scripts/make_book.py)")
-    ap.add_argument("--completion", choices=["vanilla", "corpus"], default="corpus")
+    ap.add_argument("--completion", choices=["vanilla", "corpus", "neural"], default="corpus")
     args = ap.parse_args()
     rec = make_game(args.seed, pairs=[tuple(p.split("-")) for p in args.pairs.split(",")] if args.pairs else None,
                     decks=args.decks, book=args.book)
@@ -82,6 +82,9 @@ def main():
     if args.completion == "corpus":
         from ygoai.belief.corpus import CorpusCompletion
         completion = CorpusCompletion()
+    elif args.completion == "neural":
+        from ygoai.belief.neural_completion import NeuralCompletion
+        completion = NeuralCompletion()
     stopped = cut == len(items) and (rec.result or {}).get("reason") in ("turn_limit", "decision_limit", "time_limit")
     br = BeliefReplay(args.viewer, init_info(rec, args.viewer), items[:cut], completion=completion, stopped=stopped)
     if args.max_restarts is not None:

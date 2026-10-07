@@ -65,6 +65,7 @@ RANGES: dict[str, tuple[int, int, list[str]]] = {
     "cards40000": (1000, 40000, ["--decks", "cards", "--completion", "vanilla"]),
     "cards41000": (1000, 41000, ["--decks", "cards", "--pairs", P, "--completion", "vanilla"]),
     "new50000": (1000, 50000, ["--decks", "new"]),
+    "neural50000": (200, 50000, ["--decks", "new", "--completion", "neural"]),  # (the learned deck models)
     "new51000": (1000, 51000, ["--decks", "new", "--pairs", P]),
     "new52000": (1000, 52000, ["--decks", "new"]),
     "new53000": (1000, 53000, ["--decks", "new", "--pairs", P]),
