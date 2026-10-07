@@ -1,0 +1,10 @@
+# data: the downloaded decks (download_decks.py, filter_decks.py), the trained
+# models and their vocabulary, hyperparameter sweeps, plots
+decks/
+decks_invalid/
+decks_new/
+*.pt
+vocab.pkl
+sweep_results*/
+card_deck_frequency.png
+card_deck_frequency.tsv

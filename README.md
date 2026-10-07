@@ -37,7 +37,18 @@ uv pip install --python .venv/bin/python "torch==2.13.0+rocm7.1" --index-url htt
 ```
 
 and scripts are run with `.venv/bin/python` (inference on the CPU, deterministic; the GPU is for training). The human deck lists
-are expected in `download_human_decks/decks/*.ydk` (override with `YGOAI_DECKS`).
+are expected in `download_human_decks/decks/*.ydk` (override with `YGOAI_DECKS`), the newer ones (test games
+only) in `download_human_decks/decks_new/`. The code that makes them is in `download_human_decks/` (the data
+and models are not in git):
+
+```sh
+cd download_human_decks
+../.venv/bin/python download_decks.py --out decks       # all public decks of ygoprodeck.com
+../.venv/bin/python filter_decks.py --decks-dir decks   # moves invalid ones to decks_invalid/
+../.venv/bin/python train_deck_existence.py --epochs 200 --fixed-k-eval-min-gap 10
+../.venv/bin/python train_deck_counts.py --epochs 200
+../.venv/bin/python complete_deck.py --help             # inference by hand (examples/)
+```
 
 ## Running things
 

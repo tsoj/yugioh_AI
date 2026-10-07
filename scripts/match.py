@@ -70,6 +70,13 @@ def main() -> int:
     args = ap.parse_args()
     if len(args.engine) != 2:
         ap.error("exactly two engines are required")
+    if any("belief_mc" in e.command for e in args.engine):
+        # (one deck model process for every worker and engine process: memory)
+        try:
+            from ygoai.belief.neural_completion import ensure_service
+            ensure_service()
+        except (ImportError, RuntimeError) as e:
+            print(f"no deck model service ({e}): belief_mc falls back to the corpus completion", file=sys.stderr)
 
     from ygoai.carddb import default_db
     from ygoai.decks import DeckPool
