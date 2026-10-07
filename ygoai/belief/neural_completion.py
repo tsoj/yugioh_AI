@@ -129,3 +129,118 @@ class NeuralCompletion(DeckCompletion):
                         counts[canon(c)] += 1
             return out[:n]
         return fill(main, km, n_main, False), fill(extra, ke, n_extra, True)
+
+
+# -- one model process per run ---------------------------------------------------
+# Each pool worker loading PyTorch and the models costs ~1.5 GB; a run with dozens
+# of workers would not fit in memory. The run's parent starts one model process
+# (ensure_service, before its worker pool) and the workers ask it over a local
+# socket (neural_completion). The answers are the same, and the service's cache
+# serves every worker.
+
+_ENV = "YGOAI_NEURAL_SERVICE"  # (address|authkey of the run's model process)
+
+
+class RemoteNeuralCompletion(DeckCompletion):
+    """NeuralCompletion's answers from the run's model process."""
+
+    def __init__(self, spec: str, db: CardDB | None = None):
+        address, key = spec.split("|")
+        self.address, self.authkey = "\0" + address, bytes.fromhex(key)  # (an abstract socket)
+        self.db = db or default_db()
+        self._conn = None
+        self._conn_pid = None
+        self._cache: dict = {}
+
+    def _ask(self, *request):
+        if request not in self._cache:
+            from multiprocessing.connection import Client
+            if self._conn is None or self._conn_pid != os.getpid():
+                # (a forked probe opens its own connection: never the parent's socket)
+                self._conn = Client(self.address, authkey=self.authkey)
+                self._conn_pid = os.getpid()
+            self._conn.send(request)
+            answer = self._conn.recv()
+            if isinstance(answer, Exception):
+                raise answer
+            self._cache[request] = answer
+        return self._cache[request]
+
+    def complete(self, known_main, known_extra, n_main, n_extra, present=()):
+        fill_main, fill_extra = self._ask("complete", tuple(known_main), tuple(known_extra), n_main, n_extra,
+                                          tuple(sorted(set(present))))
+        return list(fill_main), list(fill_extra)
+
+    def stand_ins(self, need: tuple, known: list[int] = ()) -> list[int]:
+        return list(self._ask("stand_ins", tuple(need), tuple(sorted(known))))
+
+
+def neural_completion(db: CardDB | None = None) -> DeckCompletion:
+    """The run's model process if there is one, else the models in this process."""
+    spec = os.environ.get(_ENV)
+    return RemoteNeuralCompletion(spec, db) if spec else NeuralCompletion(db)
+
+
+def ensure_service() -> None:
+    """Starts the model process for this run and its children (once; it ends
+    with this process)."""
+    if os.environ.get(_ENV):
+        return
+    import atexit
+    import secrets
+    import subprocess
+    address = f"ygoai-neural-{os.getpid()}-{secrets.token_hex(4)}"
+    key = secrets.token_hex(16)
+    proc = subprocess.Popen([sys.executable, "-m", "ygoai.belief.neural_completion", address, key,
+                             str(os.getpid())], stdout=subprocess.PIPE, text=True,
+                            env=dict(os.environ, PYTHONPATH=str(ROOT)), cwd=str(ROOT))
+    line = proc.stdout.readline().strip()
+    if line != "ready":
+        proc.kill()
+        raise RuntimeError(f"the deck model process did not start ({line!r})")
+    atexit.register(proc.kill)
+    os.environ[_ENV] = f"{address}|{key}"
+
+
+def _serve(address: str, key: str, parent: int) -> None:
+    import threading
+    import time
+    from multiprocessing.connection import Listener
+    model = NeuralCompletion()
+    lock = threading.Lock()
+    listener = Listener("\0" + address, authkey=bytes.fromhex(key))
+
+    def client(conn):
+        with conn:
+            while True:
+                try:
+                    request = conn.recv()
+                except (EOFError, OSError):
+                    return
+                try:
+                    with lock:
+                        if request[0] == "complete":
+                            answer = model.complete(list(request[1]), list(request[2]), request[3], request[4],
+                                                    list(request[5]))
+                        else:
+                            answer = model.stand_ins(request[1], list(request[2]))
+                except Exception as e:  # (to the asking worker)
+                    answer = e
+                conn.send(answer)
+
+    def watch():
+        while True:
+            time.sleep(2)
+            try:
+                os.kill(parent, 0)
+            except OSError:
+                os._exit(0)  # (the run is over)
+    threading.Thread(target=watch, daemon=True).start()
+    print("ready", flush=True)
+    while True:
+        conn = listener.accept()
+        threading.Thread(target=client, args=(conn,), daemon=True).start()
+
+
+if __name__ == "__main__":
+    _serve(sys.argv[1], sys.argv[2], int(sys.argv[3]))

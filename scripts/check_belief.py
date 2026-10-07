@@ -63,8 +63,9 @@ def get_completion(name: str):
             from ygoai.belief.corpus import CorpusCompletion
             _completions[name] = CorpusCompletion()
         elif name == "neural":
-            from ygoai.belief.neural_completion import NeuralCompletion
-            _completions[name] = NeuralCompletion()
+            # (the run's one model process if there is one: see ensure_service)
+            from ygoai.belief.neural_completion import neural_completion
+            _completions[name] = neural_completion()
         else:
             from ygoai.belief.completion import VanillaCompletion
             _completions[name] = VanillaCompletion()
@@ -225,6 +226,9 @@ def main() -> int:
     results = []
     t0 = time.monotonic()
     out = args.output.open("w") if args.output else None  # streamed: large runs can be watched
+    if args.completion == "neural":
+        from ygoai.belief.neural_completion import ensure_service
+        ensure_service()  # (one model process for all workers: memory)
     for task, res in run_parallel(run_task, tasks, args.jobs):
         if isinstance(res, Crash):
             res = [{"seed": task[0], "viewer": v, "frac": f, "ok": False, "error": f"crash: {res.error}"}

@@ -118,6 +118,8 @@ def main() -> int:
                 flags_of[id(t)] = flags
         failures = []
         with LOG.open("a") as log:
+            from ygoai.belief.neural_completion import ensure_service
+            ensure_service()  # (one model process for all workers: memory)
             for task, res in run_parallel(cb.run_task, tasks, args.jobs):
                 flags = flags_of[id(task)]
                 if isinstance(res, Crash):

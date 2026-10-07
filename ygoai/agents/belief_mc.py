@@ -33,8 +33,8 @@ def _neural_completion():
     global _NEURAL
     if _NEURAL is None:
         try:
-            from ..belief.neural_completion import NeuralCompletion
-            _NEURAL = NeuralCompletion()
+            from ..belief.neural_completion import neural_completion
+            _NEURAL = neural_completion()
         except ImportError:
             from ..belief.corpus import CorpusCompletion
             _NEURAL = CorpusCompletion()
