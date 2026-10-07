@@ -1486,6 +1486,9 @@ class BeliefReplay:
                         break
             if fix is None and exp["type"] == "SHUFFLE_HAND" and got.get("type") == "CHAIN_SOLVED":
                 fix = self._activated_copy_fix(exp, duel, cp)
+            if fix is None and got.get("type") == "SHUFFLE_HAND" and exp["type"] != "SHUFFLE_HAND" \
+                    and got["player"] == self.opponent:
+                fix = self._moved_copy_fix(duel, cp)
             if fix is None and exp["type"] == "MOVE" and got.get("type") in ("CHAIN_SOLVED", "CHAIN_SOLVING", "CHAIN_END") \
                     and exp["from"]["loc"] in HIDDEN_PILES:
                 # (the replay's effect ended without moving it)
@@ -2002,6 +2005,15 @@ class BeliefReplay:
             if j < self.pos and self.items[j][0] == "msg" and self.items[j][1]["type"] == "CHAINING" \
                     and self.items[j][1]["trigger_con"] == self.opponent:
                 fix = self._property_fix(self.items[j][1]["code"], duel)
+        if fix is None and item[0] == "prompt" and item[1]["type"] == "SELECT_CHAIN" and item[1].get("chains") \
+                and got.get("type") != "SELECT_CHAIN":
+            # (the replay's chain forbids responses: the opponent's activation came in a
+            # later window, after one passed without a chain lifted a limit "until the
+            # end of the chain", e.g. Magical Meltdown's after a Fusion Summon)
+            for dkey, passing in reversed(self._window_activations):
+                if dkey[0] >= self.pos - 12 and self.overrides.get(dkey) != passing:
+                    fix = ("decide", dkey, passing)
+                    break
         if fix is None and item[0] == "prompt" and self._link_start() < self.pos:
             # the viewer is asked something in the real game while a chain link
             # resolves, the replay's link went on without it: what the link does can
@@ -2972,6 +2984,25 @@ class BeliefReplay:
                         src["seq"] += 1
                 return self._swap_fix(cp, msgs, idx, src, got["from"], duel)
             earlier.append(m)
+        return None
+
+    def _moved_copy_fix(self, duel: Duel, cp: tuple) -> tuple | None:
+        """The replay shuffles the opponent's hand where the real game does not: a
+        card that just left the hand was the other copy of it (e.g. a copy revealed
+        in the hand, whose leaving makes the hand shuffle, and a hidden one): the
+        copies trade places where they were last shuffled together."""
+        live = infer.LocMap(duel)
+        hand = duel.location_cards(self.opponent, C.LOCATION_HAND)
+        for j in range(self.pos - 1, max(-1, self.pos - 15), -1):
+            m = self.items[j][1] if self.items[j][0] == "msg" else {}
+            if m.get("type") != "MOVE" or m["from"]["con"] != self.opponent or m["from"]["loc"] != C.LOCATION_HAND:
+                continue
+            a = live.at(m["to"])
+            for code, b in hand:
+                if a and code == live.codes.get(a) and b != a:
+                    fix = self._history_swap(a, b, cp)
+                    if fix is not None:
+                        return fix
         return None
 
     def _history_swap(self, a: int, b: int, cp: tuple) -> tuple | None:
@@ -4527,6 +4558,15 @@ class BeliefReplay:
         hint = getattr(self, "_event_hint", None)
         return hint is not None and hint[0] == self.pos and hint[1] == BATTLE_START_EVENT
 
+    def _after_chain_end(self) -> bool:
+        """The first chain window after a chain ended (passing it, with no chain,
+        lifts the limits set "until the end of the chain", e.g. Magical Meltdown's
+        after a Fusion Summon: an activation can come in the window after it)."""
+        j = self.pos - 1
+        while j >= 0 and self.items[j][0] == "msg" and self.items[j][1]["type"] in ("HINT", "CARD_HINT", "PLAYER_HINT"):
+            j -= 1
+        return j >= 0 and self.items[j][0] == "msg" and self.items[j][1]["type"] == "CHAIN_END"
+
     def _leaving_phase(self) -> bool:
         hint = getattr(self, "_event_hint", None)
         return hint is not None and hint[0] == self.pos and hint[1] in infer.PHASE_LEAVE_EVENTS
@@ -4746,7 +4786,7 @@ class BeliefReplay:
             if act is not None:
                 self._window_choices.append((dkey, act))
         elif dkey is not None and prompt["type"] == "SELECT_CHAIN" and resp.get("index", -1) >= 0 \
-                and (self._leaving_phase() or self._battle_start_window()):
+                and (self._leaving_phase() or self._battle_start_window() or self._after_chain_end()):
             # (activated in a phase-leave window: in a later one instead, the phase
             # can go on after the chain where this one asks for the command again)
             passing = next((k for k, c in enumerate(valid) if c.get("index", -1) == -1), None)
