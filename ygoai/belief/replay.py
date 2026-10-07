@@ -1669,6 +1669,15 @@ class BeliefReplay:
                 # moved specific physical cards (e.g. ones it revealed and shuffled
                 # back), and in the real game the card at that slot is one of them
                 fix = self._revealed_fix(exp["from"])
+            if fix is None and exp["type"] == got["type"] == "MOVE" and exp["code"] and exp["code"] == got["code"] \
+                    and exp["from"]["con"] == got["from"]["con"] == self.opponent \
+                    and exp["from"]["loc"] == got["from"]["loc"] == C.LOCATION_HAND \
+                    and exp["from"]["seq"] != got["from"]["seq"] and exp["to"] == got["to"]:
+                # a copy of a card leaves the hand from another slot than in the replay
+                # (e.g. "Special Summon this card" after the hand was shuffled since it
+                # was activated): the real slot holds the physical card the replay moved
+                # (a swap of identical copies before a hidden shuffle changes nothing)
+                fix = self._slot_identity_fix(exp["from"], got["from"], copies=True)
             if fix is None and exp["type"] == got["type"] and exp.get("code") == got.get("code"):
                 le, lg = _loc_of(exp), _loc_of(got)
                 if (le is not None and lg is not None and le["con"] == lg["con"]
