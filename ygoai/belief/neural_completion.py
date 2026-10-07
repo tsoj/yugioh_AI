@@ -53,6 +53,41 @@ class NeuralCompletion(DeckCompletion):
             self._fallback = CorpusCompletion(self.db)
         return self._fallback
 
+    def stand_ins(self, need: tuple, known: list[int] = ()) -> list[int]:
+        """The cards of that kind the deck most likely holds, given its known
+        cards (the existence model), then effect-less ones as before."""
+        from .completion import fits_need
+        from .script_index import global_keys, win_condition_codes
+        canon = [canonical_code(self.db, c) for c in known]
+        key = ("stand_ins", need, tuple(sorted(canon)))
+        if key not in self._cache:
+            wins = win_condition_codes()
+            have = set().union(*(global_keys(c) for c in canon))
+            out = []
+            for code in self._ranked(canon):
+                card = self.db.get(code)
+                if card is not None and code not in wins and global_keys(code) <= have and fits_need(card, need):
+                    out.append(code)
+                    if len(out) >= 12:
+                        break
+            self._cache[key] = out + [c for c in super().stand_ins(need) if c not in out]
+        return list(self._cache[key])
+
+    def _ranked(self, canon: list[int]) -> list[int]:
+        """Every card of the vocabulary, the likeliest to be in the deck first."""
+        import torch
+        V = len(self.vocab)
+        c_vis = torch.zeros(V, dtype=torch.long)
+        for c in canon:
+            j = self.vocab.get(c)
+            if j is not None and c_vis[j] < 3:
+                c_vis[j] += 1
+        with torch.no_grad():
+            presence = self.cd.predict_presence(self.ex, c_vis, 55, "cpu")
+        inv = {i: c for c, i in self.vocab.items()}
+        order = torch.argsort(presence, descending=True, stable=True).tolist()
+        return [inv[j] for j in order if c_vis[j] == 0]
+
     def complete(self, known_main, known_extra, n_main, n_extra, present=()):
         key = (tuple(sorted(known_main)), tuple(sorted(known_extra)), n_main, n_extra,
                tuple(sorted(set(present))))

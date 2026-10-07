@@ -1302,7 +1302,8 @@ class Solver:
         # stand-ins are interchangeable: backtracking over them is pointless, so
         # only the first one that fits is tried
         comp = self.completion if self.completion is not None else DeckCompletion()
-        stand_ins = comp.stand_ins(v.need) if self.db is not None else []
+        stand_ins = comp.stand_ins(v.need, [k for a in self.t.atoms[v.owner] if (k := self._known(a))]) \
+            if self.db is not None else []
         for code in stand_ins:
             if code in known:
                 continue

@@ -75,9 +75,10 @@ class DeckCompletion:
         """`present`: the other known cards of the game (both players')."""
         raise NotImplementedError
 
-    def stand_ins(self, need: tuple) -> list[int]:
-        """Codes for a hidden card of a known kind that was never revealed
-        (effect-less where possible, so they cannot change the game)."""
+    def stand_ins(self, need: tuple, known: list[int] = ()) -> list[int]:
+        """Codes for a hidden card of a known kind that was never revealed, the
+        likeliest first (`known`: the other known cards of its deck); here
+        effect-less ones, which cannot change the game."""
         return _vanilla(getattr(self, "db", None)).stand_ins(need)
 
 
@@ -146,7 +147,7 @@ class VanillaCompletion(DeckCompletion):
         self.settable_spells += sorted(c.code for c in cards if c.type == C.TYPE_SPELL | C.TYPE_FIELD
                                        and not c.alias and c.ot & 0x3)[:5]
 
-    def stand_ins(self, need: tuple) -> list[int]:
+    def stand_ins(self, need: tuple, known: list[int] = ()) -> list[int]:
         if need[0] in ("st", "field"):
             pool = self.settable_spells
         elif need[0] == "mset":

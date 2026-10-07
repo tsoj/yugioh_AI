@@ -559,7 +559,7 @@ class FlowSolver:
             typed = [a for a in wild if commodities[vcom[a.id]][1] not in (WILD_MAIN, WILD_EXTRA)]
             for a in typed:
                 need = _wild_need(commodities[vcom[a.id]][1])
-                cands = [c for c in comp.stand_ins(need) if counts[self._base(c)] < 3
+                cands = [c for c in comp.stand_ins(need, list(counts.elements())) if counts[self._base(c)] < 3
                          and c not in excluded.get(a.id, ())]
                 if self.db is not None and need[0] == "mset" \
                         and excluded.get(a.id, set()) & set(comp.stand_ins(need)):
