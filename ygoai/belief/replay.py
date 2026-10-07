@@ -5006,9 +5006,18 @@ class BeliefReplay:
                 try:
                     report = b""
                     if code == PROBE_OK:
-                        # (the answers along the way, with enough verified after them)
-                        report = pickle.dumps([d for d in self._probe_decisions
-                                               if d[0][0] + self.min_progress <= reached][:200])
+                        # (the answers along the way, with enough verified after them; up
+                        # to a yes/no or option past the state view the probe checked:
+                        # its consequence can show in a later state view only, e.g. "lower
+                        # their Levels by 3?", which the main line checks)
+                        plan = []
+                        for d in self._probe_decisions:
+                            if d[0][1] in ("SELECT_YESNO", "SELECT_OPTION") \
+                                    and (self.probe_state_at is None or d[0][0] >= self.probe_state_at):
+                                break
+                            if d[0][0] + self.min_progress <= reached:
+                                plan.append(d)
+                        report = pickle.dumps(plan[:200])
                         if len(report) > 60000:
                             report = b""  # (more than the pipe holds without a reader)
                     os.write(wfd, reached.to_bytes(4, "little") + report)
