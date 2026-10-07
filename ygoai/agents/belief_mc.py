@@ -20,6 +20,7 @@ from ..state import capture
 from .base import Agent
 from .greedy_agent import GreedyAgent
 
+MAX_APPROX_DIFFS = 4  # public facts an approximate reconstruction may get wrong to be searched on
 SEARCHED = ("SELECT_IDLECMD", "SELECT_BATTLECMD", "SELECT_CHAIN", "SELECT_EFFECTYN", "SELECT_YESNO",
             "SELECT_OPTION")
 
@@ -120,6 +121,16 @@ class BeliefMCAgent(Agent):
         except (Divergence, TrackerError):
             self.failures += 1
             return None
+        if br.approximate:
+            # (a best-effort state only if it matches what this agent observes now: an
+            # early divergence can leave the rest of the game far off)
+            from ..belief.check import _count_diffs
+            from ..state import viewer_view
+            observed = self.items[-1][2] if len(self.items[-1]) > 2 else None
+            if observed is None or _count_diffs(observed, viewer_view(duel, self.player)) > MAX_APPROX_DIFFS:
+                duel.close()
+                self.failures += 1
+                return None
         self.searches += 1
         self.approximate += br.approximate
         from ..observe import to_core_response

@@ -79,7 +79,11 @@ def _replay_case(record, items, seed: int, viewer: int, frac: float, timeout: in
     signal.alarm(timeout)
     t0 = time.monotonic()
     try:
-        r = check_prefix(record, viewer, items, cut, completion=get_completion(completion))
+        if os.environ.get("YGOAI_AGENT_MODE"):
+            from ygoai.belief.check import check_agent
+            r = check_agent(record, viewer, items, cut, completion=get_completion(completion))
+        else:
+            r = check_prefix(record, viewer, items, cut, completion=get_completion(completion))
         if time.monotonic() - t0 > timeout:
             # (the alarm came while the core ran one long step: the only Python code
             # running then is its log callback, which swallows the exception)
@@ -87,7 +91,9 @@ def _replay_case(record, items, seed: int, viewer: int, frac: float, timeout: in
         return {"seed": seed, "viewer": viewer, "frac": frac, "cut": cut, "len": len(items),
                 "ok": r.ok, "error": r.error, "seconds": r.seconds,
                 "decisions": r.opponent_decisions, "probed": r.probed, "probes": r.probes,
-                "restarts": r.restarts, "fixes": r.fixes, "repairs": r.repairs, "end_ignored": r.end_ignored}
+                "restarts": r.restarts, "fixes": r.fixes, "repairs": r.repairs, "end_ignored": r.end_ignored,
+                **({"approximate": r.approximate, "state_diffs": r.state_diffs}
+                   if os.environ.get("YGOAI_AGENT_MODE") else {})}
     except Timeout:
         return {"seed": seed, "viewer": viewer, "frac": frac, "cut": cut, "len": len(items),
                 "ok": False, "error": "timeout", "seconds": time.monotonic() - t0}
@@ -156,6 +162,9 @@ def make_parser() -> argparse.ArgumentParser:
                          "viewer) get the --turns cuts too")
     ap.add_argument("--mirror-prob", type=float, default=0.2)
     ap.add_argument("--timeout", type=int, default=180, help="seconds per belief replay")
+    ap.add_argument("--agent-mode", action="store_true",
+                    help="reconstruct as an agent does: at the viewer's decisions, with the best effort "
+                         "allowed (approximate states count separately, with their state differences)")
     ap.add_argument("--read-guided-ok", action="store_true",
                     help="count reconstructions the last-resort read-guided repair saved as consistent "
                          "(by default they count as failures, to be looked at)")
@@ -220,6 +229,8 @@ def build_tasks(args: argparse.Namespace) -> list[tuple]:
 
 def main() -> int:
     args = make_parser().parse_args()
+    if args.agent_mode:
+        os.environ["YGOAI_AGENT_MODE"] = "1"
     if args.read_guided_ok:
         os.environ["YGOAI_READ_GUIDED_OK"] = "1"
     tasks = build_tasks(args)
@@ -255,7 +266,13 @@ def main() -> int:
             by_frac[r["frac"]][1] += 1
     for frac, (k, n) in sorted(by_frac.items()):
         print(f"  cut {f'turn {-frac:.0f}' if frac < 0 else f'{frac:.2f}'}: {k}/{n}")
-    pseudo = sum(1 for r in results if not r["ok"] and str(r.get("error", "")).startswith("read-guided repair"))
+    approx = [r for r in results if r.get("approximate")]
+    if args.agent_mode:
+        diffs = sorted(r["state_diffs"] for r in approx)
+        print(f"  agent mode: {len(approx)} approximate (state differences: "
+              f"{'none' if not diffs else f'median {diffs[len(diffs) // 2]}, max {diffs[-1]}, exact {diffs.count(0)}'}), "
+              f"{sum(1 for r in results if not r['ok'] and not r.get('approximate'))} without any state")
+        pseudo = sum(1 for r in results if not r["ok"] and str(r.get("error", "")).startswith("read-guided repair"))
     if pseudo:
         print(f"  ({pseudo} of the failures are pseudo-failures: consistent with the last-resort read-guided "
               f"repair, to check that no leak is behind them)")

@@ -419,6 +419,7 @@ class BeliefReplay:
         self.card_shuffled: dict[int, list] = {}  # card id -> cps of the shuffles of its pile
         self._shuffle_count = 0  # shuffles so far (index into the hypothesis' shuffles)
         self._event_hint = None  # (stream position, data) of the opponent's latest timing event
+        self._opp_select_hint = None  # (data of the opponent's latest select hint)
         self._decisions_at: dict[int, int] = {}  # stream position -> decisions made there
         # (key, candidates, chosen) of the recent decisions: those of the last few
         # stream positions (a decision's consequence can show a few items later,
@@ -645,6 +646,7 @@ class BeliefReplay:
         except (TrackerError, Divergence):
             return None
         self.lenient, self.lenient_skips = True, 0
+        self._lenient_rejected: set = set()
         try:
             duel.start()
             self._loop(duel, None, None)
@@ -674,6 +676,18 @@ class BeliefReplay:
                 self.pos = j
                 return True
         return False
+
+    def _lenient_pick(self, prompt: dict, resp: dict) -> dict:
+        """(lenient) `resp`, unless the core rejected it for this prompt before: then
+        another legal answer (seeded: the same every run)."""
+        import random
+        from ..actions import random_response
+        sig = repr(sorted(prompt.items()))
+        k = 0
+        while (sig, repr(resp)) in self._lenient_rejected and k < 50:
+            resp = random_response(prompt, random.Random(self.pos * 131 + k), self.db)
+            k += 1
+        return resp
 
     def _first_valid(self, prompt: dict) -> dict:
         """(lenient) Some legal answer: the first of the usual candidates, else a
@@ -1272,6 +1286,8 @@ class BeliefReplay:
                 if m["type"] == "HINT" and m["hint_type"] == C.HINT_EVENT and m["player"] == self.opponent:
                     # the (private) timing of the opponent's next chain window
                     self._event_hint = (self.pos, m["data"])
+                if m["type"] == "HINT" and m["hint_type"] == C.HINT_SELECTMSG and m["player"] == self.opponent:
+                    self._opp_select_hint = m["data"]  # (e.g. the code of the card about to be placed)
             pending = prompt if status == STATUS_AWAITING else None
             pending_resp = None
             for idx, m in enumerate(msgs):
@@ -1289,6 +1305,13 @@ class BeliefReplay:
                         and self.pos < len(self.items) and self.items[self.pos][0] == "prompt":
                     # (the viewer's answer was invalid in the real game too: the stream
                     # shows the same prompt again, still pending in the core)
+                    continue
+                if m["type"] == "RETRY" and self.lenient and self.depth == 0 and answered is not None:
+                    # (lenient: the core asks again; another answer next time)
+                    self._lenient_rejected.add((repr(sorted(answered.items())), repr(answered_resp)))
+                    self.lenient_skips += 1
+                    if len(self._lenient_rejected) > 200:
+                        raise Divergence(self.pos, "core rejected too many responses")
                     continue
                 if m["type"] == "RETRY":
                     if answered is not None and answered["type"] == "ANNOUNCE_CARD" \
@@ -1464,13 +1487,15 @@ class BeliefReplay:
                 self._advance()
                 self._simlog("prompt", prompt, resp[1])
                 try:
+                    if self.lenient and (repr(sorted(prompt.items())), repr(resp[1])) in self._lenient_rejected:
+                        raise InvalidResponse("rejected before")
                     duel.set_response(encode(prompt, to_core_response(prompt, self.viewer, resp[1])))
                     pending_resp = resp[1]
                 except (InvalidResponse, KeyError, TypeError, ValueError, IndexError):
                     if not self.lenient:
                         raise
                     # (the recorded answer does not fit the replay's prompt)
-                    pending_resp = self._first_valid(prompt)
+                    pending_resp = self._lenient_pick(prompt, self._first_valid(prompt))
                     duel.set_response(encode(prompt, pending_resp))
                     self.lenient_skips += 1
                 if self.depth > 0 and self._done():
@@ -1484,6 +1509,8 @@ class BeliefReplay:
                         raise
                     resp = self._first_valid(prompt)
                     self.lenient_skips += 1
+                if self.lenient and self.depth == 0:
+                    resp = self._lenient_pick(prompt, resp)
                 self._simlog("prompt", prompt, resp)
                 duel.set_response(encode(prompt, resp))
                 pending_resp = resp
@@ -5007,8 +5034,19 @@ class BeliefReplay:
                     start = next((j for j in range(self.pos - 1, max(-1, self.pos - 12), -1)
                                   if self.items[j][0] == "msg" and self.items[j][1]["type"] == "CHAINING"
                                   and self.items[j][1]["trigger_con"] == self.opponent), None)
+                # (the card it is about to place, named by the select hint, is in none
+                # of the opponent's hidden piles there: the real effect found nothing; a
+                # lasting fact, unlike a span, e.g. for the same search every End Phase)
+                code = getattr(self, "_opp_select_hint", None)
+                if start is not None and code and self.db.get(code) is not None:
+                    for loc in (C.LOCATION_DECK, C.LOCATION_HAND):
+                        if any(c == code for c, _ in duel.location_cards(self.opponent, loc)):
+                            key = (start, self.opponent, loc, _ALL_SLOTS, code)
+                            if key not in self.exclusions and key not in self.failed_exclusions:
+                                fix = ("exclude", *key)
+                                break
                 span = self._nomatch_span(start)
-                if span is not None:
+                if fix is None and span is not None:
                     fix = ("nomatchpile", *span)
             raise Divergence(self.pos, f"no candidate response for opponent {prompt['type']}", fix=fix)
         dkey = self._dkey if self.depth == 0 else None

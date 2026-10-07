@@ -62,6 +62,8 @@ class CheckResult:
     details: dict = field(default_factory=dict)
     repairs: list = field(default_factory=list)  # "reason -> fix" of every restart
     end_ignored: bool = False  # the unfinished action the game ended in was not checked
+    approximate: bool = False  # (agent mode) the best-effort reconstruction, not a consistent one
+    state_diffs: int = 0  # (agent mode) public facts of its state that differ from the real one
 
 
 def check_prefix(record: GameRecord, viewer: int, items: list[tuple], cut: int,
@@ -120,6 +122,47 @@ def check_prefix(record: GameRecord, viewer: int, items: list[tuple], cut: int,
     res.restarts = br.stats.restarts
     res.fixes = {k: getattr(br.stats, k) for k in ("forces", "assumptions", "swaps", "read_guided")
                  if getattr(br.stats, k)}
+    return res
+
+
+def _count_diffs(a, b) -> int:
+    if isinstance(a, dict) and isinstance(b, dict):
+        return sum(_count_diffs(a.get(k), b.get(k)) for k in set(a) | set(b))
+    if isinstance(a, list) and isinstance(b, list) and len(a) == len(b):
+        return sum(_count_diffs(x, y) for x, y in zip(a, b))
+    return int(a != b)
+
+
+def check_agent(record: GameRecord, viewer: int, items: list[tuple], cut: int, **replay_kwargs) -> CheckResult:
+    """As an agent reconstructs: at the viewer's decision (the cut moved back to its
+    latest prompt), the best effort allowed when no consistent reconstruction is
+    found (without the slow read-guided repair); counts how far its public state is
+    from the real one there."""
+    from ..state import viewer_view
+    while cut > 0 and items[cut - 1][0] != "prompt":
+        cut -= 1
+    res = CheckResult(viewer=viewer, cut=cut, length=len(items), ok=False)
+    if cut == 0:
+        res.error = "no decision of the viewer"
+        return res
+    t0 = time.monotonic()
+    br = BeliefReplay(viewer, init_info(record, viewer), items[:cut], **replay_kwargs)
+    br.allow_approximate, br.read_guided, br.check_state = True, False, False
+    try:
+        duel = br.run()
+        try:
+            res.state_diffs = _count_diffs(items[cut - 1][2], viewer_view(duel, viewer))
+        finally:
+            duel.close()
+        res.ok, res.approximate, res.stage = not br.approximate, br.approximate, "done"
+        if br.approximate:
+            res.error = f"approximate ({br.lenient_skips} re-aligned, {res.state_diffs} state differences)"
+    except (Divergence, TrackerError) as e:
+        res.error = str(e)
+    except Exception as e:  # noqa: BLE001
+        res.error = f"{type(e).__name__}: {e}\n{traceback.format_exc(limit=4)}"
+    res.seconds = time.monotonic() - t0
+    res.restarts = br.stats.restarts
     return res
 
 
