@@ -6,7 +6,10 @@ start of the new one, so:
 
 1. the previous consistent reconstruction's duel, kept waiting at that decision,
    goes on with the agent's answer and the observations since (BeliefReplay.extend,
-   incremental: only the new part is replayed);
+   incremental: only the new part is replayed), unless they reveal opponent cards
+   not seen before (or more copies of one): the guesses for the opponent's hidden
+   cards (the deck completion) take what was seen into account, so they are made
+   anew then;
 2. if that runs into a mismatch (which needs repairs, i.e. a run from the start),
    a new reconstruction inherits what the previous one found (its repairs and
    decisions, see BeliefReplay.inherit) and mostly works on the new part;
@@ -23,6 +26,7 @@ The duels belong to this object: the caller must not close them or change them
 from __future__ import annotations
 
 import os
+from collections import Counter
 
 from ..actions import InvalidResponse
 from .replay import BeliefReplay, Divergence
@@ -39,6 +43,9 @@ class AgentBelief:
         self._live = None  # (its duel, at the decision its stream ends with)
         self._last = None  # (the duel handed out last, closed at the next call)
         self.extended = 0  # (decisions reached incrementally)
+        self.revealed = 0  # (decisions with new reveals: reconstructed in full)
+        self._seen = Counter()  # opponent card codes the stream showed (see _reveals)
+        self._seen_upto = 0
         self.retries = 0  # (fresh attempts after an inherited one failed or was approximate)
 
     def reconstruct(self, items: list[tuple]):
@@ -48,6 +55,10 @@ class AgentBelief:
         if self._last is not None and self._last is not live:
             self._last.close()
         self._last = None
+        if self._reveals(items) and live is not None:
+            self.revealed += 1
+            live.close()
+            live = None
         if live is not None:
             try:
                 duel = self._prev.extend(live, items)
@@ -67,6 +78,36 @@ class AgentBelief:
         self._live = duel if consistent and self.incremental else None
         self._last = duel
         return br, duel
+
+    def _reveals(self, items) -> bool:
+        """Whether the stream since the last call shows opponent cards it did not
+        show before: per code, as one card when a message shows it (moved, summoned,
+        flipped, activated, confirmed) and as the most copies a state view showed
+        at once."""
+        opp = 1 - self.viewer
+        new = Counter()
+        for it in items[self._seen_upto:]:
+            if it[0] == "prompt" and len(it) > 2 and it[2] is not None:
+                here = Counter(c["code"] for p in it[2]["players"] for pile in p.values() for c in pile
+                               if c and c.get("code") and c.get("owner") == opp)
+                new |= here
+            elif it[0] == "msg":
+                m = it[1]
+                if m["type"] == "MOVE" and m.get("code"):
+                    con = m["to"]["con"] if m["to"]["loc"] else m["from"]["con"]
+                    if con == opp:
+                        new[m["code"]] = max(new[m["code"]], 1)
+                elif m["type"] in ("CHAINING", "POS_CHANGE", "SET", "SUMMONING", "SPSUMMONING") \
+                        and m.get("code") and m.get("con") == opp:
+                    new[m["code"]] = max(new[m["code"]], 1)
+                elif m["type"] == "CONFIRM_CARDS":
+                    for c in m["cards"]:
+                        if c.get("code") and c.get("con") == opp:
+                            new[c["code"]] = max(new[c["code"]], 1)
+        self._seen_upto = len(items)
+        more = any(n > self._seen[code] for code, n in new.items())
+        self._seen |= new
+        return more
 
     def close(self) -> None:
         for d in {id(d): d for d in (self._live, self._last) if d is not None}.values():
