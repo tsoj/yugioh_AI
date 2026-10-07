@@ -39,7 +39,7 @@ P = "setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-se
 
 DECKS = [("new", 3), ("new-mixed", 2), ("new-cards", 2), ("diverse", 2), ("cards", 1), ("random", 1), ("book", 1)]
 PAIRS = [(None, 1), (P, 2)]
-COMPLETION = [("corpus", 4), ("vanilla", 1)]
+COMPLETION = [("neural", 6), ("corpus", 2), ("vanilla", 1)]  # (neural: the learned deck models, the AI's)
 
 
 def _pick(rng: random.Random, choices: list[tuple]):

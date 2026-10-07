@@ -24,6 +24,23 @@ SEARCHED = ("SELECT_IDLECMD", "SELECT_BATTLECMD", "SELECT_CHAIN", "SELECT_EFFECT
             "SELECT_OPTION")
 
 
+_NEURAL = None
+
+
+def _neural_completion():
+    """The learned deck models (one per process), else the corpus completion
+    (e.g. without PyTorch)."""
+    global _NEURAL
+    if _NEURAL is None:
+        try:
+            from ..belief.neural_completion import NeuralCompletion
+            _NEURAL = NeuralCompletion()
+        except ImportError:
+            from ..belief.corpus import CorpusCompletion
+            _NEURAL = CorpusCompletion()
+    return _NEURAL
+
+
 def candidates(prompt: dict) -> list[dict]:
     t = prompt["type"]
     if t == "SELECT_IDLECMD":
@@ -65,10 +82,11 @@ class BeliefMCAgent(Agent):
         self.rollouts = rollouts
         self.horizon = horizon
         self.max_candidates = max_candidates
-        self.completion = completion
+        self.completion = completion if completion is not None else _neural_completion()
         self.fallback = GreedyAgent(seed)
         self.searches = 0
         self.failures = 0
+        self.approximate = 0  # (searches on a best-effort reconstruction)
 
     def start(self, player: int, init: dict) -> None:
         super().start(player, init)
@@ -95,12 +113,15 @@ class BeliefMCAgent(Agent):
         from ..belief.tracker import TrackerError
         br = BeliefReplay(self.player, self.init, self.items, completion=self.completion,
                           check_state=False)
+        br.allow_approximate = True  # (an agent needs some state: the closest one, from observations only)
+        br.read_guided = False  # (too slow per decision: the approximate pass comes right after the repairs)
         try:
             duel = br.run()
         except (Divergence, TrackerError):
             self.failures += 1
             return None
         self.searches += 1
+        self.approximate += br.approximate
         from ..observe import to_core_response
         core_prompt = getattr(br, "final_prompt", None) or prompt
         try:

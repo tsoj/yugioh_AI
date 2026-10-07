@@ -348,6 +348,12 @@ class BeliefReplay:
         self._suspect_log: dict | None = None  # (a run that records the reads before the divergence)
         self._suspect_prev_hook = None
         self._searched: set[int] = set()  # divergence positions whose decision search ran out
+        # best effort (for an agent): when no consistent reconstruction is found, a
+        # lenient pass that re-aligns with the stream instead of stopping at mismatches
+        self.allow_approximate = False
+        self.lenient = False
+        self.approximate = False  # (the duel came from the lenient pass)
+        self.lenient_skips = 0  # (stream items and replay messages it passed over)
         self.suspect_tests: dict | None = None  # (a run that tests the candidates at a decision)
         self._test_until: int | None = None  # (in a test fork: no early success before this)
         self.match_piles: set[tuple[int, int]] = set()  # stream positions (from, to): hidden piles match
@@ -613,13 +619,81 @@ class BeliefReplay:
                 and e.pos > last_prompt + 1
             # (not after the viewer's last decision in a game that ended in the middle
             # of an action: what shows there is incomplete, see check.check_prefix)
-            if self.depth > 0 or not self.read_guided or unfinished:
+            if self.depth > 0 or unfinished:
                 raise
-            from .read_guided import read_guided_repair
-            duel = read_guided_repair(self)
+            duel = None
+            if self.read_guided:
+                from .read_guided import read_guided_repair
+                duel = read_guided_repair(self)
+            if duel is None and self.allow_approximate:
+                duel = self._lenient_run()
             if duel is None:
                 raise
             return duel
+
+    def _lenient_run(self) -> Duel | None:
+        """The best effort when no consistent reconstruction exists: the latest
+        hypothesis with every repair found, replayed while re-aligning with the
+        stream at mismatches (skipping what the replay does not reproduce) up to
+        the viewer's current decision. Only observations are used, so nothing
+        leaks; the result is marked approximate."""
+        self._reset()
+        try:
+            if self.hypothesis is None:
+                self.build_hypothesis()
+            duel = self.build_duel()
+        except (TrackerError, Divergence):
+            return None
+        self.lenient, self.lenient_skips = True, 0
+        try:
+            duel.start()
+            self._loop(duel, None, None)
+        except (Divergence, TrackerError, InvalidResponse, KeyError, ValueError) as e:
+            duel.close()
+            if self.log:
+                self.log(f"no approximate reconstruction either: {e}")
+            return None
+        finally:
+            self.lenient = False
+        if getattr(self, "final_prompt", None) is None:
+            duel.close()
+            return None
+        self.approximate = True
+        if self.log:
+            self.log(f"approximate reconstruction ({self.lenient_skips} items re-aligned)")
+        return duel
+
+    def _realign(self, o: dict) -> bool:
+        """(lenient) Moves to the stream's next copy of the replay's message, if it
+        comes before the viewer's next prompt."""
+        for j in range(self.pos, min(len(self.items), self.pos + 40)):
+            if self.items[j][0] != "msg":
+                return False
+            if self.items[j][1] == o:
+                self.lenient_skips += j - self.pos
+                self.pos = j
+                return True
+        return False
+
+    def _first_valid(self, prompt: dict) -> dict:
+        """(lenient) Some legal answer: the first of the usual candidates, else a
+        random legal one (seeded by the stream position: the same every run)."""
+        for c in _all_responses(prompt):
+            try:
+                encode(prompt, c)
+                return c
+            except (InvalidResponse, KeyError, TypeError, ValueError):
+                continue
+        import random
+        from ..actions import random_response
+        for k in range(20):
+            c = random_response(prompt, random.Random(self.pos * 31 + k), self.db)
+            try:
+                encode(prompt, c)
+                return c
+            except (InvalidResponse, KeyError, TypeError, ValueError):
+                continue
+        raise Divergence(self.pos, "no valid response")
 
     def _run(self) -> Duel:
         last = None
@@ -1189,7 +1263,7 @@ class BeliefReplay:
             forced_error = duel.forced_errors()
 
             def check_forced():
-                if forced_error:
+                if forced_error and not self.lenient:
                     raise Divergence(self.pos, "a forced shuffle/random outcome could not be applied "
                                      "(the replay's cards differ from the hypothesis)", None, msgs)
             if status == STATUS_AWAITING and msgs and msgs[-1]["type"] != "RETRY":
@@ -1239,6 +1313,9 @@ class BeliefReplay:
                         return
                     if self.stopped:
                         return  # (the arbiter stopped the game somewhere after what was observed)
+                    if self.lenient:
+                        self.lenient_skips += 1
+                        continue
                     raise Divergence(self.pos, "replay produced more messages than observed", None, o)
                 item = self.items[self.pos]
                 if o["type"] == "SHUFFLE_HAND" and o["player"] == getattr(self, "_skip_shuffle_hand", None) \
@@ -1248,7 +1325,12 @@ class BeliefReplay:
                         continue  # (a code test's own card arrival, see _run_code_tests)
                 if item[0] != "msg" or item[1] != o:
                     if not self._match_unordered_hint(o):
-                        raise self._mismatch(cp, msgs, idx, item, o, duel)
+                        if self.lenient and self.depth == 0:
+                            if not self._realign(o):
+                                self.lenient_skips += 1
+                                continue  # (a message the stream does not show: passed over)
+                        else:
+                            raise self._mismatch(cp, msgs, idx, item, o, duel)
                 self._advance()
                 if o["type"] == "WIN":
                     check_forced()
@@ -1276,13 +1358,23 @@ class BeliefReplay:
                 pending, pending_resp = prompt, AUTO_RESPONSE
                 continue
             if prompt["player"] == self.viewer:
+                if self.lenient and self.depth == 0:
+                    # (the stream's next prompt of the viewer is this one)
+                    j = self.pos
+                    while j < len(self.items) and self.items[j][0] != "prompt":
+                        j += 1
+                    self.lenient_skips += j - self.pos
+                    self.pos = j
                 if self.pos >= len(self.items):
                     if self.depth > 0:
+                        return
+                    if self.lenient:
+                        self.final_prompt = prompt
                         return
                     raise Divergence(self.pos, "stream ended before the viewer's prompt")
                 item = self.items[self.pos]
                 fp = filter_prompt(prompt, self.viewer)
-                if item[0] != "prompt" or item[1] != fp:
+                if (item[0] != "prompt" or item[1] != fp) and not (self.lenient and self.depth == 0):
                     fix = self._force_fix(item[1]) if item[0] == "msg" else None
                     ch = item[1] if item[0] == "msg" and item[1]["type"] == "CHAINING" else None
                     if fix is None and item[0] == "msg" and item[1]["type"] in infer._ACTIVATION_PRELUDE:
@@ -1345,7 +1437,7 @@ class BeliefReplay:
                             fix = ("nomatchpile", *span)
                     what = item[1].get("type") if item[0] == "prompt" else item[1].get("type", item[0])
                     raise Divergence(self.pos, f"prompt mismatch [{what} vs {fp['type']}]", item, fp, fix)
-                if (self.check_state or self.pos == self.probe_state_at) and item[2] is not None:
+                if (self.check_state or self.pos == self.probe_state_at) and item[2] is not None and not self.lenient:
                     got = viewer_view(duel, self.viewer)
                     if got != item[2]:
                         fix = self._state_copy_fix(item[2], got, duel, cp) or self._public_arrival_fix(item[2], got) \
@@ -1371,13 +1463,27 @@ class BeliefReplay:
                     raise Divergence(self.pos, "expected the viewer's response")
                 self._advance()
                 self._simlog("prompt", prompt, resp[1])
-                duel.set_response(encode(prompt, to_core_response(prompt, self.viewer, resp[1])))
-                pending_resp = resp[1]
+                try:
+                    duel.set_response(encode(prompt, to_core_response(prompt, self.viewer, resp[1])))
+                    pending_resp = resp[1]
+                except (InvalidResponse, KeyError, TypeError, ValueError, IndexError):
+                    if not self.lenient:
+                        raise
+                    # (the recorded answer does not fit the replay's prompt)
+                    pending_resp = self._first_valid(prompt)
+                    duel.set_response(encode(prompt, pending_resp))
+                    self.lenient_skips += 1
                 if self.depth > 0 and self._done():
                     return
             else:
                 self._opp_prompt = prompt
-                resp = self._decide(duel, prompt)
+                try:
+                    resp = self._decide(duel, prompt)
+                except Divergence:
+                    if not (self.lenient and self.depth == 0):
+                        raise
+                    resp = self._first_valid(prompt)
+                    self.lenient_skips += 1
                 self._simlog("prompt", prompt, resp)
                 duel.set_response(encode(prompt, resp))
                 pending_resp = resp
