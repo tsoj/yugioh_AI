@@ -34,9 +34,17 @@ class Timeout(BaseException):  # not swallowed by check_prefix
     pass
 
 
-def _alarm(*_):
+def _alarm(_signum, frame):
     if os.getpid() != _main_pid:
         os._exit(3)  # a forked probe inherited the alarm
+    f = frame
+    while f is not None:
+        if f.f_code.co_name in ("close", "__del__") and f.f_code.co_filename.endswith("core.py"):
+            # (not while a duel is destroyed: an exception between the core's destroy
+            # and forgetting the handle destroys it a second time, a crash)
+            signal.alarm(1)
+            return
+        f = f.f_back
     # an exception raised inside e.g. an os.fork() callback is ignored: try again
     # a second later (the task cancels the alarm when it ends)
     signal.alarm(1)

@@ -211,6 +211,10 @@ def main() -> int:
     unknown = [r for r in args.ranges if r not in ranges]
     if unknown:
         sys.exit(f"unknown ranges: {unknown}")
+    # (from a frozen copy of the code: edits during the run cannot mix in)
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import snapshot
+    snapshot.reexec(f"suite-{args.tag}")
     sys.path.insert(0, str(ROOT / "scripts"))
     import check_belief as cb
     from ygoai.parallel import Crash, run_parallel

@@ -86,6 +86,8 @@ def main() -> int:
     ap.add_argument("--batch", type=int, default=128, help="games per batch")
     ap.add_argument("-j", "--jobs", type=int, default=os.cpu_count())
     args = ap.parse_args()
+    import snapshot
+    snapshot.reexec("explore")  # (from a frozen copy of the code: edits during the run cannot mix in)
     import check_belief as cb
     from compare_runs import reviewed
     from ygoai.parallel import Crash, run_parallel
