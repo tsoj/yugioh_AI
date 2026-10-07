@@ -163,6 +163,7 @@ class Tracker:
         self._prev_sig: tuple | None = None  # the message before the latest one (not hints)
         self._last_move_to: tuple | None = None  # (con, loc, seq) the latest MOVE put a card at
         self._top_check: int | None = None  # a deck just shuffled (whose top may be announced)
+        self._top_check_move: int | None = None  # a deck whose top card just left it
         own = init["deck"]
         opp_main, opp_extra = init["opponent_deck_size"], init["opponent_extra_size"]
         for p in (0, 1):
@@ -454,6 +455,14 @@ class Tracker:
                     for x in self._faceup_in_deck:
                         if x is not top and not any(y is x for y in top.not_same):
                             top.not_same.append(x)
+        if self._top_check_move is not None:
+            p, self._top_check_move = self._top_check_move, None
+            if not (t == "DECK_TOP" and m["player"] == p) \
+                    and not (t == "MOVE" and m["from"]["loc"] == C.LOCATION_DECK and m["from"]["con"] == p):
+                # (the top card left the deck, e.g. added to the hand, and the new top
+                # was not announced: it is none of the face-up ones; not between the
+                # cards of one operation, announced once at its end)
+                self._not_faceup_top(p)
         if t == "SHUFFLE_DECK":
             self._top_check = m["player"]
         if t not in ("HINT", "CARD_HINT", "CHAIN_SOLVED"):
@@ -557,9 +566,12 @@ class Tracker:
             if frm["loc"] == 0:
                 v = self._new(to["con"], "created")
             else:
+                top = frm["loc"] == C.LOCATION_DECK and frm["seq"] == len(self.lists[frm["con"]][C.LOCATION_DECK]) - 1
                 v = self._take(frm)
                 if frm["loc"] == C.LOCATION_DECK:
                     self._left_deck(v)
+                    if top:
+                        self._top_check_move = frm["con"]
                 if frm["loc"] == C.LOCATION_HAND and frm.get("pos", 0) & C.POS_FACEUP and not m["code"] \
                         and v.kind == "claim" and v.pool is not None and v.code is None:
                     # (not if it was revealed since the shuffle: then it shows itself)
@@ -634,14 +646,11 @@ class Tracker:
                 v.faceup = bool(c["pos"] & C.POS_FACEUP)
                 self.lists[p][C.LOCATION_HAND].append(v)
                 self.observe(v, c["code"])
-            if deck and self._prev_sig != ("DECK_TOP", p) and deck[-1].kind == "claim":
+            if self._prev_sig != ("DECK_TOP", p):
                 # a draw that leaves a face-up card on top announces it (DECK_TOP
                 # before the draw): this one did not, so the new top card is none of
                 # the face-up ones
-                top = deck[-1]
-                for x in self._faceup_deck_cards(p):
-                    if x is not top and not any(y is x for y in top.not_same):
-                        top.not_same.append(x)
+                self._not_faceup_top(p)
         elif t == "SHUFFLE_DECK":
             deck = self.lists[m["player"]][C.LOCATION_DECK]
             self._deck_arrivals = [x for x in self._deck_arrivals if not any(x is y for y in deck)]
@@ -970,6 +979,15 @@ class Tracker:
         if v is not None and v is not x:
             self._identify(v, x)
         self._faceup_in_deck = [y for y in self._faceup_in_deck if y is not x]
+
+    def _not_faceup_top(self, p: int) -> None:
+        """The top card of a player's deck is none of the face-up cards in it."""
+        deck = self.lists[p][C.LOCATION_DECK]
+        if deck and deck[-1].kind == "claim":
+            top = deck[-1]
+            for x in self._faceup_deck_cards(p):
+                if x is not top and not any(y is x for y in top.not_same):
+                    top.not_same.append(x)
 
     def _faceup_deck_cards(self, player: int) -> list[Var]:
         """The face-up cards in a player's deck: those put there face-up (or turned
