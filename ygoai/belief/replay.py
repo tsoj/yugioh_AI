@@ -1697,6 +1697,8 @@ class BeliefReplay:
                 # knows nothing about (e.g. "send all monsters from the hand"): in the
                 # real game it does not fit (a filler card of the wrong kind)
                 fix = self._nomatch_card_fix(got["from"], duel, got["to"])
+            if fix is None and got.get("type") == "CONFIRM_CARDS" and exp["type"] != "CONFIRM_CARDS":
+                fix = self._win_reveal_fix(got)
             if fix is None and got["type"] == "MOVE" and got["from"]["con"] == self.opponent and got.get("code") \
                     and (got["from"]["loc"] in HIDDEN_PILES
                          or got["from"]["loc"] & C.LOCATION_ONFIELD and got["from"].get("pos", 0) & C.POS_FACEDOWN) \
@@ -2580,6 +2582,22 @@ class BeliefReplay:
             entry = (k, (f["con"], f["loc"], f["seq"]), same.id)
             if entry not in self.identities and entry not in self.failed_identities:
                 return ("identify", *entry)
+        return None
+
+    def _win_reveal_fix(self, got: dict) -> tuple | None:
+        """The replay's hidden hand of the opponent completes a win condition the real
+        game's does not (e.g. all five Exodia pieces: the check reveals the hand): one
+        of the pieces there is another card, the latest arrivals first."""
+        from .script_index import win_condition_codes
+        wins = win_condition_codes()
+        pieces = [c for c in got["cards"] if c["con"] == self.opponent and c["loc"] == C.LOCATION_HAND
+                  and c.get("code") in wins]
+        if len(pieces) < 2:
+            return None
+        for c in sorted(pieces, key=lambda c: -c["seq"]):
+            key = (self.pos, c["con"], c["loc"], (c["seq"],), c["code"])
+            if key not in self.exclusions and key not in self.failed_exclusions:
+                return ("exclude", *key)
         return None
 
     def _self_move_fix(self, got: dict, duel: Duel) -> tuple | None:
