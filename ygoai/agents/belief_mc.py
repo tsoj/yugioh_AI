@@ -93,7 +93,8 @@ class BeliefMCAgent(Agent):
     def start(self, player: int, init: dict) -> None:
         super().start(player, init)
         self.items: list[tuple] = []
-        self._prev = None  # (the previous decision's consistent reconstruction)
+        from ..belief.agent import AgentBelief
+        self._belief = AgentBelief(player, init, self.completion)
         self.fallback.start(player, init)
 
     def observe(self, msg: dict) -> None:
@@ -112,25 +113,9 @@ class BeliefMCAgent(Agent):
         return resp
 
     def _search(self, prompt: dict, cands: list[dict]) -> dict | None:
-        from ..belief.replay import BeliefReplay, Divergence
-        from ..belief.tracker import TrackerError
-        def reconstruct(prev):
-            br = BeliefReplay(self.player, self.init, list(self.items), completion=self.completion,
-                              check_state=False)
-            br.allow_approximate = True  # (an agent needs some state: the closest one, from observations only)
-            br.read_guided = False  # (too slow per decision: the approximate pass comes right after the repairs)
-            inherited = prev is not None and br.inherit(prev)
-            try:
-                return br, br.run(), inherited
-            except (Divergence, TrackerError):
-                return br, None, inherited
-        # (what the previous decision's reconstruction found: only the new part needs work)
-        br, duel, inherited = reconstruct(self._prev)
-        if duel is not None and br.approximate and inherited or duel is None and inherited:
-            if duel is not None:
-                duel.close()
-            br, duel, _ = reconstruct(None)  # (the inherited repairs may not fit the longer stream)
-        self._prev = br if duel is not None and not br.approximate else None
+        # (from the previous decision's reconstruction: only the new part needs work;
+        # the duel belongs to self._belief)
+        br, duel = self._belief.reconstruct(self.items)
         if duel is None:
             self.failures += 1
             return None
@@ -141,25 +126,23 @@ class BeliefMCAgent(Agent):
             from ..state import viewer_view
             observed = self.items[-1][2] if len(self.items[-1]) > 2 else None
             if observed is None or _count_diffs(observed, viewer_view(duel, self.player)) > MAX_APPROX_DIFFS:
-                duel.close()
                 self.failures += 1
                 return None
         self.searches += 1
         self.approximate += br.approximate
         from ..observe import to_core_response
         core_prompt = getattr(br, "final_prompt", None) or prompt
-        try:
-            best, best_value = None, -2.0
-            for cand in cands:
-                core_cand = to_core_response(core_prompt, self.player, cand)
-                values = [self._rollout(duel, core_prompt, core_cand, self.rng.getrandbits(32))
-                          for _ in range(self.rollouts)]
-                value = sum(values) / len(values)
-                if value > best_value:
-                    best, best_value = cand, value
-            return best
-        finally:
-            duel.close()
+        # (the duel stays as it is, the rollouts run in forks: the next decision's
+        # reconstruction goes on from it, see AgentBelief)
+        best, best_value = None, -2.0
+        for cand in cands:
+            core_cand = to_core_response(core_prompt, self.player, cand)
+            values = [self._rollout(duel, core_prompt, core_cand, self.rng.getrandbits(32))
+                      for _ in range(self.rollouts)]
+            value = sum(values) / len(values)
+            if value > best_value:
+                best, best_value = cand, value
+        return best
 
     def _rollout(self, duel, prompt: dict, cand: dict, seed: int) -> float:
         """Forks, plays `cand` and continues greedily; returns the evaluation."""

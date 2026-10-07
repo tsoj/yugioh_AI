@@ -143,6 +143,12 @@ def _load_library(path: Path) -> ct.CDLL:
         "OCG_ExtForceActivatable": (None, [vp, u8, u32, ct.c_uint64]),
         "OCG_ExtClearForceActivatable": (None, [vp]),
         "OCG_ExtSwapCards": (i32, [vp, u32, u32]),
+        "OCG_ExtPlaceCard": (i32, [vp, u32, u8, u32, u32, u32]),
+        "OCG_ExtSetLP": (None, [vp, u8, i32]),
+        "OCG_ExtCreateCard": (u32, [vp, u8, u32]),
+        "OCG_ExtSetCardInfo": (i32, [vp, u32, u32, u32, u32]),
+        "OCG_ExtSetTurn": (None, [vp, u32]),
+        "OCG_ExtRestartCommand": (i32, [vp]),
         "OCG_ExtTakeForcedUsed": (u32, [vp, ct.POINTER(ct.c_uint64), u32]),
         "OCG_ExtSetForcedMatch": (None, [vp, ct.POINTER(u32), u32]),
         "OCG_ExtSetForcedNoMatch": (None, [vp, ct.POINTER(u32), u32]),
@@ -541,6 +547,29 @@ class Duel:
 
     def swap_cards(self, id_a: int, id_b: int) -> bool:
         return bool(lib().OCG_ExtSwapCards(self.handle, id_a, id_b))
+
+    def place_card(self, card_id: int, controller: int, location: int, sequence: int, position: int) -> bool:
+        """Moves a card silently (no messages or events; see OCG_ExtPlaceCard)."""
+        return bool(lib().OCG_ExtPlaceCard(self.handle, card_id, controller, location, sequence, position))
+
+    def set_lp(self, player: int, lp: int) -> None:
+        lib().OCG_ExtSetLP(self.handle, player, lp)
+
+    def create_card(self, owner: int, code: int) -> int:
+        """A new card out of play (to place, e.g. a token); returns its id."""
+        return lib().OCG_ExtCreateCard(self.handle, owner, code)
+
+    def set_card_info(self, card_id: int, reason: int | None, status: int, mask: int) -> bool:
+        return bool(lib().OCG_ExtSetCardInfo(self.handle, card_id, 0xFFFFFFFF if reason is None else reason,
+                                             status, mask))
+
+    def set_turn(self, turn: int) -> None:
+        lib().OCG_ExtSetTurn(self.handle, turn)
+
+    def restart_command(self) -> bool:
+        """At an Idle/Battle command prompt: the next process() asks it again,
+        computed anew (see OCG_ExtRestartCommand)."""
+        return bool(lib().OCG_ExtRestartCommand(self.handle))
 
     def clear_forced(self) -> None:
         lib().OCG_ExtClearForced(self.handle)

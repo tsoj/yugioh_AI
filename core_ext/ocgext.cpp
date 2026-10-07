@@ -685,6 +685,151 @@ OCGEXT_API uint32_t OCG_ExtSelectChains(OCG_Duel ocg_duel, uint64_t* out, uint32
 	return n;
 }
 
+// Re-synchronizing an approximate reconstruction with what its viewer observed
+// (see belief/sync.py): these change the state silently, without messages or
+// events, at a decision with an empty chain.
+
+// Moves the card with this id to (con, location, sequence) in `position`, as if it
+// had always been there: it leaves its equip/Xyz relations, its effects of the old
+// place reset, its Xyz materials go to their owner's GY. Sequence for the deck:
+// 0 top, 1 bottom. Returns 0 if the card is unknown or the zone is taken.
+OCGEXT_API int OCG_ExtPlaceCard(OCG_Duel ocg_duel, uint32_t id, uint8_t con, uint32_t location, uint32_t sequence, uint32_t position) {
+	auto* pduel = static_cast<duel*>(ocg_duel);
+	auto& f = *pduel->game_field;
+	card* pcard = nullptr;
+	for(auto* c : pduel->cards) {
+		if(c->cardid == id) {
+			pcard = c;
+			break;
+		}
+	}
+	if(!pcard || con > 1 || (location == 0 && !pcard->current.location && !pcard->overlay_target))
+		return 0;
+	if(location == LOCATION_MZONE || location == LOCATION_SZONE) {
+		auto& zones = location == LOCATION_MZONE ? f.player[con].list_mzone : f.player[con].list_szone;
+		if(sequence >= zones.size() || (zones[sequence] && zones[sequence] != pcard))
+			return 0;
+	}
+	if(pcard->current.location == location && pcard->current.controler == con
+	   && (location & LOCATION_ONFIELD) && pcard->current.sequence == sequence) {
+		pcard->current.position = position;  // (only its position)
+		pcard->refresh_disable_status();
+		return 1;
+	}
+	// (no shuffle of its own: a forced shuffle order is meant for the real game's next one)
+	auto& core = f.core;
+	bool deck_check[2] = {core.shuffle_deck_check[0], core.shuffle_deck_check[1]};
+	bool hand_check[2] = {core.shuffle_hand_check[0], core.shuffle_hand_check[1]};
+	struct Restore {
+		decltype(core)& c;
+		bool* d;
+		bool* h;
+		~Restore() {
+			c.shuffle_deck_check[0] = d[0]; c.shuffle_deck_check[1] = d[1];
+			c.shuffle_hand_check[0] = h[0]; c.shuffle_hand_check[1] = h[1];
+		}
+	} restore{core, deck_check, hand_check};
+	if(pcard->overlay_target) {
+		pcard->overlay_target->xyz_remove(pcard);
+	} else if(pcard->current.location) {
+		pcard->enable_field_effect(false);
+		if(pcard->equiping_target)
+			pcard->unequip();
+		for(auto* eq : card_set(pcard->equiping_cards))
+			eq->unequip();
+		for(auto* mat : std::vector<card*>(pcard->xyz_materials.begin(), pcard->xyz_materials.end())) {
+			pcard->xyz_remove(mat);
+			f.add_card(mat->owner, mat, LOCATION_GRAVE, 0);
+			mat->current.position = POS_FACEUP;
+		}
+		if(pcard->current.location & LOCATION_ONFIELD)
+			pcard->reset(RESET_LEAVE, RESET_EVENT);
+		pcard->clear_card_target();
+		f.remove_card(pcard);
+	}
+	if(location == 0)
+		return 1;  // (out of play: a token the viewer did not see)
+	pcard->sendto_param.position = static_cast<uint8_t>(position);
+	bool pzone = location == LOCATION_SZONE && (pcard->data.type & TYPE_PENDULUM) && (position & POS_FACEUP)
+		&& (sequence == 0 || sequence == 4);
+	f.add_card(con, pcard, static_cast<uint8_t>(location), static_cast<uint8_t>(sequence), pzone);
+	if(pcard->current.location == 0)
+		return 0;
+	pcard->current.position = (location & (LOCATION_DECK | LOCATION_HAND)) ? POS_FACEDOWN_DEFENSE
+		: (location == LOCATION_EXTRA && !(position & POS_FACEUP)) ? POS_FACEDOWN_DEFENSE : position;
+	uint32_t reset = location == LOCATION_HAND ? RESET_TOHAND : location == LOCATION_DECK || location == LOCATION_EXTRA
+		? RESET_TODECK : location == LOCATION_GRAVE ? RESET_TOGRAVE : location == LOCATION_REMOVED ? RESET_REMOVE
+		: RESET_TOFIELD;
+	pcard->reset(reset, RESET_EVENT);
+	pcard->enable_field_effect(true);
+	pcard->refresh_disable_status();
+	return 1;
+}
+
+static card* card_by_id(duel* pduel, uint32_t id) {
+	for(auto* c : pduel->cards) {
+		if(c->cardid == id)
+			return c;
+	}
+	return nullptr;
+}
+
+// A new card object out of play (e.g. a token to place); returns its id.
+OCGEXT_API uint32_t OCG_ExtCreateCard(OCG_Duel ocg_duel, uint8_t owner, uint32_t code) {
+	auto* pduel = static_cast<duel*>(ocg_duel);
+	card* pcard = pduel->new_card(code);
+	pcard->owner = owner;
+	pcard->current.location = 0;
+	pcard->current.controler = owner;
+	return pcard->cardid;
+}
+
+// Sets what the card shows of its history: its reason (unless ~0) and the status
+// bits in `mask`.
+OCGEXT_API int OCG_ExtSetCardInfo(OCG_Duel ocg_duel, uint32_t id, uint32_t reason, uint32_t status, uint32_t mask) {
+	card* pcard = card_by_id(static_cast<duel*>(ocg_duel), id);
+	if(!pcard)
+		return 0;
+	if(reason != UINT32_MAX)
+		pcard->current.reason = reason;
+	pcard->status = (pcard->status & ~mask) | (status & mask);
+	return 1;
+}
+
+OCGEXT_API void OCG_ExtSetTurn(OCG_Duel ocg_duel, uint32_t turn) {
+	auto* pduel = static_cast<duel*>(ocg_duel);
+	pduel->game_field->infos.turn_id = static_cast<int16_t>(turn);
+}
+
+OCGEXT_API void OCG_ExtSetLP(OCG_Duel ocg_duel, uint8_t playerid, int32_t lp) {
+	auto* pduel = static_cast<duel*>(ocg_duel);
+	if(playerid < 2)
+		pduel->game_field->player[playerid].lp = lp < 0 ? 0 : lp;
+}
+
+// At an Idle or Battle command prompt: drops the prompt and lets the phase compute
+// it again (after the state was changed, its lists would be stale). The next
+// OCG_DuelProcess sends the new prompt. Returns 0 if the duel is at another prompt.
+OCGEXT_API int OCG_ExtRestartCommand(OCG_Duel ocg_duel) {
+	auto* pduel = static_cast<duel*>(ocg_duel);
+	auto& units = pduel->game_field->core.units;
+	if(units.size() < 2 || !pduel->game_field->core.subunits.empty())
+		return 0;
+	auto first = units.begin();
+	auto second = std::next(first);
+	Processors::Process<false>* parent = nullptr;
+	if(Processors::get_opt_variant<Processors::SelectIdleCmd>(*first)) {
+		parent = Processors::get_opt_variant<Processors::IdleCommand>(*second);
+	} else if(Processors::get_opt_variant<Processors::SelectBattleCmd>(*first)) {
+		parent = Processors::get_opt_variant<Processors::BattleCommand>(*second);
+	}
+	if(!parent || parent->step != 1)
+		return 0;
+	units.pop_front();
+	parent->step = 0;
+	return 1;
+}
+
 OCGEXT_API void OCG_ExtGetInfo(OCG_Duel ocg_duel, uint32_t* out5) {
 	auto* pduel = static_cast<duel*>(ocg_duel);
 	auto& f = *pduel->game_field;

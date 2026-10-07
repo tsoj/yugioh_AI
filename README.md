@@ -200,21 +200,35 @@ state)` and `("response", response)`, exactly as the engine protocol delivers th
 decision it reconstructs the duel and searches from it with `fork()`:
 
 ```python
-from ygoai.belief.replay import BeliefReplay, Divergence
-from ygoai.belief.corpus import CorpusCompletion   # or VanillaCompletion
+from ygoai.belief.agent import AgentBelief
+from ygoai.belief.neural_completion import neural_completion   # or CorpusCompletion()
 from ygoai.actions import encode
+from ygoai.observe import to_core_response
 
-replay = BeliefReplay(player, init, items, completion=CorpusCompletion())
-duel = replay.run()             # a live duel, waiting for this player's response
-pid = os.fork()                 # e.g. one child per candidate response
+belief = AgentBelief(player, init, completion=neural_completion())   # one per game
+...
+replay, duel = belief.reconstruct(items)   # a live duel, waiting for this player's response
+pid = os.fork()                            # e.g. one child per candidate response
 if pid == 0:
-    duel.set_response(encode(prompt, candidate))
-    ...                         # simulate on, evaluate, report through a pipe
+    core_prompt = replay.final_prompt   # (the core's version of the prompt)
+    duel.set_response(encode(core_prompt, to_core_response(core_prompt, player, candidate)))
+    ...                                    # simulate on, evaluate, report through a pipe
 ```
 
+`AgentBelief` reconstructs decision by decision: the previous consistent duel goes on with the
+new observations (`BeliefReplay.extend`; the viewer's own draws and hand shuffles are arranged
+just in time, as a hypothesis of the longer stream would arrange them); when that runs into a
+mismatch, a full replay inherits the previous one's repairs and decisions
+(`BeliefReplay.inherit`); when that fails too, one from scratch. The duels belong to the
+`AgentBelief` (search in forks, never change or close them). When no consistent reconstruction
+exists, `replay.approximate` is set: the best effort re-aligned with the stream, its public state
+re-synchronized with what the player saw at each of its Idle/Battle commands (`belief/sync.py`).
+
 `ygoai/agents/belief_mc.py` is a complete (deliberately simple) example: flat Monte Carlo with
-greedy rollouts on the reconstructed duel. The reconstruction is rebuilt from scratch at every
-searched decision; making it incremental is an obvious next step.
+greedy rollouts on the reconstructed duel. `scripts/check_belief.py --agent-sequence K` checks
+reconstructions made this way (every K-th decision of each player; suite range
+`agentseq50000`), `--agent-mode` single reconstructions as an agent sees them (with the state
+differences of approximate ones).
 
 ## Current results
 

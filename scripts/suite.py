@@ -66,6 +66,8 @@ RANGES: dict[str, tuple[int, int, list[str]]] = {
     "cards41000": (1000, 41000, ["--decks", "cards", "--pairs", P, "--completion", "vanilla"]),
     "new50000": (1000, 50000, ["--decks", "new"]),
     "neural50000": (200, 50000, ["--decks", "new", "--completion", "neural"]),  # (the learned deck models)
+    # (as belief_mc reconstructs: every 3rd decision, inheriting; one result per game and viewer)
+    "agentseq50000": (100, 50000, ["--decks", "new", "--completion", "neural", "--agent-sequence", "3"]),
     "new51000": (1000, 51000, ["--decks", "new", "--pairs", P]),
     "new52000": (1000, 52000, ["--decks", "new"]),
     "new53000": (1000, 53000, ["--decks", "new", "--pairs", P]),

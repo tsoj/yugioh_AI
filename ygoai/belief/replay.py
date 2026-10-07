@@ -298,35 +298,9 @@ class BeliefReplay:
         # cards, when they fail) around its activation (see force_windows);
         # "unforce" repairs the rare case where that makes a mandatory effect
         # activate when it did not.
-        self.forces: set[tuple[int, int, int]] = {
-            (self.opponent, it[1]["code"], it[1]["desc"]) for j, it in enumerate(self.items)
-            if it[0] == "msg" and it[1]["type"] == "CHAINING" and self._opp_activates(j)}
+        self.forces, self.force_windows = self._stream_forces()
         self.unforced: set[tuple[int, int, int]] = set()
         self.unforced_windows: set[tuple] = set()  # force windows switched off by "unforce"
-        # the forcing applies only around the activation: from the start of its
-        # phase until just after it (elsewhere a forced mandatory effect could
-        # activate where the real one could not)
-        self.force_windows: list[tuple[int, int, tuple]] = []
-        start = 0
-        chaining = None
-        for i, it in enumerate(self.items):
-            if it[0] != "msg":
-                continue
-            m = it[1]
-            if m["type"] in ("NEW_PHASE", "NEW_TURN"):
-                start = i
-            elif m["type"] == "CHAINING" and self._opp_activates(i):
-                chaining = m["code"]
-                self.force_windows.append((start, i + 1, (self.opponent, m["code"], m["desc"])))
-            elif m["type"] == "CHAINED":
-                chaining = None
-            elif m["type"] == "HINT" and m["hint_type"] == C.HINT_OPSELECTED and m["player"] == self.opponent \
-                    and chaining is not None and m["data"] >> 20 == chaining:
-                # a continuous trap activated together with one of its effects
-                # (field::get_cteffect): that effect was activatable
-                key = (self.opponent, chaining, m["data"])
-                self.forces.add(key)
-                self.force_windows.append((start, i + 1, key))
         self.nomatch_id_spans: set[tuple] = set()  # (from, to, card id): matches no filter then
         self.assumptions: list[tuple[int, int, int, int, int]] = []  # (pos, con, loc, seq, code)
         self.exclusions: list[tuple] = []  # (pos, con, loc, seqs, code)
@@ -354,6 +328,9 @@ class BeliefReplay:
         self.lenient = False
         self.approximate = False  # (the duel came from the lenient pass)
         self.lenient_skips = 0  # (stream items and replay messages it passed over)
+        self.lenient_syncs = 0  # (changes that corrected its state to the viewer's view, see sync.py)
+        self.state_sync = not os.environ.get("YGOAI_NO_STATE_SYNC")
+        self._synced_at: int | None = None
         self.suspect_tests: dict | None = None  # (a run that tests the candidates at a decision)
         self._test_until: int | None = None  # (in a test fork: no early success before this)
         self.match_piles: set[tuple[int, int]] = set()  # stream positions (from, to): hidden piles match
@@ -381,7 +358,11 @@ class BeliefReplay:
         self.tried_silent: set[tuple] = set()  # (decision, answer) tried for silent choices
         self._last_hyp_fix: str | None = None
         # opponent decisions of earlier attempts: (pos, prompt) -> response
-        self.memo: dict[tuple, tuple] = {}  # -> (answer, (candidates, index) for the decision search)
+        self.memo: dict[tuple, tuple] = {}  # -> (answer, (candidates, index) for the decision search,
+        # the stream it depended on (see inherit), the card ids a card prompt offered)
+        # card prompts' answers inherited from an agent's previous reconstruction, by
+        # memo key and card ids: the plan for the same prompt with the same cards
+        self.memo_cards: dict[tuple, dict] = {}
         self.use_memo = True
         self.hypothesis: Hypothesis | None = None
         self._reset()
@@ -418,6 +399,8 @@ class BeliefReplay:
         self.last_shuffle_cp: dict[tuple[int, int], int] = {}
         self.card_shuffled: dict[int, list] = {}  # card id -> cps of the shuffles of its pile
         self._shuffle_count = 0  # shuffles so far (index into the hypothesis' shuffles)
+        self._jit_from = None  # (extended: from here the viewer's own piles are arranged just in time)
+        self._jit_done: set[int] = set()
         self._event_hint = None  # (stream position, data) of the opponent's latest timing event
         self._opp_select_hint = None  # (data of the opponent's latest select hint)
         self._decisions_at: dict[int, int] = {}  # stream position -> decisions made there
@@ -592,7 +575,15 @@ class BeliefReplay:
                 duel.push_forced_set_card_shuffle_ids(set_ids, codes)
             else:
                 duel.push_forced_set_card_shuffle(codes)
-        for item in self.items:
+        self._push_random(duel, self.items)
+        self._active_forces = frozenset()
+        return duel
+
+    @staticmethod
+    def _push_random(duel: Duel, items: list[tuple]) -> None:
+        """The coin tosses, dice and random selections of the stream, for the engine
+        to come out the same."""
+        for item in items:
             if item[0] != "msg":
                 continue
             m = item[1]
@@ -604,8 +595,62 @@ class BeliefReplay:
                 duel.push_forced_random_select(
                     [(c["con"], c["loc"], c["seq"], c["pos"] if c["loc"] & C.LOCATION_OVERLAY else 0)
                      for c in m["cards"]])
-        self._active_forces = frozenset()
-        return duel
+
+    def _jit_prepare(self, duel: Duel) -> None:
+        """(an extended reconstruction) The viewer's own deck and hand in the part
+        of the stream the hypothesis did not cover: before the engine draws, the
+        cards the stream shows drawn go on top of the deck, and a shuffle of the
+        hand comes out in the order the stream shows (the viewer does not know the
+        order of its deck; the hypothesis of a longer stream would arrange it so)."""
+        draws = []
+        shuffle = None  # (a shuffle of the deck before the draws: they come out of it)
+        for j in range(max(self.pos, self._jit_from), min(len(self.items), self.pos + 40)):
+            it = self.items[j]
+            if it[0] == "prompt":
+                break
+            if it[0] != "msg" or j in self._jit_done:
+                continue
+            m = it[1]
+            if m["type"] in ("SHUFFLE_DECK", "SHUFFLE_HAND") and m["player"] == self.viewer and (draws or shuffle):
+                break  # (later draws: once the engine has shuffled, at a later step)
+            if m["type"] == "SHUFFLE_DECK" and m["player"] == self.viewer:
+                if any(x[0] == "msg" and x[1]["type"] == "MOVE" and x[1]["to"]["con"] == self.viewer
+                       and x[1]["to"]["loc"] == C.LOCATION_DECK for x in self.items[self.pos:j]):
+                    return  # (cards still to come into the deck before it: not arranged)
+                shuffle = j
+                continue
+            if m["type"] == "DRAW" and m["player"] == self.viewer:
+                draws += [c["code"] for c in m["cards"]]
+                self._jit_done.add(j)
+            elif m["type"] == "CONFIRM_DECKTOP" and m["player"] == self.viewer and not draws:
+                draws += [c["code"] for c in m["cards"]]
+                self._jit_done.add(j)
+                break
+            elif m["type"] == "SHUFFLE_HAND" and m["player"] == self.viewer and all(m["codes"]):
+                hand = duel.location_cards(self.viewer, C.LOCATION_HAND)
+                prev = m.get("prev")
+                if prev and len(prev) == len(hand) == len(m["codes"]) \
+                        and all(hand[k][0] == c for k, c in zip(prev, m["codes"])):
+                    duel.push_forced_shuffle_ids(self.viewer, C.LOCATION_HAND, [hand[k][1] for k in prev], m["codes"])
+                else:
+                    duel.push_forced_shuffle(self.viewer, C.LOCATION_HAND, m["codes"])
+                self._jit_done.add(j)
+                break
+        if draws:
+            deck = duel.location_cards(self.viewer, C.LOCATION_DECK)  # (bottom first)
+            top, rest = [], list(deck)
+            for code in draws:
+                k = next((k for k in range(len(rest) - 1, -1, -1) if rest[k][0] == code), None)
+                if k is None:
+                    return  # (not in the deck: the replay diverges there)
+                top.append(rest.pop(k))
+            if shuffle is not None:
+                order = rest + top[::-1]
+                duel.push_forced_shuffle_ids(self.viewer, C.LOCATION_DECK, [cid for _, cid in order],
+                                             [code for code, _ in order])
+                self._jit_done.add(shuffle)
+            else:
+                duel.set_location_order_by_id(self.viewer, C.LOCATION_DECK, [cid for _, cid in rest + top[::-1]])
 
     # -- main loop ---------------------------------------------------------------
     def run(self) -> Duel:
@@ -620,7 +665,82 @@ class BeliefReplay:
         finally:
             gc.set_threshold(*thresholds)
 
+    def _stream_forces(self) -> tuple[set, list]:
+        """The forces of the opponent's activations the stream shows, and the
+        windows they apply in."""
+        forces: set[tuple[int, int, int]] = {
+            (self.opponent, it[1]["code"], it[1]["desc"]) for j, it in enumerate(self.items)
+            if it[0] == "msg" and it[1]["type"] == "CHAINING" and self._opp_activates(j)}
+        # the forcing applies only around the activation: from the start of its
+        # phase until just after it (elsewhere a forced mandatory effect could
+        # activate where the real one could not)
+        windows: list[tuple[int, int, tuple]] = []
+        start = 0
+        chaining = None
+        for i, it in enumerate(self.items):
+            if it[0] != "msg":
+                continue
+            m = it[1]
+            if m["type"] in ("NEW_PHASE", "NEW_TURN"):
+                start = i
+            elif m["type"] == "CHAINING" and self._opp_activates(i):
+                chaining = m["code"]
+                windows.append((start, i + 1, (self.opponent, m["code"], m["desc"])))
+            elif m["type"] == "CHAINED":
+                chaining = None
+            elif m["type"] == "HINT" and m["hint_type"] == C.HINT_OPSELECTED and m["player"] == self.opponent \
+                    and chaining is not None and m["data"] >> 20 == chaining:
+                # a continuous trap activated together with one of its effects
+                # (field::get_cteffect): that effect was activatable
+                key = (self.opponent, chaining, m["data"])
+                forces.add(key)
+                windows.append((start, i + 1, key))
+        return forces, windows
+
+    def extend(self, duel: Duel, items: list[tuple]) -> Duel:
+        """Continues this consistent reconstruction, whose duel waits at the viewer's
+        decision where its stream ended, with a longer stream (the agent's next
+        decision): the viewer's answer, then the new observations, decided as usual.
+        Raises Divergence at the first mismatch (no repairs: they need a run from the
+        start, e.g. inheriting from this one, see inherit and _inherit_limit)."""
+        n = len(self.items)
+        prompt = getattr(self, "final_prompt", None)
+        if self.approximate or prompt is None or len(items) <= n or items[:n] != self.items:
+            raise Divergence(n, "not a continuation of this reconstruction")
+        self._inherit_limit = min(getattr(self, "_inherit_limit", n), n)
+        self.items = list(items)
+        self.final_prompt = None
+        forces, windows = self._stream_forces()  # (with the new part's activations)
+        self.forces |= forces
+        self.force_windows += [w for w in windows if w not in self.force_windows]
+        # the new part's random outcomes, as at the start for the rest (see build_duel)
+        self._push_random(duel, self.items[n:])
+        # (and the viewer's own hidden piles, which the hypothesis arranged for the
+        # shorter stream only, see _jit_prepare)
+        self._jit_from = n if self._jit_from is None else self._jit_from
+        resp = self.items[self.pos]
+        if resp[0] != "response":
+            raise Divergence(self.pos, "expected the viewer's response")
+        self._advance()
+        self._simlog("prompt", prompt, resp[1])
+        thresholds = gc.get_threshold()
+        gc.set_threshold(50000, 50, 50)
+        try:
+            self._loop(duel, prompt, to_core_response(prompt, self.viewer, resp[1]), pending_resp=resp[1])
+        finally:
+            gc.set_threshold(*thresholds)
+        if self.final_prompt is None:
+            raise Divergence(self.pos, "the replay did not reach the viewer's decision")
+        self._inherit_limit = len(self.items)  # (reached consistently)
+        return duel
+
     def _run_all(self) -> Duel:
+        if self.allow_approximate and os.environ.get("YGOAI_LENIENT_ONLY") and self.depth == 0:
+            # (testing the best effort itself: the lenient pass on the first hypothesis)
+            duel = self._lenient_run()
+            if duel is None:
+                raise Divergence(0, "no approximate reconstruction")
+            return duel
         try:
             return self._run()
         except Divergence as e:
@@ -651,16 +771,28 @@ class BeliefReplay:
     def inherit(self, prev: "BeliefReplay") -> bool:
         """Takes over what an earlier reconstruction of a shorter stream (an agent's
         previous decision) found: its repairs, and its decisions except the ones
-        near its end (their probes saw less of the stream). Only if that stream is
-        the start of this one and it was consistent."""
-        n = len(prev.items)
-        if prev.approximate or n > len(self.items) or prev.viewer != self.viewer or self.items[:n] != prev.items:
+        near its end (their probes saw less of the stream), unless a probe decided
+        one with what it saw before that end. Only if that stream is the start of
+        this one and it was consistent."""
+        # (a reconstruction extended since: up to where it was consistent)
+        n = min(len(prev.items), getattr(prev, "_inherit_limit", len(prev.items)))
+        if prev.approximate or n > len(self.items) or prev.viewer != self.viewer or self.items[:n] != prev.items[:n]:
             return False
         for name in self._INHERITED:
             if hasattr(prev, name):
-                setattr(self, name, copy.deepcopy(getattr(prev, name)))
+                theirs, mine = copy.deepcopy(getattr(prev, name)), getattr(self, name, None)
+                # (merged with what this stream gives from the start, e.g. the forces of
+                # the activations it shows, which the shorter stream lacks)
+                if isinstance(mine, set) and mine:
+                    theirs = mine | theirs
+                elif isinstance(mine, list) and mine:
+                    theirs = mine + [x for x in theirs if x not in mine]
+                elif isinstance(mine, dict) and mine:
+                    theirs = {**mine, **theirs}
+                setattr(self, name, theirs)
         cutoff = n - self.probe_items
-        self.memo = {k: v for k, v in prev.memo.items() if k[0] < cutoff}
+        self.memo = {k: v for k, v in prev.memo.items() if k[0] < cutoff or (v[2] is not None and v[2] <= n)}
+        self.memo_cards = {k + (v[3],): v[0] for k, v in self.memo.items() if v[3] is not None}
         return True
 
     def _lenient_run(self) -> Duel | None:
@@ -676,7 +808,7 @@ class BeliefReplay:
             duel = self.build_duel()
         except (TrackerError, Divergence):
             return None
-        self.lenient, self.lenient_skips = True, 0
+        self.lenient, self.lenient_skips, self.lenient_syncs, self._synced_at = True, 0, 0, None
         self._lenient_rejected: set = set()
         try:
             duel.start()
@@ -695,6 +827,31 @@ class BeliefReplay:
         if self.log:
             self.log(f"approximate reconstruction ({self.lenient_skips} items re-aligned)")
         return duel
+
+    def _lenient_sync(self, duel: Duel, prompt: dict) -> bool:
+        """(lenient) At the viewer's Idle or Battle command, with no chain: corrects
+        the duel's public state to what the viewer saw there (see sync.py), then
+        lets the core compute the prompt again. Once per stream position."""
+        if not self.state_sync or prompt["type"] not in ("SELECT_IDLECMD", "SELECT_BATTLECMD") \
+                or self.pos >= len(self.items) or self._synced_at == self.pos:
+            return False
+        item = self.items[self.pos]
+        if item[0] != "prompt" or item[2] is None or item[2]["chain"] or item[1]["type"] != prompt["type"]:
+            return False
+        self._synced_at = self.pos
+        got = viewer_view(duel, self.viewer)
+        # (the same decision of the viewer: its turn and phase; else the replay's flow
+        # went elsewhere and another moment's view would not fit)
+        if got == item[2] or got["chain"] or (got["turn_player"], got["phase"]) != \
+                (item[2]["turn_player"], item[2]["phase"]):
+            return False
+        from .sync import sync_to_view
+        n = sync_to_view(duel, self.viewer, item[2], got, self.db)
+        self._roll_dirty = True
+        if n == 0 or not duel.restart_command():
+            return False
+        self.lenient_syncs += n
+        return True
 
     def _realign(self, o: dict) -> bool:
         """(lenient) Moves to the stream's next copy of the replay's message, if it
@@ -928,7 +1085,7 @@ class BeliefReplay:
                         # since; try once more deciding everything afresh
                         if self.log:
                             self.log(f"restart {self.stats.restarts}: {e.reason} -> forget remembered decisions")
-                        self.memo = {}
+                        self.memo, self.memo_cards = {}, {}
                         self.use_memo = False
                         self.stats.restarts += 1
                         continue
@@ -1180,12 +1337,11 @@ class BeliefReplay:
         self.stall = 0
         self._recent = [d for d in self._recent if d[0][0] >= self.pos - _DECISION_WINDOW]
 
-    def _loop(self, duel: Duel, prompt: dict | None, response: dict | None) -> None:
+    def _loop(self, duel: Duel, prompt: dict | None, response: dict | None, pending_resp=None) -> None:
         pending = None  # the prompt whose response the next step processes
-        pending_resp = None
         if response is not None:
             duel.set_response(encode(prompt, response))
-            pending, pending_resp = prompt, response
+            pending, pending_resp = prompt, pending_resp if pending_resp is not None else response
         while True:
             if self.pos != self._cp_pos:
                 self._cp_pos, self._cp_n = self.pos, 0
@@ -1263,6 +1419,8 @@ class BeliefReplay:
                 self._probe_steps += 1
                 if self._probe_steps > _PROBE_STEPS:
                     os._exit(3)
+            if self._jit_from is not None:
+                self._jit_prepare(duel)
             status = duel.process()
             if self.on_process is not None:
                 self.on_process(duel)
@@ -1419,6 +1577,9 @@ class BeliefReplay:
                         j += 1
                     self.lenient_skips += j - self.pos
                     self.pos = j
+                    if self._lenient_sync(duel, prompt):
+                        pending, pending_resp = None, None
+                        continue  # (the command prompt again, computed for the corrected state)
                 if self.pos >= len(self.items):
                     if self.depth > 0:
                         return
@@ -4985,25 +5146,34 @@ class BeliefReplay:
             key = (self.pos, self.stall, repr(prompt))
             hit = self.memo.get(key)
             if hit is not None and prompt["type"] not in CARD_PROMPTS:
-                resp, rec = hit
+                resp, rec = hit[:2]
                 if rec is not None:
                     # (still a decision the search can revisit)
                     self._recent.append((self._dkey, *rec))
                     self._since_state.append((self._dkey, *rec))
                 return resp
         n = len(self._recent)
+        self._choice_seen = None
+        self._prompt_ids = None
+        if key is not None and prompt["type"] in CARD_PROMPTS:
+            cards = prompt["cards"] if "cards" in prompt else prompt["select_cards"] + prompt["unselect_cards"]
+            self._prompt_ids = tuple(infer.card_ids(duel, cards))
+            if self._planned is None and self.memo_cards:
+                # (the answer goes through the usual decision, which records what repairs use)
+                self._planned = self.memo_cards.get(key + (self._prompt_ids,))
         resp = self._decide_fresh(duel, prompt, up)
         if key is not None:
             rec = self._recent[-1][1:] if len(self._recent) > n and self._recent[-1][0] == self._dkey \
                 and self._recent[-1][2] >= 0 else None
-            self.memo[key] = (resp, rec)
+            self.memo[key] = (resp, rec, self._choice_seen, self._prompt_ids)
         return resp
 
     def _decide_fresh(self, duel: Duel, prompt: dict, up: list[dict]) -> dict:
         ids = None
         if prompt["type"] in CARD_PROMPTS:
             cards = prompt["cards"] if "cards" in prompt else prompt["select_cards"] + prompt["unselect_cards"]
-            ids = infer.card_ids(duel, cards)
+            ids = list(self._prompt_ids) if getattr(self, "_prompt_ids", None) is not None \
+                else infer.card_ids(duel, cards)
             self._check_assumption(duel, prompt, up, ids)
         if prompt["type"] == "SELECT_CARD" and prompt["min"] >= 1 and self.depth == 0 and prompt["cards"] \
                 and self._select_msg() in SUMMON_SELECT_MSGS \
@@ -5201,6 +5371,11 @@ class BeliefReplay:
             if outcome == PROBE_OK:
                 self._trace(prompt, c, False, len(valid))
                 self._plan = self.last_probe_plan
+                if k == 0:
+                    # (the stream it depended on: the probe's, its state view window and
+                    # the inference's look-ahead; see inherit)
+                    window = self.probe_items if self._probe_wide else self.probe_state_window
+                    self._choice_seen = max(reached, self.pos + max(window, 40)) + 1
                 return c
             if outcome in (PROBE_REPAIRABLE, PROBE_REPAIRABLE_AT_ONCE, PROBE_PROGRESSED):
                 key = (reached, outcome != PROBE_PROGRESSED)

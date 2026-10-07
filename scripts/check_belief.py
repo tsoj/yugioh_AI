@@ -101,10 +101,66 @@ def _replay_case(record, items, seed: int, viewer: int, frac: float, timeout: in
         signal.alarm(0)
 
 
+SEQUENCE_FRAC = 2.0  # (the "cut" of an agent sequence's result: the whole game, decision by decision)
+
+
+def _agent_sequence(record, items, seed: int, viewer: int, every: int, timeout: int, completion: str) -> dict:
+    """The viewer's belief at every `every`-th of its decisions, as belief_mc
+    reconstructs it (AgentBelief); the timeout is per reconstruction."""
+    from ygoai.belief.agent import AgentBelief
+    from ygoai.belief.check import _count_diffs, init_info
+    from ygoai.state import viewer_view
+    belief = AgentBelief(viewer, init_info(record, viewer), get_completion(completion))
+    cuts = [i + 1 for i, it in enumerate(items) if it[0] == "prompt"][::every]
+    res = {"seed": seed, "viewer": viewer, "frac": SEQUENCE_FRAC, "cut": len(items), "len": len(items),
+           "reconstructions": 0, "consistent": 0, "approximate_n": 0, "failed": 0, "diffs_total": 0,
+           "approximate": False, "state_diffs": 0, "retries": 0, "seconds": 0.0, "first_problem": None}
+    for cut in cuts:
+        signal.alarm(timeout)
+        t0 = time.monotonic()
+        try:
+            br, duel = belief.reconstruct(items[:cut])
+            if time.monotonic() - t0 > timeout:
+                raise Timeout()
+            problem = None
+            if duel is None:
+                res["failed"] += 1
+                problem = "no reconstruction"
+            elif br.approximate:  # (the duels belong to `belief`)
+                d = _count_diffs(items[cut - 1][2], viewer_view(duel, viewer))
+                res["approximate_n"] += 1
+                res["diffs_total"] += d
+                res["state_diffs"] = max(res["state_diffs"], d)
+                problem = f"approximate ({d} state differences)"
+            else:
+                res["consistent"] += 1
+        except Timeout:
+            res["failed"] += 1
+            problem = "timeout"
+            retries = belief.retries
+            belief.close()
+            belief = AgentBelief(viewer, init_info(record, viewer), get_completion(completion))
+            belief.retries = retries
+        finally:
+            signal.alarm(0)
+        res["seconds"] += time.monotonic() - t0
+        res["reconstructions"] += 1
+        if problem is not None and res["first_problem"] is None:
+            res["first_problem"] = f"at item {cut}: {problem}"
+    res["retries"], res["extended"] = belief.retries, belief.extended
+    belief.close()
+    res["approximate"] = res["approximate_n"] > 0
+    res["ok"] = res["consistent"] == res["reconstructions"]
+    res["error"] = "" if res["ok"] else (f"{res['reconstructions'] - res['consistent']} of {res['reconstructions']} "
+                                         f"not consistent, first {res['first_problem']}")
+    return res
+
+
 def run_task(task: tuple) -> list[dict]:
     """All reconstructions of one game: (seed, [(viewer, cut), ...], ...). The game
     is played once, recording both players' observation streams on the way."""
-    seed, cases, mirror_prob, timeout, completion, pairs, decks, book, deck_pair = task
+    seed, cases, mirror_prob, timeout, completion, pairs, decks, book, deck_pair, *opt = task
+    every = opt[0] if opt else int(os.environ.get("YGOAI_AGENT_SEQUENCE") or 0)
     global _main_pid
     _main_pid = os.getpid()
     signal.signal(signal.SIGALRM, _alarm)
@@ -116,6 +172,12 @@ def run_task(task: tuple) -> list[dict]:
                 for v, f in cases]
     out = []
     done = set()
+    if every:
+        for viewer in sorted({v for v, _ in cases}):
+            r = _agent_sequence(record, streams[viewer], seed, viewer, every, timeout, completion)
+            r["game"] = zlib.crc32(repr(streams[viewer]).encode())
+            out.append(r)
+        cases = []
     for viewer, frac in cases:
         cut = cut_point(streams[viewer], frac)
         if cut is None or (viewer, cut) in done:
@@ -165,6 +227,10 @@ def make_parser() -> argparse.ArgumentParser:
     ap.add_argument("--agent-mode", action="store_true",
                     help="reconstruct as an agent does: at the viewer's decisions, with the best effort "
                          "allowed (approximate states count separately, with their state differences)")
+    ap.add_argument("--agent-sequence", type=int, metavar="K",
+                    help="reconstruct as belief_mc does: at every K-th decision of the viewer, each inheriting "
+                         "from the previous consistent one (one result per game and viewer: consistent if all "
+                         "of them are; approximate ones are counted with their state differences)")
     ap.add_argument("--read-guided-ok", action="store_true",
                     help="count reconstructions the last-resort read-guided repair saved as consistent "
                          "(by default they count as failures, to be looked at)")
@@ -215,15 +281,17 @@ def build_tasks(args: argparse.Namespace) -> list[tuple]:
         else:
             seeds = [args.start + i for i in range(args.games)]
         cases = [(seed, viewer, frac) for seed in seeds for viewer in (0, 1)
-                 for frac in sorted(cuts(seed, viewer), reverse=True)]
+                 for frac in (sorted(cuts(seed, viewer), reverse=True) if not args.agent_sequence
+                              else (SEQUENCE_FRAC,))]
     pairs = tuple(tuple(p.split("-")) for p in args.pairs.split(",")) if args.pairs else None
     by_seed: dict[int, list] = {}
     for seed, viewer, frac in cases:
         by_seed.setdefault(seed, []).append((viewer, frac))
     # (the decks are chosen here: the workers then never load the deck corpus,
     # which keeps them small and the replay's probes (forks) cheap)
+    # (the agent sequence mode is part of the task: the suite runs tasks without main())
     return [(seed, cs, args.mirror_prob, args.timeout, args.completion, pairs, args.decks, args.book,
-             game_decks(seed, args.mirror_prob, args.decks, args.book))
+             game_decks(seed, args.mirror_prob, args.decks, args.book), args.agent_sequence or 0)
             for seed, cs in by_seed.items()]
 
 
@@ -272,7 +340,16 @@ def main() -> int:
         print(f"  agent mode: {len(approx)} approximate (state differences: "
               f"{'none' if not diffs else f'median {diffs[len(diffs) // 2]}, max {diffs[-1]}, exact {diffs.count(0)}'}), "
               f"{sum(1 for r in results if not r['ok'] and not r.get('approximate'))} without any state")
-        pseudo = sum(1 for r in results if not r["ok"] and str(r.get("error", "")).startswith("read-guided repair"))
+    if args.agent_sequence:
+        seqs = [r for r in results if "reconstructions" in r]
+        n = sum(r["reconstructions"] for r in seqs)
+        print(f"  agent sequence (every {args.agent_sequence}. decision, inherited): {n} reconstructions, "
+              f"{sum(r['consistent'] for r in seqs)} consistent, {sum(r['approximate_n'] for r in seqs)} approximate "
+              f"(state differences {sum(r['diffs_total'] for r in seqs)}), {sum(r['failed'] for r in seqs)} without "
+              f"any state, {sum(r.get('extended', 0) for r in seqs)} incremental, "
+              f"{sum(r['retries'] for r in seqs)} fresh retries; "
+              f"{1000 * sum(r['seconds'] for r in seqs) / max(1, n):.0f} ms per reconstruction")
+    pseudo = sum(1 for r in results if not r["ok"] and str(r.get("error", "")).startswith("read-guided repair"))
     if pseudo:
         print(f"  ({pseudo} of the failures are pseudo-failures: consistent with the last-resort read-guided "
               f"repair, to check that no leak is behind them)")
