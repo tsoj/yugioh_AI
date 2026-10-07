@@ -192,10 +192,21 @@ _PROPERTY_TRIES = 24  # cards placed for one card's checks of hidden card values
 _PROPERTY_BATCH = 8  # ... per repair
 _MAX_SELECTIONS = 30  # multi-card selections offered beyond the inferred ones
 _DECISION_WINDOW = 10  # stream positions a decision stays a candidate for retrying
-_DECISION_TRIES = 24  # alternatives tried for one mismatch
+_DECISION_TRIES = int(os.environ.get("YGOAI_DECISION_TRIES", 24))  # alternatives tried for one mismatch
 _TAIL_RESTARTS = 4  # repairs for a mismatch in the unfinished action a game ended in
 _PROBE_BUDGET = 48  # probes a probe of the main line may start in all (nested)
+_SUSPECT_TESTS = 150  # forked tests of alternatives for the suspects of one divergence
+_SUSPECT_ROUNDS = 3  # rounds of suspect tests at one divergence position (changes taken one at a time)
 _PROBE_STEPS = 2000  # engine steps a probe may take (they take 16, at most ~140)
+
+
+def _divergence_sig(e: "Divergence") -> tuple:
+    """What a divergence is about (where, why, the two sides' types), to tell
+    whether an alternative changed it."""
+    def kind(x):
+        x = x[1] if isinstance(x, tuple) and len(x) > 1 else x
+        return (x.get("type"), x.get("code"), str(x.get("from") or x.get("seq"))) if isinstance(x, dict) else None
+    return (e.pos, e.reason, kind(e.expected), kind(e.got))
 
 
 def first_difference(a, b, path: str = "") -> str | None:
@@ -230,6 +241,7 @@ class ReplayStats:
     assumptions: int = 0
     swaps: int = 0
     read_guided: int = 0  # replays tried by the last-resort read-guided repair (read_guided.py)
+    suspect_tests: int = 0  # forked tests of other codes / copies for hidden cards the engine read
 
 
 def _loc_of(msg: dict) -> dict | None:
@@ -261,7 +273,7 @@ class BeliefReplay:
         self._probe_counter: mmap.mmap | None = None
         self.probe_items = probe_items
         self.max_depth = max_depth
-        self.max_restarts = max_restarts
+        self.max_restarts = int(os.environ.get("YGOAI_MAX_RESTARTS", max_restarts))  # (experiments: the env)
         self.probe_timeout = probe_timeout
         self.max_stall = max_stall  # opponent decisions without new observations
         self.min_progress = min_progress  # items a probe must reproduce before it defers
@@ -271,7 +283,8 @@ class BeliefReplay:
         self.stats = ReplayStats()
         self.trace: list[tuple] | None = None  # (pos, prompt, response, certain, n_candidates)
         self.log = None  # optional callable(str) for debugging
-        self.read_guided = True  # last resort: repairs guided by the engine's reads (read_guided.py)
+        # last resort: repairs guided by the engine's reads (read_guided.py)
+        self.read_guided = not os.environ.get("YGOAI_NO_READ_GUIDED")
         # where the unfinished action a game ended in starts (the caller retries without it)
         self.tail_start: int | None = None
         self._tail_restarts = 0
@@ -327,6 +340,15 @@ class BeliefReplay:
         # move, from the stream position given (see _run_code_tests)
         self.code_tests: dict[tuple, tuple] = {}
         self.code_tests_done: set[tuple] = set()
+        # suspects of a divergence no repair explains: the hidden cards the engine read
+        # just before it, tried as other codes (or other copies) in forks of one run
+        self.suspects_on = not os.environ.get("YGOAI_NO_SUSPECTS")
+        self.suspect_done: dict[int, int] = {}  # divergence position -> rounds of suspect tests there
+        self._suspect_log: dict | None = None  # (a run that records the reads before the divergence)
+        self._suspect_prev_hook = None
+        self._searched: set[int] = set()  # divergence positions whose decision search ran out
+        self.suspect_tests: dict | None = None  # (a run that tests the candidates at a decision)
+        self._test_until: int | None = None  # (in a test fork: no early success before this)
         self.match_piles: set[tuple[int, int]] = set()  # stream positions (from, to): hidden piles match
         self.match_pile_from: dict[tuple, tuple] = {}  # span -> the step it starts at (within its first position)
         # (from, to, location): the opponent's hidden cards there match no filter
@@ -698,6 +720,10 @@ class BeliefReplay:
                                          f"(no decision helped)")
                             self.stats.restarts += 1
                             continue
+                        self._searched.add(bt["pos"])
+                        if self._suspect_round(bt["pos"], bt["sig"]):
+                            self.stats.restarts += 1
+                            continue
                         raise Divergence(bt["pos"], bt["reason"], None, None)
                     self.overrides.pop(bt["key"], None)
                     entry = bt["queue"].pop(0)
@@ -756,7 +782,9 @@ class BeliefReplay:
                             if k not in self.overrides]
                     queue = [(k, alts[d]) for d in range(max((len(a) for _, a in todo), default=0))
                              for k, alts in todo if d < len(alts)]
-                    alt = queue.pop(0) if queue else None
+                    # (not again where a search already ran out, e.g. in the runs that
+                    # examine the suspects of that divergence)
+                    alt = queue.pop(0) if queue and e.pos not in self._searched else None
                     fallback = getattr(e, "fallback", None)
                     if alt is None and fallback is not None and self._add_fix(fallback):
                         if self.log:
@@ -766,7 +794,7 @@ class BeliefReplay:
                     if alt is not None:
                         self.overrides[alt[0]] = alt[1]
                         if self._state_bt is None:
-                            self._state_bt = {"pos": e.pos, "reason": e.reason, "list": list(recent),
+                            self._state_bt = {"pos": e.pos, "reason": e.reason, "sig": _divergence_sig(e), "list": list(recent),
                                               "key": alt[0], "queue": queue, "state": state, "tries": 0,
                                               "fallback": fallback}
                         if self.log:
@@ -780,6 +808,9 @@ class BeliefReplay:
                             self.log(f"restart {self.stats.restarts}: {e.reason} -> forget remembered decisions")
                         self.memo = {}
                         self.use_memo = False
+                        self.stats.restarts += 1
+                        continue
+                    if self._suspect_round(e.pos, _divergence_sig(e)):
                         self.stats.restarts += 1
                         continue
                     raise
@@ -3898,6 +3929,114 @@ class BeliefReplay:
                         raise Divergence(self.pos, "the engine takes this card for the hidden one", fix=fix)
             return
 
+    def _record_reads(self, duel: Duel) -> None:
+        """(on_process during a logging run) The hidden cards the engine read in each
+        main-line step shortly before the divergence, and where every card was."""
+        if self._suspect_prev_hook is not None:
+            self._suspect_prev_hook(duel)
+        log = self._suspect_log
+        if self.depth > 0 or log is None:
+            return
+        reads = duel.read_log(True)
+        if self.pos >= log["from"]:
+            from .read_guided import _where
+            log["steps"].append((self.pos, reads, _where(duel)))
+
+    def _suspect_round(self, pos: int, sig: tuple) -> bool:
+        """A divergence no repair explains: the suspects are the hidden cards the
+        engine read just before it (read_guided.py names them; their codes or copies
+        may be wrong). One run records those reads, the next one tests each
+        alternative in a fork at the opponent's last decision before the first of
+        them (see _run_suspect_tests). Returns whether to restart for that."""
+        from . import read_guided as rg
+        if self.depth > 0 or not self.suspects_on:
+            return False
+        log = self._suspect_log
+        if log is None:
+            if self.suspect_done.get(pos, 0) >= _SUSPECT_ROUNDS or self.suspect_tests is not None:
+                self.suspect_tests = None
+                return False
+            self._suspect_log = {"pos": pos, "from": max(0, pos - rg.WINDOW - 1), "steps": [],
+                                 "sig": sig}
+            self._suspect_prev_hook = self.on_process
+            self.on_process = self._record_reads
+            if self.log:
+                self.log(f"restart {self.stats.restarts}: divergence at {pos} -> record the reads before it")
+            return True
+        self._suspect_log = None
+        self.on_process = self._suspect_prev_hook
+        self._suspect_prev_hook = None
+        self.suspect_done[log["pos"]] = self.suspect_done.get(log["pos"], 0) + 1
+        if pos != log["pos"] or not log["steps"]:
+            return False
+        seen = list(dict.fromkeys(m["code"] for it in self.items if it[0] == "msg" and (m := it[1]).get("code")
+                                  and m.get("con", (m.get("from") or {}).get("con")) == self.opponent))
+        hyp = self.hypothesis
+        codes = list(dict.fromkeys(seen + (sorted(set(hyp.decks[self.opponent]["main"])) if hyp else [])))
+        cands = rg._candidates(self, log["steps"], pos, codes)[:_SUSPECT_TESTS]
+        if not cands:
+            return False
+        first = min(p for p, reads, _ in log["steps"] if reads)
+        at = max((q for q in self._decisions_at if q <= first), default=None)
+        if at is None:
+            return False
+        tests = []
+        for sw, asm, what in cands:
+            if sw:
+                (cp, pairs), = sw.items()
+                a, b = pairs[0]
+                tests.append((("swap", cp, a, b), ("swap", a, b), what))
+            else:
+                p, con, loc, i, code = asm[0]
+                where = next((w for q, _, w in reversed(log["steps"]) if q <= p), None)
+                cid = next((c for c, (wp, wl, wi, _) in (where or {}).items() if (wp, wl, wi) == (con, loc, i)), None)
+                if cid is not None:
+                    tests.append((("assume", p, con, loc, i, code), ("code", cid, code), what))
+        if not tests:
+            return False
+        self.suspect_tests = {"at": at, "div": pos, "until": min(len(self.items), pos + 2 * self.min_progress + 10),
+                              "tests": tests, "sig": log["sig"]}
+        if self.log:
+            self.log(f"restart {self.stats.restarts}: divergence at {pos} -> test {len(tests)} suspects at {at}")
+        return True
+
+    def _run_suspect_tests(self, duel: Duel, prompt: dict, resp: dict) -> None:
+        """Tests the alternatives for the suspects of a divergence (_suspect_round):
+        each in a fork of this decision with the card recreated as the other code (or
+        the copies swapped in the engine), run without repairs past the divergence;
+        the one that gets furthest past it becomes a repair."""
+        batch, self.suspect_tests = self.suspect_tests, None
+        best = None
+        for fix, (kind, a, b), what in batch["tests"]:
+            fix_key = fix[1:]
+            if fix[0] == "assume" and (fix_key in self.failed_assumptions or fix_key in self.assumptions):
+                continue
+            if fix[0] == "swap" and (fix_key in self.failed_swaps or self._has_swap(fix)):
+                continue
+
+            def setup(d, kind=kind, a=a, b=b):
+                if kind == "swap":
+                    d.swap_cards(a, b)
+                else:
+                    d.lua_messages(f"local c=Duel.GetCardFromCardID({a}) if c then "
+                                   f"c:Recreate({b},nil,nil,nil,nil,nil,nil,nil,nil,nil,nil,nil,nil,true) end")
+            self.stats.suspect_tests += 1
+            outcome = self._probe(duel, prompt, resp, setup=setup, horizon=batch["until"])
+            reached = self.last_probe_reached
+            if self.log:
+                self.log(f"suspect test {what}: reached {reached} exit {outcome} (divergence at {batch['div']})")
+            # (past the divergence; else, a step: another mismatch there, e.g. one of
+            # two changes the stream needs, the next round finds the other)
+            key = (1, reached) if reached > batch["div"] or outcome == PROBE_OK else \
+                (0, reached) if reached >= batch["div"] and self.last_probe_sig not in (None, batch["sig"]) else None
+            if key is not None and (best is None or key > best[0]):
+                best = (key, fix)
+            if outcome == PROBE_OK:
+                break
+        if best is not None:
+            raise Divergence(self.pos, "a suspect's alternative reproduces the stream further"
+                             if best[0][0] else "a suspect's alternative changes the divergence", fix=best[1])
+
     def _resolving_link(self) -> int | None:
         """Stream position of the CHAINING of the link being resolved (None outside
         a resolution)."""
@@ -4657,6 +4796,8 @@ class BeliefReplay:
         resp = self._decide_memo(duel, prompt, up)
         if self.depth == 0 and self.code_tests:
             self._run_code_tests(duel, prompt, resp)
+        if self.depth == 0 and self.suspect_tests is not None and self.pos >= self.suspect_tests["at"]:
+            self._run_suspect_tests(duel, prompt, resp)
         if self._planned is not None and resp != self._planned:
             self._plan = []  # (decided otherwise, e.g. by a repair: the rest no longer applies)
         if self.depth > 0 and self.depth == self._report_depth:
@@ -4832,6 +4973,7 @@ class BeliefReplay:
             self._trace(prompt, valid[0], True, len(valid))
             return valid[0]
         if self.depth > 0 and self.pos - self.probe_start >= self.min_progress and self.probe_boundary \
+                and (self._test_until is None or self.pos >= self._test_until) \
                 and self.probe_after_boundary > 0 \
                 and (self.probe_state_at is None or self.pos > self.probe_state_at):
             # (and something substantive after the latest boundary: a consequence
@@ -4939,7 +5081,7 @@ class BeliefReplay:
             return 0
         return int.from_bytes(self._probe_counter[:8], "little")
 
-    def _probe(self, duel: Duel, prompt: dict, response: dict, setup=None) -> int:
+    def _probe(self, duel: Duel, prompt: dict, response: dict, setup=None, horizon: int | None = None) -> int:
         """Checks a candidate response in a forked copy of the process.
 
         Returns PROBE_OK if the candidate reproduced the stream (up to the
@@ -4981,6 +5123,9 @@ class BeliefReplay:
                 self.probe_after_boundary = 0  # (non-hint messages reproduced since the latest one)
                 self.probe_sig = (self.pos, repr(sorted(prompt.items())))
                 self.horizon = min(len(self.items), self.pos + self.probe_items)
+                if horizon is not None:
+                    # (a test that must get past a point: no success before it)
+                    self.horizon = self._test_until = min(len(self.items), horizon)
                 # ... except the first one: a decision may show only there (e.g.
                 # "lower its Level?"), so the probe must get past it
                 # (only if it comes soon: farther on, unrelated problems would
@@ -4997,6 +5142,7 @@ class BeliefReplay:
                 reached = self.pos
             except Divergence as e:
                 reached = e.pos
+                test_sig = _divergence_sig(e)
                 code = (PROBE_REPAIRABLE if e.pos > self.probe_start else PROBE_REPAIRABLE_AT_ONCE) \
                     if e.fix is not None else \
                     PROBE_PROGRESSED if e.pos - self.probe_start >= self.min_progress else PROBE_FAILED
@@ -5014,7 +5160,9 @@ class BeliefReplay:
             finally:
                 try:
                     report = b""
-                    if code == PROBE_OK:
+                    if horizon is not None and code != PROBE_OK:
+                        report = pickle.dumps(("sig", locals().get("test_sig")))
+                    elif code == PROBE_OK:
                         # (the answers along the way, with enough verified after them; up
                         # to a yes/no or option past the state view the probe checked:
                         # its consequence can show in a later state view only, e.g. "lower
@@ -5053,6 +5201,8 @@ class BeliefReplay:
         self.last_probe_reached = int.from_bytes(data[:4], "little") if len(data) >= 4 else self.pos
         code = os.waitstatus_to_exitcode(status)
         self.last_probe_plan = pickle.loads(data[4:]) if code == PROBE_OK and len(data) > 4 else []
+        self.last_probe_sig = pickle.loads(data[4:])[1] if horizon is not None and code != PROBE_OK \
+            and len(data) > 4 else None
         if self.log and self.depth == 0:
             self.log(f"probe @{self.pos} {prompt['type']} {response} -> exit {code}")
         return code if code in (PROBE_OK, PROBE_REPAIRABLE, PROBE_TIMEOUT, PROBE_PROGRESSED,
