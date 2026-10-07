@@ -2085,7 +2085,12 @@ class BeliefReplay:
 
         def value_of(card):
             return ("extra" if card.is_extra_deck else "deck", card.lscale, card.level)
-        pool = [c for c in script_index.candidates(code, self.db) if c not in tried and self.db.get(c)
+        # (the cards it refers to, and monsters of the races it checks for, e.g. a
+        # Dinosaur of each Level in the deck to announce from)
+        race = script_index.races(code)
+        refs = script_index.candidates(code, self.db) + sorted(
+            c.code for c in self.db.cards.values() if race and c.race & race and not c.alias and c.ot & 0x3)
+        pool = [c for c in dict.fromkeys(refs) if c not in tried and self.db.get(c)
                 and self.db.get(c).type & C.TYPE_MONSTER and not self.db.get(c).type & C.TYPE_TOKEN
                 and value_of(self.db.get(c))[0] in piles]
         # (values not tried yet first, then the opponent's seen cards)

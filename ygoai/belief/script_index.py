@@ -18,9 +18,10 @@ from ..paths import CARD_SCRIPTS_DIR, FIXED_CARD_SCRIPTS_DIR
 # calls that read values of a group of cards (a forced filter answer cannot
 # satisfy them: the values themselves are compared)
 _VALUE_CHECKS = re.compile(r"GetClassCount|GetMaxGroup|GetMinGroup|CheckWithSum|GetSum\b|"
-                           r"aux\.dpcheck|aux\.dncheck|GetBinClassCount")
+                           r"aux\.dpcheck|aux\.dncheck|GetBinClassCount|AnnounceNumber\(")
 _LISTED = re.compile(r"s\.listed_(series|names)\s*=\s*\{([^}]*)\}")
-_CONST = re.compile(r"^\s*((?:SET|CARD)_[A-Z0-9_]+)\s*=\s*(0x[0-9a-fA-F]+|\d+)", re.M)
+_CONST = re.compile(r"^\s*((?:SET|CARD|RACE)_[A-Z0-9_]+)\s*=\s*(0x[0-9a-fA-F]+|\d+)", re.M)
+_RACE_CHECK = re.compile(r"IsRace,?\s*\(?\s*(?:c\s*,\s*)?((?:RACE_[A-Z_]+\s*[|+]?\s*)+)")
 
 
 @lru_cache(maxsize=1)
@@ -218,3 +219,14 @@ def global_keys(code: int) -> frozenset:
         out.add(code)
     out.update(h for h in _global_helpers() if re.search(r"\b" + h + r"\s*\(", text))
     return frozenset(out)
+
+
+@lru_cache(maxsize=None)
+def races(code: int) -> int:
+    """The races the script of `code` checks for (IsRace(RACE_...)), as a mask."""
+    consts = _constants()
+    out = 0
+    for group in _RACE_CHECK.findall(_script_text(code)):
+        for name in re.findall(r"RACE_[A-Z_]+", group):
+            out |= consts.get(name, 0)
+    return out
