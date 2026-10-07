@@ -468,7 +468,7 @@ diff -ruN core_a/duel.h core_b/duel.h
  	inline int read_script(const char* name) {
 diff -ruN core_a/effect.cpp core_b/effect.cpp
 --- core_a/effect.cpp	2026-09-29 02:25:58.000000000 +0200
-+++ core_b/effect.cpp	2026-10-06 13:04:11.481425568 +0200
++++ core_b/effect.cpp	2026-10-07 01:27:15.409207491 +0200
 @@ -10,6 +10,7 @@
  #include "effect.h"
  #include "field.h"
@@ -477,7 +477,21 @@ diff -ruN core_a/effect.cpp core_b/effect.cpp
  
  bool effect_sort_id(const effect* e1, const effect* e2) {
  	return e1->id < e2->id;
-@@ -110,8 +111,31 @@
+@@ -63,7 +64,12 @@
+ 			return FALSE;
+ 		if(is_flag(EFFECT_FLAG_OWNER_RELATE) && !is_flag(EFFECT_FLAG_CANNOT_DISABLE) && powner->is_status(STATUS_DISABLED))
+ 			return FALSE;
+-		if(powner == phandler && !is_flag(EFFECT_FLAG_CANNOT_DISABLE) && phandler->get_status(STATUS_DISABLED))
++		// (not the negation of the card itself, e.g. Odd-Eyes Persona Dragon's effect on
++		// itself: it does not stop applying because it negates the card, or the card's
++		// status would flip at every refresh, and how many refreshes a step has can
++		// depend on hidden cards)
++		if(powner == phandler && !is_flag(EFFECT_FLAG_CANNOT_DISABLE) && code != EFFECT_DISABLE
++				&& phandler->get_status(STATUS_DISABLED))
+ 			return FALSE;
+ 	}
+ 	if (type & EFFECT_TYPE_EQUIP) {
+@@ -110,8 +116,31 @@
  	}
  	if (!condition)
  		return TRUE;
@@ -509,7 +523,7 @@ diff -ruN core_a/effect.cpp core_b/effect.cpp
  	if(res) {
  		if(!(status & EFFECT_STATUS_AVAILABLE))
  			id = pduel->game_field->infos.field_id++;
-@@ -124,6 +148,8 @@
+@@ -124,6 +153,8 @@
  // count_limit: left count of activation
  // count_limit_max: max count of activation
  int32_t effect::check_count_limit(uint8_t playerid) const {
@@ -518,7 +532,7 @@ diff -ruN core_a/effect.cpp core_b/effect.cpp
  	if(is_flag(EFFECT_FLAG_COUNT_LIMIT)) {
  		if(count_limit == 0)
  			return FALSE;
-@@ -295,8 +321,16 @@
+@@ -295,8 +326,16 @@
  	int32_t result = TRUE;
  	if(!(type & EFFECT_TYPE_CONTINUOUS))
  		result = is_action_check(playerid);
