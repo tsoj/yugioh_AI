@@ -29,14 +29,15 @@ _NEURAL = None
 
 
 def _neural_completion():
-    """The learned deck models (one per process), else the corpus completion
-    (e.g. without PyTorch)."""
+    """The learned deck models, in their own process (this one stays small: its
+    probes fork it), else the corpus completion (e.g. without PyTorch)."""
     global _NEURAL
     if _NEURAL is None:
         try:
-            from ..belief.neural_completion import neural_completion
+            from ..belief.neural_completion import ensure_service, neural_completion
+            ensure_service()
             _NEURAL = neural_completion()
-        except ImportError:
+        except (ImportError, RuntimeError):
             from ..belief.corpus import CorpusCompletion
             _NEURAL = CorpusCompletion()
     return _NEURAL
@@ -92,6 +93,7 @@ class BeliefMCAgent(Agent):
     def start(self, player: int, init: dict) -> None:
         super().start(player, init)
         self.items: list[tuple] = []
+        self._prev = None  # (the previous decision's consistent reconstruction)
         self.fallback.start(player, init)
 
     def observe(self, msg: dict) -> None:
@@ -112,13 +114,24 @@ class BeliefMCAgent(Agent):
     def _search(self, prompt: dict, cands: list[dict]) -> dict | None:
         from ..belief.replay import BeliefReplay, Divergence
         from ..belief.tracker import TrackerError
-        br = BeliefReplay(self.player, self.init, self.items, completion=self.completion,
-                          check_state=False)
-        br.allow_approximate = True  # (an agent needs some state: the closest one, from observations only)
-        br.read_guided = False  # (too slow per decision: the approximate pass comes right after the repairs)
-        try:
-            duel = br.run()
-        except (Divergence, TrackerError):
+        def reconstruct(prev):
+            br = BeliefReplay(self.player, self.init, list(self.items), completion=self.completion,
+                              check_state=False)
+            br.allow_approximate = True  # (an agent needs some state: the closest one, from observations only)
+            br.read_guided = False  # (too slow per decision: the approximate pass comes right after the repairs)
+            inherited = prev is not None and br.inherit(prev)
+            try:
+                return br, br.run(), inherited
+            except (Divergence, TrackerError):
+                return br, None, inherited
+        # (what the previous decision's reconstruction found: only the new part needs work)
+        br, duel, inherited = reconstruct(self._prev)
+        if duel is not None and br.approximate and inherited or duel is None and inherited:
+            if duel is not None:
+                duel.close()
+            br, duel, _ = reconstruct(None)  # (the inherited repairs may not fit the longer stream)
+        self._prev = br if duel is not None and not br.approximate else None
+        if duel is None:
             self.failures += 1
             return None
         if br.approximate:

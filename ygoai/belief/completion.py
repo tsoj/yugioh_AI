@@ -28,23 +28,29 @@ def monster_sset_codes() -> set[int]:
     e.g. the "Artifact" monsters), read from the card scripts."""
     global _monster_sset
     if _monster_sset is None:
-        import re
-        from ..paths import CARD_SCRIPTS_DIR
-        _monster_sset = set()
-        for sub in ("official", "pre-release", "unofficial"):
-            d = CARD_SCRIPTS_DIR / sub
-            if not d.is_dir():
-                continue
-            for f in d.glob("c*.lua"):
-                try:
-                    text = f.read_text(errors="replace")
-                except OSError:
-                    continue
-                if "EFFECT_MONSTER_SSET" in text:
-                    m = re.match(r"c(\d+)\.lua", f.name)
-                    if m:
-                        _monster_sset.add(int(m.group(1)))
+        from .script_index import disk_cached
+        _monster_sset = set(disk_cached(_scan_monster_sset)())
     return _monster_sset
+
+
+def _scan_monster_sset() -> frozenset[int]:
+    import re
+    from ..paths import CARD_SCRIPTS_DIR
+    out = set()
+    for sub in ("official", "pre-release", "unofficial"):
+        d = CARD_SCRIPTS_DIR / sub
+        if not d.is_dir():
+            continue
+        for f in d.glob("c*.lua"):
+            try:
+                text = f.read_text(errors="replace")
+            except OSError:
+                continue
+            if "EFFECT_MONSTER_SSET" in text:
+                m = re.match(r"c(\d+)\.lua", f.name)
+                if m:
+                    out.add(int(m.group(1)))
+    return frozenset(out)
 
 
 def fits_need(card, need: tuple, usual: bool = True) -> bool:

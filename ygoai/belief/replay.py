@@ -612,6 +612,15 @@ class BeliefReplay:
         """Replays the whole stream; returns the duel positioned at the stream end.
         When the repairs give up, a last resort guided by the hidden cards the engine
         read (read_guided.py)."""
+        import gc
+        thresholds = gc.get_threshold()
+        gc.set_threshold(50000, 50, 50)  # (it allocates a lot, rarely in cycles: ~8% faster)
+        try:
+            return self._run_all()
+        finally:
+            gc.set_threshold(*thresholds)
+
+    def _run_all(self) -> Duel:
         try:
             return self._run()
         except Divergence as e:
@@ -631,6 +640,28 @@ class BeliefReplay:
             if duel is None:
                 raise
             return duel
+
+    # repairs a reconstruction found, valid for any longer stream with the same start
+    _INHERITED = ("assumptions", "exclusions", "swaps", "identities", "forces", "force_windows", "unforced",
+                  "unforced_windows", "matches", "match_piles", "match_pile_from", "nomatch_piles",
+                  "nomatch_loc_piles", "nomatch_cards", "nomatch_id_spans", "failed_assumptions",
+                  "failed_exclusions", "failed_identities", "failed_swaps", "code_tests_done", "_pile_dropped",
+                  "_pile_made")
+
+    def inherit(self, prev: "BeliefReplay") -> bool:
+        """Takes over what an earlier reconstruction of a shorter stream (an agent's
+        previous decision) found: its repairs, and its decisions except the ones
+        near its end (their probes saw less of the stream). Only if that stream is
+        the start of this one and it was consistent."""
+        n = len(prev.items)
+        if prev.approximate or n > len(self.items) or prev.viewer != self.viewer or self.items[:n] != prev.items:
+            return False
+        for name in self._INHERITED:
+            if hasattr(prev, name):
+                setattr(self, name, copy.deepcopy(getattr(prev, name)))
+        cutoff = n - self.probe_items
+        self.memo = {k: v for k, v in prev.memo.items() if k[0] < cutoff}
+        return True
 
     def _lenient_run(self) -> Duel | None:
         """The best effort when no consistent reconstruction exists: the latest

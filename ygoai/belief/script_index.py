@@ -13,7 +13,64 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 
-from ..paths import CARD_SCRIPTS_DIR, FIXED_CARD_SCRIPTS_DIR
+from ..paths import CARD_SCRIPTS_DIR, FIXED_CARD_SCRIPTS_DIR, ROOT
+
+# Scans of all ~38000 card scripts take ~0.1-0.2 s each, in every new process:
+# their results are kept on disk, valid while the scripts and this code stay the
+# same (the scripts' git commit, the corrected scripts' times, these modules).
+_SCANS = ROOT / "build" / "script_scans.pkl"
+_scans: dict | None = None
+
+
+def _scripts_fingerprint() -> str:
+    import hashlib
+    import subprocess
+    h = hashlib.sha1()
+    try:
+        h.update(subprocess.run(["git", "-C", str(CARD_SCRIPTS_DIR), "rev-parse", "HEAD"], capture_output=True,
+                                text=True, timeout=10).stdout.encode())
+        h.update(subprocess.run(["git", "-C", str(CARD_SCRIPTS_DIR), "status", "--porcelain"], capture_output=True,
+                                text=True, timeout=30).stdout.encode())
+    except (OSError, subprocess.SubprocessError):
+        h.update(b"no git")
+    for path in sorted(FIXED_CARD_SCRIPTS_DIR.glob("*.lua")):
+        h.update(f"{path.name}:{path.stat().st_mtime_ns}".encode())
+    here = __import__("pathlib").Path(__file__).parent
+    for name in ("script_index.py", "completion.py"):
+        h.update((here / name).read_bytes())
+    return h.hexdigest()
+
+
+def disk_cached(fn):
+    """A whole-corpus scan, remembered on disk (and in this process)."""
+    import functools
+
+    @functools.lru_cache(maxsize=None)
+    def wrapper(*args):
+        global _scans
+        import os
+        import pickle
+        if _scans is None:
+            fp = _scripts_fingerprint()
+            try:
+                with open(_SCANS, "rb") as f:
+                    stored = pickle.load(f)
+                _scans = stored if stored.get("_fingerprint") == fp else {"_fingerprint": fp}
+            except (OSError, EOFError, pickle.UnpicklingError, ValueError):
+                _scans = {"_fingerprint": fp}
+        key = (fn.__name__, args)
+        if key not in _scans:
+            _scans[key] = fn(*args)
+            try:
+                _SCANS.parent.mkdir(parents=True, exist_ok=True)
+                tmp = _SCANS.with_name(f"{_SCANS.name}.{os.getpid()}")
+                with open(tmp, "wb") as f:
+                    pickle.dump(_scans, f)
+                os.replace(tmp, _SCANS)  # (atomic: workers may write at once)
+            except OSError:
+                pass
+        return _scans[key]
+    return wrapper
 
 # calls that read values of a group of cards (a forced filter answer cannot
 # satisfy them: the values themselves are compared)
@@ -24,7 +81,7 @@ _CONST = re.compile(r"^\s*((?:SET|CARD|RACE)_[A-Z0-9_]+)\s*=\s*(0x[0-9a-fA-F]+|\
 _RACE_CHECK = re.compile(r"IsRace,?\s*\(?\s*(?:c\s*,\s*)?((?:RACE_[A-Z_]+\s*[|+]?\s*)+)")
 
 
-@lru_cache(maxsize=1)
+@disk_cached
 def _constants() -> dict[str, int]:
     out: dict[str, int] = {}
     for path in CARD_SCRIPTS_DIR.glob("*.lua"):
@@ -89,7 +146,7 @@ def candidates(code: int, db) -> list[int]:
     return sorted(out)
 
 
-@lru_cache(maxsize=None)
+@disk_cached
 def proc_cards(kind: str) -> frozenset[int]:
     """Cards whose scripts give them their own Normal Summon ("summon") or Set
     ("mset") procedure that can Tribute the opponent's monsters (e.g. Thestalos
@@ -108,7 +165,7 @@ def proc_cards(kind: str) -> frozenset[int]:
     return frozenset(out)
 
 
-@lru_cache(maxsize=1)
+@disk_cached
 def discard_set_proc_cards() -> frozenset[int]:
     """Cards whose own Set procedure discards cards as its cost (e.g. Infernal
     Incinerator: "discarding your entire hand and Tributing 1 monster")."""
@@ -127,7 +184,7 @@ def discard_set_proc_cards() -> frozenset[int]:
 _SET_PROC = re.compile(r"AddNormalSetProcedure\(\s*c\s*,[^,]*,[^,]*,\s*(\d+)\s*,\s*(\d+)")
 
 
-@lru_cache(maxsize=None)
+@disk_cached
 def set_proc_tribute_cards(n: int) -> frozenset[int]:
     """Cards whose own Set procedure Tributes `n` monsters (e.g. The Wicked
     Avatar: 3; no Level asks for more than 2)."""
@@ -169,7 +226,7 @@ def unsummonable(code: int) -> bool:
     return bool(re.search(r"EnableUnsummonable\(|EFFECT_UNSUMMONABLE_CARD|EnableReviveLimit\(", text))
 
 
-@lru_cache(maxsize=1)
+@disk_cached
 def win_condition_codes() -> frozenset[int]:
     """Cards that can win the game by themselves (their script calls Duel.Win, e.g.
     Exodia the Forbidden One, Destiny Board) and the cards those scripts name (e.g.

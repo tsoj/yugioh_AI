@@ -443,6 +443,7 @@ class Tracker:
         v.marks = v.marks | {mark}
 
     def message(self, m: dict) -> None:
+        self._n_messages = getattr(self, "_n_messages", 0) + 1
         t = m["type"]
         if self._top_check is not None:
             p, self._top_check = self._top_check, None
@@ -1018,6 +1019,11 @@ class Tracker:
             frontier.extend(m for m in x.pool.members if m.kind == "claim")
 
     def state(self, s: dict) -> None:
+        # (the same view as the previous one, e.g. in a row of chain windows: nothing new)
+        n = getattr(self, "_n_messages", 0)
+        if s == getattr(self, "_last_state", None) and self._last_state_n == n:
+            return
+        self._last_state, self._last_state_n = s, n
         from ..state import LOCATIONS
         # the chain shows where each link's card is now (e.g. after its pile was shuffled)
         from ..observe import loc_visible
