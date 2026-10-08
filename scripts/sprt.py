@@ -44,7 +44,8 @@ def main() -> int:
     ap.add_argument("--agent", default="alphabeta", help="the built-in agent both versions run")
     ap.add_argument("--base-agent", help="the base version's agent (default: --agent)")
     ap.add_argument("--tc", default="30+0.3")
-    ap.add_argument("--elo", type=float, nargs=2, default=(0.0, 10.0), metavar=("ELO0", "ELO1"))
+    ap.add_argument("--elo", type=float, nargs=2, default=(0.0, 20.0), metavar=("ELO0", "ELO1"),
+                    help="SPRT bounds (default [0, 20]: at this stage only clear gains count)")
     ap.add_argument("-n", "--openings", type=int, default=5000, help="at most (the SPRT usually ends earlier)")
     ap.add_argument("-c", "--concurrency", type=int, default=24)
     ap.add_argument("--seed", type=int, default=1)
