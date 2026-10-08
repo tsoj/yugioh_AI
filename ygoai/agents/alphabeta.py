@@ -35,7 +35,7 @@ from ..actions import encode
 from ..carddb import default_db
 from ..game import run_until_prompt
 from ..observe import AUTO_RESPONSE, is_hidden_prompt
-from ..state import capture
+from ..state import _parse_location_cached
 from .belief_mc import SEARCHED, BeliefMCAgent, candidates
 from .heuristic_agents import HeuristicAgent
 
@@ -60,6 +60,8 @@ W_HAND = 3.0
 W_BACKROW = 2.0
 W_DECK_OUT = 20.0  # (two cards or fewer left to draw)
 
+_MZONE_QUERY = C.QUERY_POSITION | C.QUERY_ATTACK | C.QUERY_DEFENSE
+
 _IDLE_ORDER = {"activate": 0, "spsummon": 1, "summon": 2, "mset": 3, "repos": 4, "to_bp": 5, "sset": 6,
                "to_ep": 7, "shuffle": 8}
 _BATTLE_ORDER = {"activate": 0, "attack": 1, "to_m2": 2, "to_ep": 3}
@@ -74,23 +76,23 @@ def _battle_stat(c: dict) -> int:
 
 
 def evaluate(duel, me: int) -> float:
-    """The position's value for `me` (in points of 100 LP)."""
-    snap = capture(duel)
-    lp = snap["lp"]
-    sides = [snap["players"][me], snap["players"][1 - me]]
-    mons = [[c for c in side["mzone"] if c is not None] for side in sides]
+    """The position's value for `me` (in points of 100 LP). (Only the queries it
+    needs: a leaf's evaluation is a good part of its cost.)"""
+    lp = duel.info()["lp"]
+    mons = [[c for c in _parse_location_cached(duel.query_location_raw(p, C.LOCATION_MZONE, _MZONE_QUERY))
+             if c is not None] for p in (me, 1 - me)]
     value = W_LP * (lp[me] - lp[1 - me]) + W_MONSTER * (len(mons[0]) - len(mons[1]))
-    for s in (0, 1):
+    for s, p in ((0, me), (1, 1 - me)):
         sign = 1 if s == 0 else -1
         best_other = max((_battle_stat(c) for c in mons[1 - s]), default=-1)
         for c in mons[s]:
             if c.get("position", 0) & C.POS_FACEUP_ATTACK and c.get("attack", 0) > best_other:
                 value += sign * W_DOMINANT
-        side = sides[s]
-        value += sign * W_HAND * len(side["hand"])
-        value += sign * W_BACKROW * sum(1 for c in side["szone"]
-                                        if c is not None and c.get("position", 0) & C.POS_FACEDOWN)
-        if len(side["deck"]) <= 2:
+        value += sign * W_HAND * duel.query_count(p, C.LOCATION_HAND)
+        value += sign * W_BACKROW * sum(
+            1 for c in _parse_location_cached(duel.query_location_raw(p, C.LOCATION_SZONE, C.QUERY_POSITION))
+            if c is not None and c.get("position", 0) & C.POS_FACEDOWN)
+        if duel.query_count(p, C.LOCATION_DECK) <= 2:
             value -= sign * W_DECK_OUT
     return value
 
