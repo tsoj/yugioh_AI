@@ -131,22 +131,27 @@ class NeuralCompletion(DeckCompletion):
         return fill(main, km, n_main, False), fill(extra, ke, n_extra, True)
 
 
-# -- one model process per run ---------------------------------------------------
+# -- model processes per run ------------------------------------------------------
 # Each pool worker loading PyTorch and the models costs ~1.5 GB; a run with dozens
-# of workers would not fit in memory. The run's parent starts one model process
-# (ensure_service, before its worker pool) and the workers ask it over a local
-# socket (neural_completion). The answers are the same, and the service's cache
-# serves every worker.
+# of workers would not fit in memory. The run's parent starts a few model processes
+# (ensure_service, before its worker pool) and the workers ask them over local
+# sockets (neural_completion), each client process always the same one (by its
+# pid). The answers are the same whichever answers (deterministic); one process
+# alone was busy most of the time in matches of belief agents, and the waiting
+# counts against their clocks.
 
-_ENV = "YGOAI_NEURAL_SERVICE"  # (address|authkey of the run's model process)
+_ENV = "YGOAI_NEURAL_SERVICE"  # (address|authkey of the run's first model process: older clients)
+_ENV_ALL = "YGOAI_NEURAL_SERVICES"  # (address,address,...|authkey of all of them)
+PROCESSES = int(os.environ.get("YGOAI_NEURAL_PROCESSES", 3))
 
 
 class RemoteNeuralCompletion(DeckCompletion):
     """NeuralCompletion's answers from the run's model process."""
 
     def __init__(self, spec: str, db: CardDB | None = None):
-        address, key = spec.split("|")
-        self.address, self.authkey = "\0" + address, bytes.fromhex(key)  # (an abstract socket)
+        addresses, key = spec.split("|")
+        self.addresses = ["\0" + a for a in addresses.split(",")]  # (abstract sockets)
+        self.authkey = bytes.fromhex(key)
         self.db = db or default_db()
         self._conn = None
         self._conn_pid = None
@@ -157,7 +162,7 @@ class RemoteNeuralCompletion(DeckCompletion):
             from multiprocessing.connection import Client
             if self._conn is None or self._conn_pid != os.getpid():
                 # (a forked probe opens its own connection: never the parent's socket)
-                self._conn = Client(self.address, authkey=self.authkey)
+                self._conn = Client(self.addresses[os.getpid() % len(self.addresses)], authkey=self.authkey)
                 self._conn_pid = os.getpid()
             self._conn.send(request)
             answer = self._conn.recv()
@@ -177,29 +182,36 @@ class RemoteNeuralCompletion(DeckCompletion):
 
 def neural_completion(db: CardDB | None = None) -> DeckCompletion:
     """The run's model process if there is one, else the models in this process."""
-    spec = os.environ.get(_ENV)
+    spec = os.environ.get(_ENV_ALL) or os.environ.get(_ENV)
     return RemoteNeuralCompletion(spec, db) if spec else NeuralCompletion(db)
 
 
-def ensure_service() -> None:
-    """Starts the model process for this run and its children (once; it ends
+def ensure_service(processes: int = PROCESSES) -> None:
+    """Starts the model processes for this run and its children (once; they end
     with this process)."""
     if os.environ.get(_ENV):
         return
     import atexit
     import secrets
     import subprocess
-    address = f"ygoai-neural-{os.getpid()}-{secrets.token_hex(4)}"
     key = secrets.token_hex(16)
-    proc = subprocess.Popen([sys.executable, "-m", "ygoai.belief.neural_completion", address, key,
-                             str(os.getpid())], stdout=subprocess.PIPE, text=True,
-                            env=dict(os.environ, PYTHONPATH=str(ROOT)), cwd=str(ROOT))
-    line = proc.stdout.readline().strip()
-    if line != "ready":
-        proc.kill()
-        raise RuntimeError(f"the deck model process did not start ({line!r})")
-    atexit.register(proc.kill)
-    os.environ[_ENV] = f"{address}|{key}"
+    addresses, procs = [], []
+    for i in range(max(1, processes)):
+        address = f"ygoai-neural-{os.getpid()}-{secrets.token_hex(4)}"
+        procs.append(subprocess.Popen([sys.executable, "-m", "ygoai.belief.neural_completion", address, key,
+                                       str(os.getpid())], stdout=subprocess.PIPE, text=True,
+                                      env=dict(os.environ, PYTHONPATH=str(ROOT)), cwd=str(ROOT)))
+        addresses.append(address)
+    for proc in procs:
+        atexit.register(proc.kill)
+    for proc in procs:
+        line = proc.stdout.readline().strip()
+        if line != "ready":
+            for p in procs:
+                p.kill()
+            raise RuntimeError(f"a deck model process did not start ({line!r})")
+    os.environ[_ENV] = f"{addresses[0]}|{key}"
+    os.environ[_ENV_ALL] = f"{','.join(addresses)}|{key}"
 
 
 def _serve(address: str, key: str, parent: int) -> None:
