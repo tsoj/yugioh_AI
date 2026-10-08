@@ -17,9 +17,11 @@ if H1 is accepted, merge it into main.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -30,6 +32,10 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import snapshot  # noqa: E402
 
 OUT = ROOT / "runs" / "sprt"
+
+
+def _end_with_parent() -> None:
+    ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
 
 
 def resolve(ref: str) -> str:
@@ -75,7 +81,9 @@ def main() -> int:
     print(f"{args.new} ({shas['new'][:12]}) vs {args.base} ({shas['base'][:12]}): log {log}", flush=True)
     t0 = time.time()
     with open(log, "w") as f:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=ROOT)
+        # (the match ends with this script, however it ends: its engines end with it)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=ROOT,
+                                preexec_fn=_end_with_parent)
         lines = []
         for line in proc.stdout:
             f.write(line)
