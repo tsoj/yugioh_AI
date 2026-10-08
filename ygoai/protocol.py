@@ -23,7 +23,10 @@ reused for several games: a new "init" starts a new game.
 
 from __future__ import annotations
 
+import ctypes
 import json
+import os
+import signal
 import subprocess
 import sys
 import time
@@ -35,6 +38,9 @@ class EngineError(RuntimeError):
     pass
 
 
+_PARENT_ENV = "YGOAI_ENGINE_PARENT"  # (the arbiter-side process: see _end_with_parent)
+
+
 class EngineProcess(Agent):
     wants_state = True
 
@@ -44,7 +50,8 @@ class EngineProcess(Agent):
         self.command = command
         self.name = name or command[-1]
         self.proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     text=True, bufsize=1, cwd=cwd)
+                                     text=True, bufsize=1, cwd=cwd,
+                                     env=dict(os.environ, **{_PARENT_ENV: str(os.getpid())}))
         self.pending: list[dict] = []
         self.last_think_time = 0.0
 
@@ -99,8 +106,23 @@ class EngineProcess(Agent):
                 pipe.close()
 
 
+def _end_with_parent() -> None:
+    """An engine started by EngineProcess ends with that process, however it ends
+    (killed, its run stopped): it would otherwise live on, holding its memory."""
+    parent = os.environ.get(_PARENT_ENV)
+    if not parent:
+        return
+    try:
+        ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
+    except (OSError, AttributeError):
+        return
+    if os.getppid() != int(parent):
+        os._exit(0)  # (it died before the line above)
+
+
 def serve(agent_factory, stdin=sys.stdin, stdout=sys.stdout) -> None:
     """Runs agents created by `agent_factory()` as an engine on stdio."""
+    _end_with_parent()
     agent = None
     for line in stdin:
         line = line.strip()
