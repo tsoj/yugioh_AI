@@ -3,6 +3,8 @@
 This is the Yu-Gi-Oh counterpart of UCI. The arbiter owns the duel and sends
 each engine only what its player is allowed to know (see observe.py):
 
+  arbiter -> engine   {"type": "isready"}
+  engine  -> arbiter  {"ready": true}
   arbiter -> engine   {"type": "init", "player": 0|1, "deck": {"main": [...], "extra": [...]},
                        "extra_order": [...], "opponent_deck_size": n,
                        "opponent_extra_size": m, "config": {...}}
@@ -14,8 +16,10 @@ each engine only what its player is allowed to know (see observe.py):
 "obs" holds every observation since the previous prompt. A prompt is one of
 the core's selection messages with hidden information removed; the response
 format for each prompt type is documented in actions.py. "state" is the
-player's view of the whole field at that moment (state.py). An engine may be
-reused for several games: a new "init" starts a new game.
+player's view of the whole field at that moment (state.py). "isready" (sent
+once, before the first game) lets the engine load what it needs before any
+clock runs. An engine may be reused for several games: a new "init" starts a
+new game (the arbiter starts a fresh engine for each game).
 
 `EngineProcess` is the arbiter-side Agent wrapper around such a process;
 `serve` runs any in-process Agent as an engine (python -m ygoai.engine).
@@ -26,6 +30,7 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -39,6 +44,7 @@ class EngineError(RuntimeError):
 
 
 _PARENT_ENV = "YGOAI_ENGINE_PARENT"  # (the arbiter-side process: see _end_with_parent)
+READY_TIMEOUT = 30.0  # (seconds an engine may take to load; one that does not know "isready" is not waited for longer)
 
 
 class EngineProcess(Agent):
@@ -54,6 +60,12 @@ class EngineProcess(Agent):
                                      env=dict(os.environ, **{_PARENT_ENV: str(os.getpid())}))
         self.pending: list[dict] = []
         self.last_think_time = 0.0
+        # (loading the engine is not on its clock: wait until it is ready)
+        self._send({"type": "isready"})
+        if select.select([self.proc.stdout], [], [], READY_TIMEOUT)[0]:
+            reply = self._recv()
+            if not reply.get("ready"):
+                raise EngineError(f"{self.name} sent {reply!r} instead of ready")
 
     def _send(self, obj: dict) -> None:
         try:
@@ -123,15 +135,23 @@ def _end_with_parent() -> None:
 def serve(agent_factory, stdin=sys.stdin, stdout=sys.stdout) -> None:
     """Runs agents created by `agent_factory()` as an engine on stdio."""
     _end_with_parent()
-    agent = None
+    agent, fresh = None, False  # (fresh: created for "isready", no game yet)
     for line in stdin:
         line = line.strip()
         if not line:
             continue
         msg = json.loads(line)
         t = msg["type"]
-        if t == "init":
-            agent = agent_factory()
+        if t == "isready":
+            if agent is None:
+                agent, fresh = agent_factory(), True
+                agent.warm_up()
+            stdout.write(json.dumps({"ready": True}) + "\n")
+            stdout.flush()
+        elif t == "init":
+            if agent is None or not fresh:
+                agent = agent_factory()
+            fresh = False
             agent.start(msg["player"], msg)
         elif t == "prompt":
             for o in msg.get("obs", ()):

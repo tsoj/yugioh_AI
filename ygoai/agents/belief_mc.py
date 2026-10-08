@@ -99,6 +99,12 @@ class BeliefMCAgent(Agent):
         self.rollouts_done = 0
         self.approximate = 0  # (searches on a best-effort reconstruction)
 
+    def warm_up(self) -> None:
+        from ..belief import agent, flow  # noqa: F401 - (the replay's modules: scipy, ...)
+        from ..carddb import default_db
+        from ..core import Duel
+        Duel((0, 0, 0, 0), None, default_db()).close()  # (compiles the utility scripts)
+
     def start(self, player: int, init: dict) -> None:
         super().start(player, init)
         self.items: list[tuple] = []

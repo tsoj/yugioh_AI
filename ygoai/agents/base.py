@@ -20,6 +20,10 @@ class Agent:
     wants_state = False
     clock: tuple[float, float] | None = None
 
+    def warm_up(self) -> None:
+        """Loads what the agent needs, before any clock runs (an engine does it when
+        the arbiter asks whether it is ready). Default: nothing."""
+
     def start(self, player: int, init: dict) -> None:
         self.player = player
         self.init = init

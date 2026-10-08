@@ -32,23 +32,23 @@ class EngineSpec:
         return self.command.startswith("builtin:")
 
 
-_processes: dict[EngineSpec, EngineProcess] = {}
+_processes: list[EngineProcess] = []  # (running)
 
 
 def get_engine(spec: EngineSpec, seed: int) -> Agent:
+    """A built-in agent, or a fresh engine process (one per game: games stay
+    independent, and an engine's memory does not grow over a match)."""
     if spec.is_builtin():
         agent = make_agent(spec.command.split(":", 1)[1], seed)
         agent.name = spec.name
         return agent
-    proc = _processes.get(spec)
-    if proc is None or proc.proc.poll() is not None:
-        proc = EngineProcess(shlex.split(spec.command), name=spec.name)
-        _processes[spec] = proc
+    proc = EngineProcess(shlex.split(spec.command), name=spec.name)
+    _processes.append(proc)
     return proc
 
 
 def close_engines() -> None:
-    for proc in _processes.values():
+    for proc in _processes:
         proc.close()
     _processes.clear()
 
@@ -80,7 +80,10 @@ def play_opening(opening: Opening, a: EngineSpec, b: EngineSpec, tc: tuple[float
         engines[a_seat] = get_engine(a, opening.seed * 2 + a_seat)
         engines[1 - a_seat] = get_engine(b, opening.seed * 2 + 1 - a_seat)
         clocks = [Clock(*tc), Clock(*tc)] if tc else None
-        play(record, engines, clocks=clocks, illegal_is_loss=True, max_turns=max_turns)
+        try:
+            play(record, engines, clocks=clocks, illegal_is_loss=True, max_turns=max_turns)
+        finally:
+            close_engines()
         w = record.result.get("winner")
         score = 0.5 if w is None else (1.0 if w == a_seat else 0.0)
         out.append({"score": score, "a_seat": a_seat, "record": record.to_json()})
