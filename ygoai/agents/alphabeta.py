@@ -16,6 +16,7 @@ depth + 1 processes exist at a time (depth first).
   Spells/Traps, end the turn; in battle: activate, attack the stronger attacker
   first; chain before passing; yes first in one's own turn). At the root, the
   previous iteration's values order the moves.
+- Speed: the process's memory in huge pages before a search (cheaper forks).
 - Time: iterative deepening within belief_mc's budget per decision; an iteration
   that runs out of time is discarded (the deeper one only counts complete).
 - Value (`evaluate`): win/loss, then LP, monsters, monsters that beat everything
@@ -24,6 +25,7 @@ depth + 1 processes exist at a time (depth first).
 
 from __future__ import annotations
 
+import ctypes
 import gc
 import math
 import os
@@ -69,6 +71,33 @@ _BATTLE_ORDER = {"activate": 0, "attack": 1, "to_m2": 2, "to_ep": 3}
 
 class _Abort(Exception):
     pass
+
+
+_MADV_HUGEPAGE, _MADV_COLLAPSE = 14, 25
+_HUGE = 1 << 21
+
+
+def _huge_pages() -> None:
+    """Backs this process's anonymous memory with huge pages where it can (Linux,
+    best effort): a fork copies the page tables, one entry per 2 MB instead of per
+    4 kB (the search forks at every node; a child's write splits only its copy)."""
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        madvise = libc.madvise
+        madvise.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+        with open("/proc/self/maps") as f:
+            maps = f.read().splitlines()
+    except (OSError, AttributeError):
+        return
+    for line in maps:
+        parts = line.split()
+        if not parts[1].startswith("rw") or (len(parts) > 5 and parts[5] != "[heap]"):
+            continue
+        start, end = (int(x, 16) for x in parts[0].split("-"))
+        start, end = (start + _HUGE - 1) & ~(_HUGE - 1), end & ~(_HUGE - 1)
+        if end > start:
+            madvise(start, end - start, _MADV_HUGEPAGE)
+            madvise(start, end - start, _MADV_COLLAPSE)
 
 
 def _battle_stat(c: dict) -> int:
@@ -153,6 +182,7 @@ class AlphaBetaAgent(BeliefMCAgent):
         best, done = order[0], 0
         # (the forked nodes never collect the inherited objects: no copies of their pages)
         gc.freeze()
+        _huge_pages()
         try:
             best, done = self._deepen(duel, core_prompt, core_cands, order, t0, budget, deadline)
         finally:
