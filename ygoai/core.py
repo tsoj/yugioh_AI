@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import ctypes as ct
+import functools
 import os
 import itertools
 import struct
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -290,6 +292,8 @@ class DuelConfig:
 class Duel:
     """Thin object-oriented wrapper around one OCG_Duel."""
 
+    journal: list | None = None
+
     def __init__(self, seed: tuple[int, int, int, int], config: DuelConfig | None = None,
                  card_db: CardDB | None = None):
         global _card_db
@@ -321,6 +325,8 @@ class Duel:
             raise CoreError(f"OCG_CreateDuel failed with status {status}")
         self.handle = handle
         _duels_by_key[self._key] = self
+        # (every call on the duel, to rebuild it elsewhere: see journal_duels)
+        self.journal: list | None = [("__init__", (tuple(seed), config), None, None)] if _journaling else None
         scripts = ["constant.lua", "utility.lua"]
         if not os.environ.get("YGOAI_NO_OVERRIDES"):  # (for comparing against the original helpers)
             scripts.append(OVERRIDE_SCRIPTS.name)
@@ -579,6 +585,55 @@ class Duel:
 
     def forced_errors(self) -> int:
         return lib().OCG_ExtGetErrors(self.handle)
+
+
+# ---------------------------------------------------------------------------
+# Journal: a duel cannot be copied, but the core is deterministic, so the same
+# calls in the same order rebuild it in another process (the alpha-beta search
+# server). With journaling on, each Duel records every call (method, arguments
+# and a checksum of the result, which the rebuilt duel must reproduce).
+# ---------------------------------------------------------------------------
+
+_journaling = False
+_NOT_JOURNALED = {"close", "all_cards"}  # (all_cards calls all_cards_raw)
+
+
+def journal_duels(on: bool = True) -> None:
+    """Duels created from now on keep a journal (Duel.journal)."""
+    global _journaling
+    _journaling = on
+
+
+def result_digest(result) -> int | None:
+    if result is None:
+        return None
+    if isinstance(result, bytes):
+        return zlib.crc32(result)
+    if isinstance(result, list) and result and isinstance(result[0], bytes):
+        return zlib.crc32(b"".join(result)) ^ len(result)
+    return zlib.crc32(repr(result).encode())
+
+
+def replay_call(duel: "Duel", entry: tuple) -> bool:
+    """Makes a journaled call on `duel`; whether its result matches the journal's."""
+    name, args, kwargs, digest = entry
+    result = getattr(duel, name)(*args, **(kwargs or {}))
+    return result_digest(result) == digest
+
+
+def _journaled(name: str, fn):
+    @functools.wraps(fn)
+    def call(self, *args, **kwargs):
+        result = fn(self, *args, **kwargs)
+        if self.journal is not None:
+            self.journal.append((name, args, kwargs or None, result_digest(result)))
+        return result
+    return call
+
+
+for _name, _fn in list(vars(Duel).items()):
+    if callable(_fn) and not _name.startswith("_") and _name not in _NOT_JOURNALED:
+        setattr(Duel, _name, _journaled(_name, _fn))
 
 
 def core_version() -> tuple[int, int]:
