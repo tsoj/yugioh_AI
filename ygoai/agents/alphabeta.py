@@ -17,7 +17,10 @@ depth + 1 processes exist at a time (depth first).
   Spells/Traps, end the turn; in battle: activate, attack the stronger attacker
   first; chain before passing; yes first in one's own turn). At the root, the
   previous iteration's values order the moves.
-- Speed: the process's memory in huge pages before a search (cheaper forks).
+- Speed: the search runs in a small server process (search_server.py) that
+  rebuilds the duel from its journal: every node forks a process, and a fork
+  costs by the size of the process (this one holds the belief, the deck models'
+  clients, scipy); its memory in huge pages before a search (cheaper forks).
 - Transposition table (`_tt_key`, `_node`): positions reached by other move
   orders (e.g. two independent activations), keyed by a hash of the engine's
   state queries and the pending decision; in shared memory (the nodes are forked
@@ -215,12 +218,49 @@ class AlphaBetaAgent(BeliefMCAgent):
         self._tt = None
         self._tt_gen = 0
         self._hist = None
+        self._server = None  # (the search server, see warm_up)
+        self.collapse_pages = True  # (huge pages before each search, see _huge_pages)
+        self.server_failures = 0
 
     def _budget(self) -> float | None:
         return None if self.clock is None else self.clock[0] / MOVES_TO_GO + self.clock[1]
 
+    def warm_up(self) -> None:
+        super().warm_up()
+        if os.environ.get("YGOAI_SEARCH_SERVER", "1") != "0":
+            from ..core import journal_duels
+            from .search_server import SearchClient
+            journal_duels(True)  # (the server rebuilds the duels from their journals)
+            self._server = SearchClient()
+
     def _select(self, duel, core_prompt: dict, core_cands: list[dict], t0: float, budget: float | None) -> int | None:
-        me = self.player
+        if self._server is not None and duel.journal is not None:
+            result = self._server.search(duel, self.player, self.rng.getrandbits(32), self.clock, core_prompt,
+                                         core_cands, t0, budget)
+            if result is not None:
+                best, done, nodes = result
+                self.nodes += nodes
+                self.depths.append(done)
+                return best
+            self.server_failures += 1  # (then here, as without the server)
+        self.prepare()
+        best, done = self.search(duel, core_prompt, core_cands, t0, budget)
+        self.depths.append(done)
+        return best
+
+    def prepare(self) -> None:
+        """The tables for a new decision (in the process that keeps them)."""
+        if self._tt is None:
+            buf = mmap.mmap(-1, _TT_DTYPE.itemsize << TT_BITS)  # (anonymous: shared with the forks)
+            self._tt = np.frombuffer(buf, dtype=_TT_DTYPE)
+        self._tt_gen = (self._tt_gen + 1) % 65536 or 1  # (a new decision: older entries are stale)
+        if self._hist is None:
+            self._hist = np.frombuffer(mmap.mmap(-1, 8 << HIST_BITS), dtype=np.float64)  # (shared with the forks)
+        self._hist *= HIST_DECAY
+
+    def search(self, duel, core_prompt: dict, core_cands: list[dict], t0: float,
+               budget: float | None) -> tuple[int, int]:
+        """The best of `core_cands` and the depth completed (after `prepare`)."""
         turn_player = duel.info()["turn_player"]
         pref = ordered(core_prompt, turn_player)
         order = sorted(range(len(core_cands)), key=lambda k: pref.index(core_cands[k])
@@ -231,23 +271,14 @@ class AlphaBetaAgent(BeliefMCAgent):
         self._policies = policies
         deadline = None if budget is None else \
             t0 + max(budget, min(HARD_FACTOR * budget, HARD_SHARE * self.clock[0]))
-        best, done = order[0], 0
-        if self._tt is None:
-            buf = mmap.mmap(-1, _TT_DTYPE.itemsize << TT_BITS)  # (anonymous: shared with the forks)
-            self._tt = np.frombuffer(buf, dtype=_TT_DTYPE)
-        self._tt_gen = (self._tt_gen + 1) % 65536 or 1  # (a new decision: older entries are stale)
-        if self._hist is None:
-            self._hist = np.frombuffer(mmap.mmap(-1, 8 << HIST_BITS), dtype=np.float64)  # (shared with the forks)
-        self._hist *= HIST_DECAY
         # (the forked nodes never collect the inherited objects: no copies of their pages)
         gc.freeze()
-        _huge_pages()
+        if self.collapse_pages:
+            _huge_pages()
         try:
-            best, done = self._deepen(duel, core_prompt, core_cands, order, t0, budget, deadline)
+            return self._deepen(duel, core_prompt, core_cands, order, t0, budget, deadline)
         finally:
             gc.unfreeze()
-        self.depths.append(done)
-        return best
 
     def _deepen(self, duel, core_prompt, core_cands, order, t0, budget, deadline) -> tuple[int, int]:
         best, done = order[0], 0
