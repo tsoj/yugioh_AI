@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import random
 import struct
+import time
 
 from ..actions import battle_options, encode, idle_options
 from ..game import run_until_prompt
@@ -21,6 +22,13 @@ from .base import Agent
 from .greedy_agent import GreedyAgent
 
 MAX_APPROX_DIFFS = 4  # public facts an approximate reconstruction may get wrong to be searched on
+# Time management under a time control (Agent.clock): each searched decision may use
+# remaining / MOVES_TO_GO + INC_SHARE * increment (reconstruction included), rollouts
+# round-robin over the candidates until it is spent; with little time left, no search.
+MOVES_TO_GO = 40
+INC_SHARE = 0.8
+MIN_SEARCH_TIME = 2.0  # (seconds left below which it plays greedily; also 3 increments)
+MAX_ROLLOUTS = 64  # (per candidate)
 SEARCHED = ("SELECT_IDLECMD", "SELECT_BATTLECMD", "SELECT_CHAIN", "SELECT_EFFECTYN", "SELECT_YESNO",
             "SELECT_OPTION")
 
@@ -88,6 +96,7 @@ class BeliefMCAgent(Agent):
         self.fallback = GreedyAgent(seed)
         self.searches = 0
         self.failures = 0
+        self.rollouts_done = 0
         self.approximate = 0  # (searches on a best-effort reconstruction)
 
     def start(self, player: int, init: dict) -> None:
@@ -105,7 +114,7 @@ class BeliefMCAgent(Agent):
         self.items.append(("prompt", prompt, state))
         resp = None
         cands = candidates(prompt)[:self.max_candidates] if prompt["type"] in SEARCHED else []
-        if len(cands) > 1:
+        if len(cands) > 1 and (self.clock is None or self.clock[0] > max(MIN_SEARCH_TIME, 3 * self.clock[1])):
             resp = self._search(prompt, cands)
         if resp is None:
             resp = self.fallback.respond(prompt, state)
@@ -113,6 +122,8 @@ class BeliefMCAgent(Agent):
         return resp
 
     def _search(self, prompt: dict, cands: list[dict]) -> dict | None:
+        t0 = time.monotonic()
+        budget = None if self.clock is None else self.clock[0] / MOVES_TO_GO + INC_SHARE * self.clock[1]
         # (from the previous decision's reconstruction: only the new part needs work;
         # the duel belongs to self._belief)
         br, duel = self._belief.reconstruct(self.items)
@@ -134,15 +145,31 @@ class BeliefMCAgent(Agent):
         core_prompt = getattr(br, "final_prompt", None) or prompt
         # (the duel stays as it is, the rollouts run in forks: the next decision's
         # reconstruction goes on from it, see AgentBelief)
-        best, best_value = None, -2.0
-        for cand in cands:
-            core_cand = to_core_response(core_prompt, self.player, cand)
-            values = [self._rollout(duel, core_prompt, core_cand, self.rng.getrandbits(32))
-                      for _ in range(self.rollouts)]
-            value = sum(values) / len(values)
-            if value > best_value:
-                best, best_value = cand, value
-        return best
+        core_cands = [to_core_response(core_prompt, self.player, c) for c in cands]
+        totals, counts = [0.0] * len(cands), [0] * len(cands)
+        if budget is None:  # (no time control: a fixed number of rollouts)
+            for k, cc in enumerate(core_cands):
+                for _ in range(self.rollouts):
+                    totals[k] += self._rollout(duel, core_prompt, cc, self.rng.getrandbits(32))
+                    counts[k] += 1
+        else:
+            # (round-robin until the budget is spent; the first round completes while
+            # the clock allows twice the budget)
+            for r in range(MAX_ROLLOUTS):
+                for k, cc in enumerate(core_cands):
+                    spent = time.monotonic() - t0
+                    if spent > (2 * budget if r == 0 else budget):
+                        break
+                    totals[k] += self._rollout(duel, core_prompt, cc, self.rng.getrandbits(32))
+                    counts[k] += 1
+                else:
+                    continue
+                break
+            self.rollouts_done += sum(counts)
+        tried = [k for k in range(len(cands)) if counts[k]]
+        if not tried:
+            return None
+        return cands[max(tried, key=lambda k: totals[k] / counts[k])]
 
     def _rollout(self, duel, prompt: dict, cand: dict, seed: int) -> float:
         """Forks, plays `cand` and continues greedily; returns the evaluation."""

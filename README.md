@@ -56,9 +56,12 @@ cd download_human_decks
 # self-play statistics between built-in agents
 python3 scripts/selfplay.py -n 1000 --agents mixed
 
-# a match, fastchess style (NAME=COMMAND, builtin:<agent> or any engine process)
+# a match, fastchess style (NAME=COMMAND, builtin:<agent> or any engine process): random deck
+# pairs from the corpus, each opening played with both seats, Fischer clock per decision
 python3 scripts/match.py --engine greedy=builtin:greedy \
     --engine "random=python3 -m ygoai.engine random" -n 200 --sprt 0 10 --tc 60+0.5
+.venv/bin/python scripts/match.py --engine belief_mc=builtin:belief_mc --engine heuristic=builtin:heuristic \
+    -n 2000 --mirror-prob 0 --tc 30+0.3 --sprt 0 10
 
 # belief replay consistency test (both players, cut at the end of turns 1, 2 and 3, at 1/3,
 # 2/3 and the full game; turn cuts show as frac -1, -2, -3; --fractions / --turns choose);
@@ -109,7 +112,8 @@ An AI is a process speaking JSON lines on stdin/stdout (see `ygoai/protocol.py`)
 ```
 -> {"type": "init", "player": 0, "deck": {"main": [...], "extra": [...]}, "extra_order": [...],
     "opponent_deck_size": 40, "opponent_extra_size": 15, "config": {...}}
--> {"type": "prompt", "obs": [...messages since the last prompt...], "prompt": {...}, "state": {...}}
+-> {"type": "prompt", "obs": [...messages since the last prompt...], "prompt": {...}, "state": {...},
+    "clock": {"remaining": 41.3, "increment": 0.3}}
 <- {"response": {...}}
 -> {"type": "end", "obs": [...], "result": {"winner": 1, "reason": 1, ...}}
 ```
@@ -119,7 +123,9 @@ An AI is a process speaking JSON lines on stdin/stdout (see `ygoai/protocol.py`)
 EDOPro has (hidden-card effect descriptions in card hints, stale "reason" fields, deck positions
 that distinguish returned cards, ...). A `prompt` is a core selection message, and the response
 format for each kind is documented in `ygoai/actions.py`. `state` is the player's view of the
-whole field. `python -m ygoai.engine greedy` runs a built-in agent as an engine, which doubles as a
+whole field. `clock` (only under a time control, `match.py --tc BASE+INC`: Fischer, per decision)
+is the time the player has left; the time the response takes is subtracted, then the increment
+added, and below zero the player loses on time. `python -m ygoai.engine greedy` runs a built-in agent as an engine, which doubles as a
 minimal example.
 
 ## How the belief replay works (`ygoai/belief/`)
@@ -465,5 +471,6 @@ ygoai/         the Python package
   actions.py     responses              observe.py    per-player filtering
   state.py       state snapshots        game.py       arbiter, records, replays
   protocol.py    engine protocol        match.py      matches, Elo, SPRT
-  agents/        simple AIs (random, greedy, setter, mixed)  belief/       tracker, replay, inference
+  agents/        AIs (random, summon_attack, heuristic,     belief/       tracker, replay, inference
+                 greedy, setter, mixed, belief_mc)
 ```

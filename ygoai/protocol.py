@@ -71,7 +71,10 @@ class EngineProcess(Agent):
 
     def respond(self, prompt: dict, state: dict | None) -> dict:
         t0 = time.monotonic()
-        self._send({"type": "prompt", "obs": self.pending, "prompt": prompt, "state": state})
+        msg = {"type": "prompt", "obs": self.pending, "prompt": prompt, "state": state}
+        if self.clock is not None:
+            msg["clock"] = {"remaining": self.clock[0], "increment": self.clock[1]}
+        self._send(msg)
         self.pending = []
         reply = self._recv()
         self.last_think_time = time.monotonic() - t0
@@ -111,6 +114,8 @@ def serve(agent_factory, stdin=sys.stdin, stdout=sys.stdout) -> None:
         elif t == "prompt":
             for o in msg.get("obs", ()):
                 agent.observe(o)
+            clock = msg.get("clock")
+            agent.clock = (clock["remaining"], clock["increment"]) if clock else None
             resp = agent.respond(msg["prompt"], msg.get("state"))
             stdout.write(json.dumps({"response": resp}, separators=(",", ":")) + "\n")
             stdout.flush()

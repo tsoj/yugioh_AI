@@ -306,6 +306,7 @@ def play(record: GameRecord, agents: list, max_decisions: int = 20000, max_turns
             for obs in observers:
                 obs.prompt(prompt, duel)
             agent = agents[player]
+            agent.clock = (clocks[player].remaining, clocks[player].increment) if clocks is not None else None
             t_move = time.monotonic()
             try:
                 if is_hidden_prompt(prompt):

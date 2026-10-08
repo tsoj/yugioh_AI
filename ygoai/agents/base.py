@@ -10,10 +10,15 @@ class Agent:
     player is allowed to see (already filtered), and `respond` whenever the
     player has to make a decision. `respond` receives the (filtered) prompt
     and, if `wants_state` is true, the player's view of the current state.
+    Under a time control the arbiter sets `clock` before each `respond`:
+    (seconds left on the player's clock, increment per decision); the time the
+    decision takes is subtracted, then the increment added; below zero the
+    player loses on time. Without a time control `clock` is None.
     """
 
     name = "agent"
     wants_state = False
+    clock: tuple[float, float] | None = None
 
     def start(self, player: int, init: dict) -> None:
         self.player = player
