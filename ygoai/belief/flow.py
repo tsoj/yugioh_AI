@@ -29,6 +29,7 @@ each atom is).
 
 from __future__ import annotations
 
+import warnings
 from collections import Counter, defaultdict
 
 import numpy as np
@@ -449,11 +450,16 @@ class FlowSolver:
                         add_row(terms, -np.inf, 0)
                     add_row([(mine[k], 1.0) for k in ts if k in mine], 1, 1)
         a = coo_matrix((vals, (rows, colsi)), shape=(r, ncol)).tocsr()
-        res = milp(c=np.array(cost), constraints=LinearConstraint(a, np.array(rlo), np.array(rhi)),
-                   integrality=np.ones(ncol), bounds=Bounds(np.array(lo), np.array(hi)),
-                   # (a time limit makes the result depend on the machine's load: only one
-                   # far beyond any check's own, for a pathological model)
-                   options={"time_limit": 600.0})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # ("threads" is passed to HiGHS verbatim)
+            res = milp(c=np.array(cost), constraints=LinearConstraint(a, np.array(rlo), np.array(rhi)),
+                       integrality=np.ones(ncol), bounds=Bounds(np.array(lo), np.array(hi)),
+                       # (a time limit makes the result depend on the machine's load: only one
+                       # far beyond any check's own, for a pathological model; one thread:
+                       # HiGHS's worker threads do not survive a fork, and a solve in a
+                       # forked process (a replay's probe, a search node) would wait for them
+                       # forever)
+                       options={"time_limit": 600.0, "threads": 1})
         if res.status != 0 or res.x is None:
             raise TrackerError(f"observations are inconsistent (flow model: {res.message})")
         x = np.rint(res.x).astype(int)
