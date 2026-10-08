@@ -127,6 +127,9 @@ class AlphaBetaAgent(BeliefMCAgent):
 
     def __init__(self, seed: int | None = None, **kw):
         super().__init__(seed=seed, **kw)
+        # (the decisions it does not search, e.g. attack targets, cards, positions,
+        # by the same rules the search assumes for them)
+        self.fallback = HeuristicAgent(seed)
         self.depths: list[int] = []  # (depth completed per search)
         self.nodes = 0
 
