@@ -43,7 +43,13 @@ WIN = 100000.0
 MAX_DEPTH = 12
 DEPTH_NO_CLOCK = 2  # (without a time control: a fixed depth)
 MAX_CHILDREN = 12  # (per node, after ordering)
-NEXT_ITERATION_SHARE = 0.3  # (a new iteration only while less of the budget is spent)
+# time: a soft bound per searched decision (remaining / MOVES_TO_GO + increment): a new
+# iteration starts only within NEXT_ITERATION_SHARE of it; a hard bound (HARD_FACTOR x the
+# soft one, at most HARD_SHARE of the clock) aborts the iteration in progress
+MOVES_TO_GO = 20
+NEXT_ITERATION_SHARE = 0.5
+HARD_FACTOR = 3.0
+HARD_SHARE = 0.25
 MAX_AUTO_STEPS = 300  # (prompts answered by the rules between two plies)
 
 # evaluation weights (points; 1 point = 100 LP)
@@ -124,6 +130,9 @@ class AlphaBetaAgent(BeliefMCAgent):
         self.depths: list[int] = []  # (depth completed per search)
         self.nodes = 0
 
+    def _budget(self) -> float | None:
+        return None if self.clock is None else self.clock[0] / MOVES_TO_GO + self.clock[1]
+
     def _select(self, duel, core_prompt: dict, core_cands: list[dict], t0: float, budget: float | None) -> int | None:
         me = self.player
         turn_player = duel.info()["turn_player"]
@@ -134,7 +143,8 @@ class AlphaBetaAgent(BeliefMCAgent):
         for p, a in enumerate(policies):
             a.player = p
         self._policies = policies
-        deadline = None if budget is None else t0 + budget
+        deadline = None if budget is None else \
+            t0 + max(budget, min(HARD_FACTOR * budget, HARD_SHARE * self.clock[0]))
         best, done = order[0], 0
         # (the forked nodes never collect the inherited objects: no copies of their pages)
         gc.freeze()
@@ -150,15 +160,19 @@ class AlphaBetaAgent(BeliefMCAgent):
         for depth in range(1, (DEPTH_NO_CLOCK if budget is None else MAX_DEPTH) + 1):
             if budget is not None and depth > 1 and time.monotonic() - t0 > NEXT_ITERATION_SHARE * budget:
                 break
+            values = {}
+            alpha, it_best = -math.inf, None
             try:
-                values = {}
-                alpha = -math.inf
                 for k in order:
                     v = self._child(duel, core_prompt, core_cands[k], depth - 1, alpha, math.inf, deadline, 1)
                     values[k] = v
                     if v > alpha:
                         alpha, it_best = v, k
             except _Abort:
+                # (an unfinished iteration: its best counts if the previous best, searched
+                # first, was searched completely and another one did better)
+                if order[0] in values and it_best is not None:
+                    best = it_best
                 break
             best, done = it_best, depth
             # (the next iteration: the best first; cut-off moves keep their bound's order)

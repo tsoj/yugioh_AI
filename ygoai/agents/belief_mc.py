@@ -123,7 +123,7 @@ class BeliefMCAgent(Agent):
 
     def _search(self, prompt: dict, cands: list[dict]) -> dict | None:
         t0 = time.monotonic()
-        budget = None if self.clock is None else self.clock[0] / MOVES_TO_GO + INC_SHARE * self.clock[1]
+        budget = self._budget()
         # (from the previous decision's reconstruction: only the new part needs work;
         # the duel belongs to self._belief)
         br, duel = self._belief.reconstruct(self.items)
@@ -148,6 +148,10 @@ class BeliefMCAgent(Agent):
         core_cands = [to_core_response(core_prompt, self.player, c) for c in cands]
         k = self._select(duel, core_prompt, core_cands, t0, budget)
         return None if k is None else cands[k]
+
+    def _budget(self) -> float | None:
+        """Seconds this searched decision may use (None: no time control)."""
+        return None if self.clock is None else self.clock[0] / MOVES_TO_GO + INC_SHARE * self.clock[1]
 
     def _select(self, duel, core_prompt: dict, core_cands: list[dict], t0: float, budget: float | None) -> int | None:
         """Which of the candidates (core responses to the duel's prompt) to play:
