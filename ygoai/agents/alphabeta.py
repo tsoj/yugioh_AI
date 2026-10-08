@@ -12,9 +12,9 @@ depth + 1 processes exist at a time (depth first).
   everything in between (cards, places, positions, ...) is answered by the
   heuristic player's rules (which see the core's select hints and new turns), the
   opponent's hidden cards are the belief's guesses.
-- Card selections of one card are plies too (CARD_WIDTH of them below the
-  root, by the rules' order for the select hint; at the horizon the rules
-  choose).
+- Card selections of one card are plies too (the rules' first ROOT_CARD_WIDTH
+  at the root, CARD_WIDTH below, by the rules' order for the select hint; at
+  the horizon the rules choose).
 - Move ordering: the heuristic player's priorities (activate, Special Summon,
   Normal Summon the stronger first, set a monster, change positions, battle, set
   Spells/Traps, end the turn; in battle: activate, attack the stronger attacker
@@ -67,7 +67,8 @@ WIN = 100000.0
 MAX_DEPTH = 12
 DEPTH_NO_CLOCK = 2  # (without a time control: a fixed depth)
 MAX_CHILDREN = 12  # (per node, after ordering)
-CARD_WIDTH = 5  # (below the root, a one-card selection: the rules' first choices only)
+CARD_WIDTH = 3  # (a one-card selection: the rules' first choices only, below the root
+ROOT_CARD_WIDTH = 3  # and at the root)
 # time: a soft bound per searched decision (remaining / MOVES_TO_GO + increment): a new
 # iteration starts only within NEXT_ITERATION_SHARE of it; a hard bound (HARD_FACTOR x the
 # soft one, at most HARD_SHARE of the clock) aborts the iteration in progress
@@ -285,6 +286,8 @@ class AlphaBetaAgent(BeliefMCAgent):
         pref = ordered(core_prompt, turn_player, self._card_order(core_prompt))
         order = sorted(range(len(core_cands)), key=lambda k: pref.index(core_cands[k])
                        if core_cands[k] in pref else len(pref))
+        if core_prompt["type"] == "SELECT_CARD":
+            order = order[:ROOT_CARD_WIDTH]
         deadline = None if budget is None else \
             t0 + max(budget, min(HARD_FACTOR * budget, HARD_SHARE * self.clock[0]))
         # (the forked nodes never collect the inherited objects: no copies of their pages)
