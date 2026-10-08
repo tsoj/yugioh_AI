@@ -10,7 +10,8 @@ depth + 1 processes exist at a time (depth first).
 - Plies are the decisions of either player at command prompts, chain windows,
   yes/no questions and options (belief_mc.SEARCHED) with more than one candidate;
   everything in between (cards, places, positions, ...) is answered by the
-  heuristic player's rules, the opponent's hidden cards are the belief's guesses.
+  heuristic player's rules (which see the core's select hints and new turns), the
+  opponent's hidden cards are the belief's guesses.
 - Move ordering: the heuristic player's priorities (activate, Special Summon,
   Normal Summon the stronger first, set a monster, change positions, battle, set
   Spells/Traps, end the turn; in battle: activate, attack the stronger attacker
@@ -380,6 +381,10 @@ class AlphaBetaAgent(BeliefMCAgent):
             for m in step.messages:
                 if m["type"] == "WIN":
                     return WIN - ply if m["player"] == me else -WIN + ply
+                if m["type"] == "NEW_TURN" or m["type"] == "HINT" and m["hint_type"] == C.HINT_SELECTMSG:
+                    # (the rules' players: their activation caps per turn, what a card selection is for)
+                    for policy in self._policies:
+                        policy.observe(m)
             if step.ended:
                 return evaluate(duel, me)
             prompt = step.prompt
