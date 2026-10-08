@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -31,6 +32,16 @@ def reexec(name: str) -> None:
     to do when already running from one). Keeps the process id."""
     if os.environ.get(_ENV):
         return
+    dst = make(name)
+    script = dst / Path(sys.argv[0]).resolve().relative_to(ROOT)
+    print(f"running from the snapshot {dst}", flush=True)
+    os.execve(sys.executable, [sys.executable, str(script), *sys.argv[1:]], dict(os.environ, **{_ENV: str(ROOT)}))
+
+
+def make(name: str, ref: str | None = None) -> Path:
+    """A snapshot of the code in build/snapshots/NAME: of the checkout, or of a
+    git commit `ref` (its core library built from its core_ext/ if that differs
+    from the checkout's)."""
     SNAPSHOTS.mkdir(parents=True, exist_ok=True)
     for old in SNAPSHOTS.iterdir():
         if old.is_dir() and time.time() - old.stat().st_mtime > _KEEP_DAYS * 86400:
@@ -39,9 +50,14 @@ def reexec(name: str) -> None:
     if dst.exists():
         shutil.rmtree(dst)
     dst.mkdir()
-    ignore = shutil.ignore_patterns("__pycache__", "*.pyc")
-    for d in _CODE:
-        shutil.copytree(ROOT / d, dst / d, ignore=ignore, symlinks=True)
+    if ref is None:
+        ignore = shutil.ignore_patterns("__pycache__", "*.pyc")
+        for d in _CODE:
+            shutil.copytree(ROOT / d, dst / d, ignore=ignore, symlinks=True)
+    else:
+        archive = subprocess.run(["git", "-C", str(ROOT), "archive", ref, *_CODE], check=True,
+                                 capture_output=True).stdout
+        subprocess.run(["tar", "-x", "-C", str(dst)], input=archive, check=True)
     for d in _SHARED:
         if (ROOT / d).exists():
             (dst / d).symlink_to(ROOT / d)
@@ -53,6 +69,9 @@ def reexec(name: str) -> None:
             shutil.copy2(p, dst / "build" / p.name)  # (the core is code too)
         else:
             (dst / "build" / p.name).symlink_to(p)
-    script = dst / Path(sys.argv[0]).resolve().relative_to(ROOT)
-    print(f"running from the snapshot {dst}", flush=True)
-    os.execve(sys.executable, [sys.executable, str(script), *sys.argv[1:]], dict(os.environ, **{_ENV: str(ROOT)}))
+    if ref is not None and subprocess.run(["git", "-C", str(ROOT), "diff", "--quiet", ref, "--", "core_ext"]).returncode:
+        # (its core differs from the checkout's: build its own)
+        for p in (dst / "build").glob("libocgcore*"):
+            p.unlink()
+        subprocess.run(["bash", str(dst / "scripts" / "build_core.sh")], check=True, capture_output=True)
+    return dst

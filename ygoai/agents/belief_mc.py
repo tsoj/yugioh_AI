@@ -143,10 +143,16 @@ class BeliefMCAgent(Agent):
         self.approximate += br.approximate
         from ..observe import to_core_response
         core_prompt = getattr(br, "final_prompt", None) or prompt
-        # (the duel stays as it is, the rollouts run in forks: the next decision's
+        # (the duel stays as it is, the search runs in forks: the next decision's
         # reconstruction goes on from it, see AgentBelief)
         core_cands = [to_core_response(core_prompt, self.player, c) for c in cands]
-        totals, counts = [0.0] * len(cands), [0] * len(cands)
+        k = self._select(duel, core_prompt, core_cands, t0, budget)
+        return None if k is None else cands[k]
+
+    def _select(self, duel, core_prompt: dict, core_cands: list[dict], t0: float, budget: float | None) -> int | None:
+        """Which of the candidates (core responses to the duel's prompt) to play:
+        flat Monte Carlo with greedy rollouts."""
+        totals, counts = [0.0] * len(core_cands), [0] * len(core_cands)
         if budget is None:  # (no time control: a fixed number of rollouts)
             for k, cc in enumerate(core_cands):
                 for _ in range(self.rollouts):
@@ -166,10 +172,10 @@ class BeliefMCAgent(Agent):
                     continue
                 break
             self.rollouts_done += sum(counts)
-        tried = [k for k in range(len(cands)) if counts[k]]
+        tried = [k for k in range(len(core_cands)) if counts[k]]
         if not tried:
             return None
-        return cands[max(tried, key=lambda k: totals[k] / counts[k])]
+        return max(tried, key=lambda k: totals[k] / counts[k])
 
     def _rollout(self, duel, prompt: dict, cand: dict, seed: int) -> float:
         """Forks, plays `cand` and continues greedily; returns the evaluation."""

@@ -70,7 +70,7 @@ def main() -> int:
     args = ap.parse_args()
     if len(args.engine) != 2:
         ap.error("exactly two engines are required")
-    if any("belief_mc" in e.command for e in args.engine):
+    if any(name in e.command for e in args.engine for name in ("belief_mc", "alphabeta")):
         # (one deck model process for every worker and engine process: memory)
         try:
             from ygoai.belief.neural_completion import ensure_service
@@ -102,6 +102,7 @@ def main() -> int:
         if out:
             for g in res:
                 out.write(json.dumps(g["record"]) + "\n")
+            out.flush()
         if i % 10 == 0 or i == len(openings):
             print(f"[{time.monotonic() - t0:6.0f}s] " +
                   stats.summary(*(args.sprt or (None, None))), flush=True)
@@ -109,13 +110,13 @@ def main() -> int:
             llr = stats.llr(*args.sprt)
             if llr <= lo or llr >= hi:
                 print(f"SPRT finished: {'H1 accepted' if llr >= hi else 'H0 accepted'} "
-                      f"(LLR {llr:.2f}, bounds [{lo:.2f}, {hi:.2f}])")
+                      f"(LLR {llr:.2f}, bounds [{lo:.2f}, {hi:.2f}])", flush=True)
                 results.close()
                 break
     close_engines()
     if out:
         out.close()
-    print("final:", stats.summary(*(args.sprt or (None, None))), f"errors: {errors}")
+    print("final:", stats.summary(*(args.sprt or (None, None))), f"errors: {errors}", flush=True)
     return 0
 
 

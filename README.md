@@ -63,6 +63,10 @@ python3 scripts/match.py --engine greedy=builtin:greedy \
 .venv/bin/python scripts/match.py --engine belief_mc=builtin:belief_mc --engine heuristic=builtin:heuristic \
     -n 2000 --mirror-prob 0 --tc 30+0.3 --sprt 0 10
 
+# engine development: a feature on a branch, SPRT against main (both versions exported to
+# build/snapshots/engine-<sha>, run as engine processes; results in runs/sprt/); merge if H1
+.venv/bin/python scripts/sprt.py my-feature-branch main --agent alphabeta
+
 # belief replay consistency test (both players, cut at the end of turns 1, 2 and 3, at 1/3,
 # 2/3 and the full game; turn cuts show as frac -1, -2, -3; --fractions / --turns choose);
 # one task per game (played once, both observation streams recorded while it is played),
@@ -472,5 +476,5 @@ ygoai/         the Python package
   state.py       state snapshots        game.py       arbiter, records, replays
   protocol.py    engine protocol        match.py      matches, Elo, SPRT
   agents/        AIs (random, summon_attack, heuristic,     belief/       tracker, replay, inference
-                 greedy, setter, mixed, belief_mc)
+                 greedy, setter, mixed, belief_mc, alphabeta)
 ```
