@@ -29,6 +29,9 @@ depth + 1 processes exist at a time (depth first).
 - History (`_move_key`, `_node`): moves that caused a cutoff (by player, kind and
   card) go first among the moves of later nodes, in this search and (halved per
   decision) the next ones; in memory shared with the forked nodes.
+- Negamax: a node's value is for the player to move there; it changes sign
+  (and the window becomes (-beta, -alpha)) only from one player's decision to
+  the other's: the same player often decides several times in a row.
 - Time: iterative deepening within belief_mc's budget per decision; an iteration
   that runs out of time is discarded (the deeper one only counts complete).
 - Value (`evaluate`): win/loss, then LP, monsters, monsters that beat everything
@@ -319,7 +322,6 @@ class AlphaBetaAgent(BeliefMCAgent):
     def _node(self, duel, prompt: dict, depth: int, alpha: float, beta: float, deadline, ply: int) -> float:
         # (moves are indices into the heuristic's order: the TT keeps one, the history reorders them)
         cands = ordered(prompt, duel.info()["turn_player"])
-        maximizing = prompt["player"] == self.player
         key = self._tt_key(duel, prompt)
         e = self._tt[key & ((1 << TT_BITS) - 1)]
         tt_move = None
@@ -341,7 +343,7 @@ class AlphaBetaAgent(BeliefMCAgent):
         keys = [_move_key(prompt, c) for c in cands]
         # (the TT move first, then the moves with a better history; the heuristic's order among equals)
         idx = sorted(range(len(cands)), key=lambda k: (k != tt_move, -hist[keys[k]]))[:MAX_CHILDREN]
-        best = -math.inf if maximizing else math.inf
+        best = -math.inf
         best_i = idx[0]
         for i, ci in enumerate(idx):
             c = cands[ci]
@@ -353,12 +355,9 @@ class AlphaBetaAgent(BeliefMCAgent):
                 v = self._expand(duel, prompt, c, depth - 1, alpha, beta, deadline, ply + 1)
             else:
                 v = self._child(duel, prompt, c, depth - 1, alpha, beta, deadline, ply + 1)
-            if (v > best) if maximizing else (v < best):
+            if v > best:
                 best, best_i = v, ci
-            if maximizing:
-                alpha = max(alpha, best)
-            else:
-                beta = min(beta, best)
+            alpha = max(alpha, best)
             if alpha >= beta:
                 # (a cutoff: this move up, the ones tried before it down)
                 bonus = depth * depth
@@ -399,13 +398,16 @@ class AlphaBetaAgent(BeliefMCAgent):
         if math.isnan(value):
             if deadline is not None and time.monotonic() > deadline:
                 raise _Abort()
-            value = -WIN if prompt["player"] == self.player else WIN  # (an engine error: avoid the line)
+            value = -WIN  # (an engine error: the player to move avoids the line)
         return value
 
     def _expand(self, duel, prompt: dict, cand: dict, depth: int, alpha: float, beta: float, deadline,
                 ply: int) -> float:
-        """(in the child) Plays `cand`, runs to the next ply and values it."""
-        me = self.player
+        """(in the child) Plays `cand`, runs to the next ply and values it, for the
+        player who plays it (negamax: values and the window (alpha, beta) are the
+        mover's; they change sign only where the next ply is the other player's,
+        which in this game need not be the case)."""
+        me = prompt["player"]
         duel.set_response(encode(prompt, cand))
         for _ in range(MAX_AUTO_STEPS):
             step = run_until_prompt(duel, prompt)
@@ -424,7 +426,9 @@ class AlphaBetaAgent(BeliefMCAgent):
             elif prompt["type"] in SEARCHED and len(candidates(prompt)) > 1:
                 if depth <= 0:
                     return evaluate(duel, me)
-                return self._node(duel, prompt, depth, alpha, beta, deadline, ply)
+                if prompt["player"] == me:
+                    return self._node(duel, prompt, depth, alpha, beta, deadline, ply)
+                return -self._node(duel, prompt, depth, -beta, -alpha, deadline, ply)
             elif prompt["type"] in SEARCHED:
                 resp = candidates(prompt)[0] if candidates(prompt) else \
                     self._policies[prompt["player"]].respond(prompt, None)
