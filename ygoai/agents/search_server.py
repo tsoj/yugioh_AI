@@ -66,7 +66,7 @@ class SearchClient:
             return None
 
     def search(self, duel, player: int, seed: int, clock, prompt: dict, cands: list[dict], t0: float,
-               budget: float | None) -> tuple[int, int, int] | None:
+               budget: float | None, hint: int | None = None) -> tuple[int, int, int] | None:
         """(best candidate index, depth completed, nodes), or None."""
         if duel._key != self.key:
             self.key, self.sent = duel._key, 0
@@ -74,7 +74,7 @@ class SearchClient:
         delta = journal[self.sent:]
         timeout = REPLY_MARGIN + (60.0 if budget is None else 4 * budget)
         reply = self._request(("search", duel._key, self.sent, delta, player, seed, clock, prompt, cands, t0,
-                               budget), timeout)
+                               budget, hint), timeout)
         if reply is None:
             return None
         if reply[0] in ("ok", "error"):
@@ -115,7 +115,7 @@ def _serve(inp: Connection, out: Connection) -> None:
             Duel((0, 0, 0, 0), None, default_db()).close()  # (compiles the utility scripts)
             out.send(("ready",))
             continue
-        _, k, start, delta, player, seed, clock, prompt, cands, t0, budget = msg
+        _, k, start, delta, player, seed, clock, prompt, cands, t0, budget, hint = msg
         if k != key or start != n:
             if mirror is not None:
                 mirror.close()
@@ -151,10 +151,10 @@ def _serve(inp: Connection, out: Connection) -> None:
         agent.clock = clock
         agent.prepare()
         _huge_pages()
-        out.send(_search_in_fork(agent, mirror, prompt, cands, t0, budget))
+        out.send(_search_in_fork(agent, mirror, prompt, cands, t0, budget, hint))
 
 
-def _search_in_fork(agent, duel, prompt, cands, t0, budget) -> tuple:
+def _search_in_fork(agent, duel, prompt, cands, t0, budget, hint) -> tuple:
     r, w = os.pipe()
     pid = os.fork()
     if pid == 0:
@@ -162,7 +162,7 @@ def _search_in_fork(agent, duel, prompt, cands, t0, budget) -> tuple:
         data = b""
         try:
             nodes = agent.nodes
-            best, done = agent.search(duel, prompt, cands, t0, budget)
+            best, done = agent.search(duel, prompt, cands, t0, budget, hint)
             data = pickle.dumps((best, done, agent.nodes - nodes))
         except BaseException:  # noqa: BLE001
             traceback.print_exc()
