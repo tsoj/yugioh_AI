@@ -17,6 +17,11 @@ depth + 1 processes exist at a time (depth first).
   first; chain before passing; yes first in one's own turn). At the root, the
   previous iteration's values order the moves.
 - Speed: the process's memory in huge pages before a search (cheaper forks).
+- Transposition table (`_tt_key`, `_node`): positions reached by other move
+  orders (e.g. two independent activations), keyed by a hash of the engine's
+  state queries and the pending decision; in shared memory (the nodes are forked
+  processes): value bounds for cutoffs and the best move to try first (also
+  across the iterations of one decision).
 - Time: iterative deepening within belief_mc's budget per decision; an iteration
   that runs out of time is discarded (the deeper one only counts complete).
 - Value (`evaluate`): win/loss, then LP, monsters, monsters that beat everything
@@ -27,17 +32,21 @@ from __future__ import annotations
 
 import ctypes
 import gc
+import hashlib
 import math
+import mmap
 import os
 import struct
 import time
+
+import numpy as np
 
 from .. import constants as C
 from ..actions import encode
 from ..carddb import default_db
 from ..game import run_until_prompt
 from ..observe import AUTO_RESPONSE, is_hidden_prompt
-from ..state import _parse_location_cached
+from ..state import LOCATIONS, QUERY_ALL, QUERY_BASIC, _parse_location_cached
 from .belief_mc import SEARCHED, BeliefMCAgent, candidates
 from .heuristic_agents import HeuristicAgent
 
@@ -53,6 +62,10 @@ NEXT_ITERATION_SHARE = 0.5
 HARD_FACTOR = 3.0
 HARD_SHARE = 0.25
 MAX_AUTO_STEPS = 300  # (prompts answered by the rules between two plies)
+TT_BITS = 16  # (transposition table entries: 2^16, in memory shared with the forked nodes)
+_TT_DTYPE = np.dtype([("key", "<u8"), ("value", "<f8"), ("depth", "<i2"), ("flag", "i1"), ("move", "i1"),
+                      ("gen", "<u2")])
+_EXACT, _LOWER, _UPPER = 0, 1, 2
 
 # evaluation weights (points; 1 point = 100 LP)
 W_LP = 1 / 100
@@ -163,6 +176,8 @@ class AlphaBetaAgent(BeliefMCAgent):
         self.fallback = HeuristicAgent(seed)
         self.depths: list[int] = []  # (depth completed per search)
         self.nodes = 0
+        self._tt = None
+        self._tt_gen = 0
 
     def _budget(self) -> float | None:
         return None if self.clock is None else self.clock[0] / MOVES_TO_GO + self.clock[1]
@@ -180,6 +195,10 @@ class AlphaBetaAgent(BeliefMCAgent):
         deadline = None if budget is None else \
             t0 + max(budget, min(HARD_FACTOR * budget, HARD_SHARE * self.clock[0]))
         best, done = order[0], 0
+        if self._tt is None:
+            buf = mmap.mmap(-1, _TT_DTYPE.itemsize << TT_BITS)  # (anonymous: shared with the forks)
+            self._tt = np.frombuffer(buf, dtype=_TT_DTYPE)
+        self._tt_gen = (self._tt_gen + 1) % 65536 or 1  # (a new decision: older entries are stale)
         # (the forked nodes never collect the inherited objects: no copies of their pages)
         gc.freeze()
         _huge_pages()
@@ -216,12 +235,45 @@ class AlphaBetaAgent(BeliefMCAgent):
                 break  # (a forced win or loss: deeper changes nothing)
         return best, done
 
+    def _tt_key(self, duel, prompt: dict) -> int:
+        h = hashlib.blake2b(digest_size=8)
+        h.update(repr(duel.info()).encode())
+        h.update(duel.query_field_raw())
+        for p in (0, 1):
+            for _, loc in LOCATIONS:
+                h.update(duel.query_location_raw(p, loc, QUERY_BASIC if loc == C.LOCATION_DECK else QUERY_ALL))
+        h.update(repr(sorted(prompt.items())).encode())
+        return int.from_bytes(h.digest(), "little") or 1
+
     def _node(self, duel, prompt: dict, depth: int, alpha: float, beta: float, deadline, ply: int) -> float:
         cands = ordered(prompt, duel.info()["turn_player"])[:MAX_CHILDREN]
         maximizing = prompt["player"] == self.player
+        key = self._tt_key(duel, prompt)
+        e = self._tt[key & ((1 << TT_BITS) - 1)]
+        tt_move = None
+        if e["key"] == key and e["gen"] == self._tt_gen:
+            v = float(e["value"])
+            if e["depth"] >= depth:
+                if e["flag"] == _EXACT:
+                    return v
+                if e["flag"] == _LOWER:
+                    alpha = max(alpha, v)
+                else:
+                    beta = min(beta, v)
+                if alpha >= beta:
+                    return v
+            if 0 <= e["move"] < len(cands):
+                tt_move = int(e["move"])
+        alpha0, beta0 = alpha, beta
+        idx = list(range(len(cands)))
+        if tt_move is not None:
+            idx.remove(tt_move)
+            idx.insert(0, tt_move)
         best = -math.inf if maximizing else math.inf
-        for i, c in enumerate(cands):
-            if i == len(cands) - 1:
+        best_i = idx[0]
+        for i, ci in enumerate(idx):
+            c = cands[ci]
+            if i == len(idx) - 1:
                 # (the last move: nothing needs this position afterwards, no fork)
                 if deadline is not None and time.monotonic() > deadline:
                     raise _Abort()
@@ -229,14 +281,18 @@ class AlphaBetaAgent(BeliefMCAgent):
                 v = self._expand(duel, prompt, c, depth - 1, alpha, beta, deadline, ply + 1)
             else:
                 v = self._child(duel, prompt, c, depth - 1, alpha, beta, deadline, ply + 1)
+            if (v > best) if maximizing else (v < best):
+                best, best_i = v, ci
             if maximizing:
-                best = max(best, v)
                 alpha = max(alpha, best)
             else:
-                best = min(best, v)
                 beta = min(beta, best)
             if alpha >= beta:
                 break
+        if abs(best) < WIN / 2:  # (not a win or loss: those depend on the ply)
+            e = self._tt[key & ((1 << TT_BITS) - 1)]
+            e["key"], e["value"], e["depth"], e["move"], e["gen"] = key, best, depth, best_i, self._tt_gen
+            e["flag"] = _UPPER if best <= alpha0 else _LOWER if best >= beta0 else _EXACT
         return best
 
     def _child(self, duel, prompt: dict, cand: dict, depth: int, alpha: float, beta: float, deadline,
