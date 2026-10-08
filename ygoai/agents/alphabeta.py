@@ -22,6 +22,9 @@ depth + 1 processes exist at a time (depth first).
   state queries and the pending decision; in shared memory (the nodes are forked
   processes): value bounds for cutoffs and the best move to try first (also
   across the iterations of one decision).
+- History (`_move_key`, `_node`): moves that caused a cutoff (by player, kind and
+  card) go first among the moves of later nodes, in this search and (halved per
+  decision) the next ones; in memory shared with the forked nodes.
 - Time: iterative deepening within belief_mc's budget per decision; an iteration
   that runs out of time is discarded (the deeper one only counts complete).
 - Value (`evaluate`): win/loss, then LP, monsters, monsters that beat everything
@@ -42,7 +45,7 @@ import time
 import numpy as np
 
 from .. import constants as C
-from ..actions import encode
+from ..actions import BATTLE_LISTS, IDLE_LISTS, encode
 from ..carddb import default_db
 from ..game import run_until_prompt
 from ..observe import AUTO_RESPONSE, is_hidden_prompt
@@ -66,6 +69,8 @@ TT_BITS = 16  # (transposition table entries: 2^16, in memory shared with the fo
 _TT_DTYPE = np.dtype([("key", "<u8"), ("value", "<f8"), ("depth", "<i2"), ("flag", "i1"), ("move", "i1"),
                       ("gen", "<u2")])
 _EXACT, _LOWER, _UPPER = 0, 1, 2
+HIST_BITS = 14  # (history entries: 2^14, in memory shared with the forked nodes)
+HIST_DECAY = 0.5  # (per decision)
 
 # evaluation weights (points; 1 point = 100 LP)
 W_LP = 1 / 100
@@ -111,6 +116,36 @@ def _huge_pages() -> None:
         if end > start:
             madvise(start, end - start, _MADV_HUGEPAGE)
             madvise(start, end - start, _MADV_COLLAPSE)
+
+
+_TYPE_ID = {"SELECT_IDLECMD": 1, "SELECT_BATTLECMD": 2, "SELECT_CHAIN": 3, "SELECT_EFFECTYN": 4,
+            "SELECT_YESNO": 5, "SELECT_OPTION": 6}
+_KIND_ID = {k: i for i, k in enumerate(("summon", "spsummon", "repos", "mset", "sset", "activate", "to_bp",
+                                        "to_ep", "shuffle", "attack", "to_m2"), 1)}
+
+
+def _move_key(prompt: dict, cand: dict) -> int:
+    """The history slot of a move: its player, kind and card (and effect)."""
+    t = prompt["type"]
+    kind, code, desc = 0, 0, 0
+    if "kind" in cand:
+        kind = _KIND_ID.get(cand["kind"], 0)
+        lst = (IDLE_LISTS if t == "SELECT_IDLECMD" else BATTLE_LISTS).get(cand["kind"])
+        if lst is not None:
+            entry = prompt[lst][cand["index"]]
+            code, desc = entry["code"], entry.get("desc", 0) or 0
+    elif t == "SELECT_CHAIN":
+        if cand["index"] >= 0:
+            entry = prompt["chains"][cand["index"]]
+            kind, code, desc = 1, entry["code"], entry.get("desc", 0) or 0
+    elif "yes" in cand:
+        kind, code, desc = 1 + cand["yes"], prompt.get("code", 0) or 0, prompt.get("desc", 0) or 0
+    elif "index" in cand:
+        kind = 1 + cand["index"]
+    h = (((_TYPE_ID.get(t, 0) * 31 + prompt["player"]) * 31 + kind) * 1000003 + code) * 1000003 + desc
+    h ^= h >> 17
+    h = (h * 0x9E3779B97F4A7C15) & 0xFFFFFFFFFFFFFFFF
+    return h >> (64 - HIST_BITS)
 
 
 def _battle_stat(c: dict) -> int:
@@ -178,6 +213,7 @@ class AlphaBetaAgent(BeliefMCAgent):
         self.nodes = 0
         self._tt = None
         self._tt_gen = 0
+        self._hist = None
 
     def _budget(self) -> float | None:
         return None if self.clock is None else self.clock[0] / MOVES_TO_GO + self.clock[1]
@@ -199,6 +235,9 @@ class AlphaBetaAgent(BeliefMCAgent):
             buf = mmap.mmap(-1, _TT_DTYPE.itemsize << TT_BITS)  # (anonymous: shared with the forks)
             self._tt = np.frombuffer(buf, dtype=_TT_DTYPE)
         self._tt_gen = (self._tt_gen + 1) % 65536 or 1  # (a new decision: older entries are stale)
+        if self._hist is None:
+            self._hist = np.frombuffer(mmap.mmap(-1, 8 << HIST_BITS), dtype=np.float64)  # (shared with the forks)
+        self._hist *= HIST_DECAY
         # (the forked nodes never collect the inherited objects: no copies of their pages)
         gc.freeze()
         _huge_pages()
@@ -246,7 +285,8 @@ class AlphaBetaAgent(BeliefMCAgent):
         return int.from_bytes(h.digest(), "little") or 1
 
     def _node(self, duel, prompt: dict, depth: int, alpha: float, beta: float, deadline, ply: int) -> float:
-        cands = ordered(prompt, duel.info()["turn_player"])[:MAX_CHILDREN]
+        # (moves are indices into the heuristic's order: the TT keeps one, the history reorders them)
+        cands = ordered(prompt, duel.info()["turn_player"])
         maximizing = prompt["player"] == self.player
         key = self._tt_key(duel, prompt)
         e = self._tt[key & ((1 << TT_BITS) - 1)]
@@ -265,10 +305,10 @@ class AlphaBetaAgent(BeliefMCAgent):
             if 0 <= e["move"] < len(cands):
                 tt_move = int(e["move"])
         alpha0, beta0 = alpha, beta
-        idx = list(range(len(cands)))
-        if tt_move is not None:
-            idx.remove(tt_move)
-            idx.insert(0, tt_move)
+        hist = self._hist
+        keys = [_move_key(prompt, c) for c in cands]
+        # (the TT move first, then the moves with a better history; the heuristic's order among equals)
+        idx = sorted(range(len(cands)), key=lambda k: (k != tt_move, -hist[keys[k]]))[:MAX_CHILDREN]
         best = -math.inf if maximizing else math.inf
         best_i = idx[0]
         for i, ci in enumerate(idx):
@@ -288,6 +328,11 @@ class AlphaBetaAgent(BeliefMCAgent):
             else:
                 beta = min(beta, best)
             if alpha >= beta:
+                # (a cutoff: this move up, the ones tried before it down)
+                bonus = depth * depth
+                hist[keys[ci]] += bonus
+                for k in idx[:i]:
+                    hist[keys[k]] -= bonus / i
                 break
         if abs(best) < WIN / 2:  # (not a win or loss: those depend on the ply)
             e = self._tt[key & ((1 << TT_BITS) - 1)]
