@@ -44,6 +44,9 @@ class EngineError(RuntimeError):
 
 
 _PARENT_ENV = "YGOAI_ENGINE_PARENT"  # (the arbiter-side process: see _end_with_parent)
+# (engines fork (the belief's probes, a search's nodes): no BLAS thread pools, a fork
+# would copy their state but not their threads, and a child could wait on them forever)
+SINGLE_THREADED = {"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
 READY_TIMEOUT = 30.0  # (seconds an engine may take to load; one that does not know "isready" is not waited for longer)
 
 
@@ -57,7 +60,7 @@ class EngineProcess(Agent):
         self.name = name or command[-1]
         self.proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      text=True, bufsize=1, cwd=cwd,
-                                     env=dict(os.environ, **{_PARENT_ENV: str(os.getpid())}))
+                                     env={**SINGLE_THREADED, **os.environ, _PARENT_ENV: str(os.getpid())})
         self.pending: list[dict] = []
         self.last_think_time = 0.0
         # (loading the engine is not on its clock: wait until it is ready)

@@ -29,6 +29,8 @@ import traceback
 from multiprocessing.connection import Connection
 from pathlib import Path
 
+from ..protocol import SINGLE_THREADED
+
 READY_TIMEOUT = 60.0
 REPLY_MARGIN = 30.0  # (seconds past the search's hard bound before the server counts as hung)
 
@@ -40,7 +42,8 @@ class SearchClient:
         root = Path(__file__).resolve().parents[2]
         self.proc = subprocess.Popen(
             [sys.executable, "-m", "ygoai.agents.search_server", str(to_server), str(from_server), str(os.getpid())],
-            pass_fds=(to_server, from_server), cwd=root, stdin=subprocess.DEVNULL)
+            pass_fds=(to_server, from_server), cwd=root, stdin=subprocess.DEVNULL,
+            env={**SINGLE_THREADED, **os.environ})  # (it forks at every node: no thread pools)
         os.close(to_server)
         os.close(from_server)
         self.out = Connection(from_client, readable=False)
