@@ -30,7 +30,7 @@ INC_SHARE = 0.8
 MIN_SEARCH_TIME = 2.0  # (seconds left below which it plays greedily; also 3 increments)
 MAX_ROLLOUTS = 64  # (per candidate)
 SEARCHED = ("SELECT_IDLECMD", "SELECT_BATTLECMD", "SELECT_CHAIN", "SELECT_EFFECTYN", "SELECT_YESNO",
-            "SELECT_OPTION")
+            "SELECT_OPTION", "SELECT_CARD")
 
 
 _NEURAL = None
@@ -64,6 +64,8 @@ def candidates(prompt: dict) -> list[dict]:
         return [{"yes": True}, {"yes": False}]
     if t == "SELECT_OPTION":
         return [{"index": i} for i in range(len(prompt["options"]))]
+    if t == "SELECT_CARD" and prompt["min"] == 1 and prompt["max"] == 1:
+        return [{"indices": [i]} for i in range(len(prompt["cards"]))]  # (one card: each a candidate)
     return []
 
 

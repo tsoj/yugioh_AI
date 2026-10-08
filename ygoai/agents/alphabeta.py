@@ -12,6 +12,9 @@ depth + 1 processes exist at a time (depth first).
   everything in between (cards, places, positions, ...) is answered by the
   heuristic player's rules (which see the core's select hints and new turns), the
   opponent's hidden cards are the belief's guesses.
+- Card selections of one card are plies too (CARD_WIDTH of them below the
+  root, by the rules' order for the select hint; at the horizon the rules
+  choose).
 - Move ordering: the heuristic player's priorities (activate, Special Summon,
   Normal Summon the stronger first, set a monster, change positions, battle, set
   Spells/Traps, end the turn; in battle: activate, attack the stronger attacker
@@ -64,6 +67,7 @@ WIN = 100000.0
 MAX_DEPTH = 12
 DEPTH_NO_CLOCK = 2  # (without a time control: a fixed depth)
 MAX_CHILDREN = 12  # (per node, after ordering)
+CARD_WIDTH = 5  # (below the root, a one-card selection: the rules' first choices only)
 # time: a soft bound per searched decision (remaining / MOVES_TO_GO + increment): a new
 # iteration starts only within NEXT_ITERATION_SHARE of it; a hard bound (HARD_FACTOR x the
 # soft one, at most HARD_SHARE of the clock) aborts the iteration in progress
@@ -147,6 +151,8 @@ def _move_key(prompt: dict, cand: dict) -> int:
             kind, code, desc = 1, entry["code"], entry.get("desc", 0) or 0
     elif "yes" in cand:
         kind, code, desc = 1 + cand["yes"], prompt.get("code", 0) or 0, prompt.get("desc", 0) or 0
+    elif "indices" in cand:
+        kind, code = 1, prompt["cards"][cand["indices"][0]].get("code", 0) or 0
     elif "index" in cand:
         kind = 1 + cand["index"]
     h = (((_TYPE_ID.get(t, 0) * 31 + prompt["player"]) * 31 + kind) * 1000003 + code) * 1000003 + desc
@@ -181,10 +187,13 @@ def evaluate(duel, me: int) -> float:
     return value
 
 
-def ordered(prompt: dict, turn_player: int) -> list[dict]:
-    """The candidates of a prompt, the heuristic player's preference first."""
+def ordered(prompt: dict, turn_player: int, card_order: list[int] | None = None) -> list[dict]:
+    """The candidates of a prompt, the heuristic player's preference first (for a
+    card selection: `card_order`, the rules' order by the select hint)."""
     cands = candidates(prompt)
     t = prompt["type"]
+    if t == "SELECT_CARD" and card_order is not None:
+        return [cands[i] for i in card_order if i < len(cands)]
     db = default_db()
 
     def atk(entry):
@@ -237,9 +246,11 @@ class AlphaBetaAgent(BeliefMCAgent):
             self._server = SearchClient()
 
     def _select(self, duel, core_prompt: dict, core_cands: list[dict], t0: float, budget: float | None) -> int | None:
+        hint = self.fallback.hint  # (the select hint: the search answers this selection, not the fallback)
+        self.fallback.hint = None
         if self._server is not None and duel.journal is not None:
             result = self._server.search(duel, self.player, self.rng.getrandbits(32), self.clock, core_prompt,
-                                         core_cands, t0, budget)
+                                         core_cands, t0, budget, hint)
             if result is not None:
                 best, done, nodes = result
                 self.nodes += nodes
@@ -247,7 +258,7 @@ class AlphaBetaAgent(BeliefMCAgent):
                 return best
             self.server_failures += 1  # (then here, as without the server)
         self.prepare()
-        best, done = self.search(duel, core_prompt, core_cands, t0, budget)
+        best, done = self.search(duel, core_prompt, core_cands, t0, budget, hint)
         self.depths.append(done)
         return best
 
@@ -262,16 +273,18 @@ class AlphaBetaAgent(BeliefMCAgent):
         self._hist *= HIST_DECAY
 
     def search(self, duel, core_prompt: dict, core_cands: list[dict], t0: float,
-               budget: float | None) -> tuple[int, int]:
-        """The best of `core_cands` and the depth completed (after `prepare`)."""
-        turn_player = duel.info()["turn_player"]
-        pref = ordered(core_prompt, turn_player)
-        order = sorted(range(len(core_cands)), key=lambda k: pref.index(core_cands[k])
-                       if core_cands[k] in pref else len(pref))
+               budget: float | None, hint: int | None = None) -> tuple[int, int]:
+        """The best of `core_cands` and the depth completed (after `prepare`;
+        `hint`: the select hint before a card selection)."""
         policies = [HeuristicAgent(self.rng.getrandbits(32)), HeuristicAgent(self.rng.getrandbits(32))]
         for p, a in enumerate(policies):
             a.player = p
         self._policies = policies
+        turn_player = duel.info()["turn_player"]
+        policies[core_prompt["player"]].hint = hint
+        pref = ordered(core_prompt, turn_player, self._card_order(core_prompt))
+        order = sorted(range(len(core_cands)), key=lambda k: pref.index(core_cands[k])
+                       if core_cands[k] in pref else len(pref))
         deadline = None if budget is None else \
             t0 + max(budget, min(HARD_FACTOR * budget, HARD_SHARE * self.clock[0]))
         # (the forked nodes never collect the inherited objects: no copies of their pages)
@@ -319,9 +332,22 @@ class AlphaBetaAgent(BeliefMCAgent):
         h.update(repr(sorted(prompt.items())).encode())
         return int.from_bytes(h.digest(), "little") or 1
 
+    def _card_order(self, prompt: dict) -> list[int] | None:
+        """For a card selection: the rules' order of its cards (by the select hint the
+        player got, which belongs to this selection only)."""
+        if prompt["type"] != "SELECT_CARD":
+            return None
+        policy = self._policies[prompt["player"]]
+        order = policy._card_order(prompt["cards"])
+        policy.hint = None
+        return order
+
     def _node(self, duel, prompt: dict, depth: int, alpha: float, beta: float, deadline, ply: int) -> float:
         # (moves are indices into the heuristic's order: the TT keeps one, the history reorders them)
-        cands = ordered(prompt, duel.info()["turn_player"])
+        card_order = self._card_order(prompt)
+        cands = ordered(prompt, duel.info()["turn_player"], card_order)
+        if card_order is not None:
+            cands = cands[:CARD_WIDTH]
         key = self._tt_key(duel, prompt)
         e = self._tt[key & ((1 << TT_BITS) - 1)]
         tt_move = None
@@ -423,6 +449,9 @@ class AlphaBetaAgent(BeliefMCAgent):
             prompt = step.prompt
             if is_hidden_prompt(prompt):
                 resp = AUTO_RESPONSE
+            elif prompt["type"] == "SELECT_CARD" and depth <= 0:
+                # (at the horizon a card selection is the rules': the effect resolves first)
+                resp = self._policies[prompt["player"]].respond(prompt, None)
             elif prompt["type"] in SEARCHED and len(candidates(prompt)) > 1:
                 if depth <= 0:
                     return evaluate(duel, me)
