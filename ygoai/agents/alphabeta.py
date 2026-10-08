@@ -16,6 +16,7 @@ depth + 1 processes exist at a time (depth first).
   Spells/Traps, end the turn; in battle: activate, attack the stronger attacker
   first; chain before passing; yes first in one's own turn). At the root, the
   previous iteration's values order the moves.
+- Speed: the process's memory in huge pages before a search (cheaper forks).
 - Time: iterative deepening within belief_mc's budget per decision; an iteration
   that runs out of time is discarded (the deeper one only counts complete).
 - Value (`evaluate`): win/loss, then LP, monsters, monsters that beat everything
@@ -24,6 +25,7 @@ depth + 1 processes exist at a time (depth first).
 
 from __future__ import annotations
 
+import ctypes
 import gc
 import math
 import os
@@ -35,7 +37,7 @@ from ..actions import encode
 from ..carddb import default_db
 from ..game import run_until_prompt
 from ..observe import AUTO_RESPONSE, is_hidden_prompt
-from ..state import capture
+from ..state import _parse_location_cached
 from .belief_mc import SEARCHED, BeliefMCAgent, candidates
 from .heuristic_agents import HeuristicAgent
 
@@ -60,6 +62,8 @@ W_HAND = 3.0
 W_BACKROW = 2.0
 W_DECK_OUT = 20.0  # (two cards or fewer left to draw)
 
+_MZONE_QUERY = C.QUERY_POSITION | C.QUERY_ATTACK | C.QUERY_DEFENSE
+
 _IDLE_ORDER = {"activate": 0, "spsummon": 1, "summon": 2, "mset": 3, "repos": 4, "to_bp": 5, "sset": 6,
                "to_ep": 7, "shuffle": 8}
 _BATTLE_ORDER = {"activate": 0, "attack": 1, "to_m2": 2, "to_ep": 3}
@@ -69,28 +73,55 @@ class _Abort(Exception):
     pass
 
 
+_MADV_HUGEPAGE, _MADV_COLLAPSE = 14, 25
+_HUGE = 1 << 21
+
+
+def _huge_pages() -> None:
+    """Backs this process's anonymous memory with huge pages where it can (Linux,
+    best effort): a fork copies the page tables, one entry per 2 MB instead of per
+    4 kB (the search forks at every node; a child's write splits only its copy)."""
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        madvise = libc.madvise
+        madvise.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+        with open("/proc/self/maps") as f:
+            maps = f.read().splitlines()
+    except (OSError, AttributeError):
+        return
+    for line in maps:
+        parts = line.split()
+        if not parts[1].startswith("rw") or (len(parts) > 5 and parts[5] != "[heap]"):
+            continue
+        start, end = (int(x, 16) for x in parts[0].split("-"))
+        start, end = (start + _HUGE - 1) & ~(_HUGE - 1), end & ~(_HUGE - 1)
+        if end > start:
+            madvise(start, end - start, _MADV_HUGEPAGE)
+            madvise(start, end - start, _MADV_COLLAPSE)
+
+
 def _battle_stat(c: dict) -> int:
     return c.get("defense", 0) if c.get("position", 0) & C.POS_DEFENSE else c.get("attack", 0)
 
 
 def evaluate(duel, me: int) -> float:
-    """The position's value for `me` (in points of 100 LP)."""
-    snap = capture(duel)
-    lp = snap["lp"]
-    sides = [snap["players"][me], snap["players"][1 - me]]
-    mons = [[c for c in side["mzone"] if c is not None] for side in sides]
+    """The position's value for `me` (in points of 100 LP). (Only the queries it
+    needs: a leaf's evaluation is a good part of its cost.)"""
+    lp = duel.info()["lp"]
+    mons = [[c for c in _parse_location_cached(duel.query_location_raw(p, C.LOCATION_MZONE, _MZONE_QUERY))
+             if c is not None] for p in (me, 1 - me)]
     value = W_LP * (lp[me] - lp[1 - me]) + W_MONSTER * (len(mons[0]) - len(mons[1]))
-    for s in (0, 1):
+    for s, p in ((0, me), (1, 1 - me)):
         sign = 1 if s == 0 else -1
         best_other = max((_battle_stat(c) for c in mons[1 - s]), default=-1)
         for c in mons[s]:
             if c.get("position", 0) & C.POS_FACEUP_ATTACK and c.get("attack", 0) > best_other:
                 value += sign * W_DOMINANT
-        side = sides[s]
-        value += sign * W_HAND * len(side["hand"])
-        value += sign * W_BACKROW * sum(1 for c in side["szone"]
-                                        if c is not None and c.get("position", 0) & C.POS_FACEDOWN)
-        if len(side["deck"]) <= 2:
+        value += sign * W_HAND * duel.query_count(p, C.LOCATION_HAND)
+        value += sign * W_BACKROW * sum(
+            1 for c in _parse_location_cached(duel.query_location_raw(p, C.LOCATION_SZONE, C.QUERY_POSITION))
+            if c is not None and c.get("position", 0) & C.POS_FACEDOWN)
+        if duel.query_count(p, C.LOCATION_DECK) <= 2:
             value -= sign * W_DECK_OUT
     return value
 
@@ -151,6 +182,7 @@ class AlphaBetaAgent(BeliefMCAgent):
         best, done = order[0], 0
         # (the forked nodes never collect the inherited objects: no copies of their pages)
         gc.freeze()
+        _huge_pages()
         try:
             best, done = self._deepen(duel, core_prompt, core_cands, order, t0, budget, deadline)
         finally:
