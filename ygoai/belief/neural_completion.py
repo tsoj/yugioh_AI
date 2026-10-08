@@ -215,6 +215,16 @@ def ensure_service(processes: int = PROCESSES) -> None:
 
 
 def _serve(address: str, key: str, parent: int) -> None:
+    # (ends with the run's process: a signal when it dies, and the watch below; a
+    # dead parent that is not reaped yet (a zombie) still answers os.kill)
+    try:
+        import ctypes
+        import signal
+        ctypes.CDLL("libc.so.6").prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
+    except (OSError, AttributeError):
+        pass
+    if os.getppid() != parent:
+        return
     import threading
     import time
     from multiprocessing.connection import Listener
@@ -245,6 +255,11 @@ def _serve(address: str, key: str, parent: int) -> None:
             time.sleep(2)
             try:
                 os.kill(parent, 0)
+                if os.getppid() != parent:
+                    raise OSError("reparented")
+                with open(f"/proc/{parent}/stat") as f:
+                    if f.read().rsplit(")", 1)[1].split()[0] == "Z":
+                        raise OSError("zombie")
             except OSError:
                 os._exit(0)  # (the run is over)
     threading.Thread(target=watch, daemon=True).start()
