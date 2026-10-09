@@ -55,6 +55,8 @@ def main() -> int:
     ap.add_argument("-n", "--openings", type=int, default=5000, help="at most (the SPRT usually ends earlier)")
     ap.add_argument("-c", "--concurrency", type=int, default=24)
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--book", type=Path, help="openings from this book (match.py --book)")
+    ap.add_argument("--book-min", type=int, default=2)
     args = ap.parse_args()
 
     shas = {}
@@ -78,6 +80,8 @@ def main() -> int:
            "-n", str(args.openings), "-c", str(args.concurrency), "--mirror-prob", "0", "--tc", args.tc,
            "--sprt", str(args.elo[0]), str(args.elo[1]), "--seed", str(args.seed),
            "--records", str(OUT / f"{name}.jsonl")]
+    if args.book is not None:
+        cmd += ["--book", str(args.book.resolve()), "--book-min", str(args.book_min)]
     print(f"{args.new} ({shas['new'][:12]}) vs {args.base} ({shas['base'][:12]}): log {log}", flush=True)
     t0 = time.time()
     with open(log, "w") as f:

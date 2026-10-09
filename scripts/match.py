@@ -67,6 +67,9 @@ def main() -> int:
     ap.add_argument("--beta", type=float, default=0.05)
     ap.add_argument("-c", "--concurrency", type=int, default=mp.cpu_count())
     ap.add_argument("--records", type=Path, help="write game records as JSON lines")
+    ap.add_argument("--book", type=Path, help="openings from this book (scripts/make_match_book.py), in order")
+    ap.add_argument("--book-min", type=int, default=2,
+                    help="only the book's openings whose less winning seat won at least this many test games")
     args = ap.parse_args()
     if len(args.engine) != 2:
         ap.error("exactly two engines are required")
@@ -85,7 +88,17 @@ def main() -> int:
     from ygoai.carddb import default_db
     from ygoai.decks import DeckPool
     pool = DeckPool(default_db(), split=args.deck_split)
-    openings = random_openings(args.openings, args.seed, args.mirror_prob, pool)
+    if args.book is not None:
+        from ygoai.decks import Deck
+        from ygoai.match import Opening
+        openings = []
+        for line in args.book.open():
+            d = json.loads(line)
+            if min(d["wins"]) >= args.book_min:
+                openings.append(Opening(seed=d["seed"], decks=[Deck.from_json(x) for x in d["decks"]]))
+        openings = openings[:args.openings]
+    else:
+        openings = random_openings(args.openings, args.seed, args.mirror_prob, pool)
     stats = MatchStats()
     lo, hi = sprt_bounds(args.alpha, args.beta) if args.sprt else (None, None)
     a, b = args.engine
