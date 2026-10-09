@@ -16,7 +16,8 @@ transformer over them; heads (discarded later):
 Card position (--encoding): v1 a slot embedding per sequence number; v2 board
 coordinates instead (row and column as the deciding player sees the field: the
 opponent's zones mirrored, Extra Monster Zones in columns 1 and 3, materials at
-their monster's place, cards off the field none); v3 also the chain link a card
+their monster's place, cards off the field none) and, for deck cards only, the
+depth from the top (1st ... 5th, deeper: draws and mills take the top); v3 also the chain link a card
 activated and where the card it equips or targets is (needs build_effect_data.py
 data with the chain/equip/target columns).
 A batch: a few games, many decisions each (the texts are encoded once per game:
@@ -101,6 +102,15 @@ class Data:
         cur_loc = _loc_class(rows[:, :, f["loc"]])
         own = rows[:, :, f["con"]] == player[:, None]
         brow, bcol = _board(rows[:, :, f["loc"]], rows[:, :, f["seq"]], own)
+        # (deck cards: depth from the top, the highest sequence number; 5: deeper, 6: not in a deck)
+        in_deck = mask & (rows[:, :, f["loc"]] == 0x1)
+        seq = rows[:, :, f["seq"]]
+        top = np.zeros((B, N), dtype=np.int64)
+        for con in (0, 1):
+            sel = in_deck & (rows[:, :, f["con"]] == con)
+            top_con = np.where(sel, seq, -1).max(1, keepdims=True)
+            top = np.where(sel, top_con, top)
+        depth = np.where(in_deck, np.clip(top - seq, 0, 5), 6)
         # (relations: the chain link a card activated; where the card it equips / targets is)
         rel = {}
         if "chain" in f:
@@ -124,7 +134,7 @@ class Data:
         return {
             "keys": list(keys), "tidx": t(tidx), "mask": t(mask, torch.bool),
             "own": t(own), "loc": t(cur_loc), "seq": t(np.clip(rows[:, :, f["seq"]], 0, 63)),
-            "brow": t(brow), "bcol": t(bcol),
+            "brow": t(brow), "bcol": t(bcol), "depth": t(depth),
             **({"chain": t(rel["chain"]), "eq_row": t(rel["equip"][0]), "eq_col": t(rel["equip"][1]),
                 "tg_row": t(rel["target"][0]), "tg_col": t(rel["target"][1])} if rel else {}),
             "pos": t(rows[:, :, f["pos"]] & 0xF), "public": t(rows[:, :, f["public"]] != 0), "is_act": t(is_act),
@@ -180,6 +190,7 @@ class EffectNet(nn.Module):
         self.encoding = encoding
         if encoding != "v1":
             self.brow, self.bcol = nn.Embedding(N_ROW, dim), nn.Embedding(N_COL, dim)
+            self.depth = nn.Embedding(7, dim)
         if encoding == "v3":
             self.chain = nn.Embedding(9, dim)
             self.eq_row, self.eq_col = nn.Embedding(N_ROW, dim), nn.Embedding(N_COL, dim)
@@ -226,7 +237,7 @@ class EffectNet(nn.Module):
         if self.encoding == "v1":
             x = x + self.seq(b["seq"])
         else:
-            x = x + self.brow(b["brow"]) + self.bcol(b["bcol"])
+            x = x + self.brow(b["brow"]) + self.bcol(b["bcol"]) + self.depth(b["depth"])
         if self.encoding == "v3":
             x = x + self.chain(b["chain"]) + self.eq_row(b["eq_row"]) + self.eq_col(b["eq_col"]) \
                 + self.tg_row(b["tg_row"]) + self.tg_col(b["tg_col"])
