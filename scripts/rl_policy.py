@@ -6,7 +6,10 @@
 Each iteration: games of the current policy (sampling, softmax(score / T)) on
 random corpus deck pairs, against itself (both sides learn), earlier versions or
 the heuristic player; each of the learner's decisions gets the game's result z
-(+1 won, -1 lost) minus the batch mean as its advantage; --epochs passes of the
+(+1 won, -1 lost) minus a baseline as its advantage: the batch mean, or with
+--group k (each opening played k times, the same decks, seats, deck order and
+random numbers, only the sampling differs) the mean of its group, which takes
+out what the deck pairing and the draws decided; --epochs passes of the
 clipped objective -min(r * A, clip(r, 1 - eps, 1 + eps) * A) - entropy_bonus *
 entropy, r = pi(chosen) / pi_played(chosen) (an update cannot move a move's
 probability far from the policy that played; plain REINFORCE collapsed after 42
@@ -57,12 +60,15 @@ def _agent(spec: str, seed: int, temperature: float, record: bool):
 
 
 def selfplay_game(task):
-    """(opening, learner model, opponent spec, learner's seat, T) -> [(decisions, z)] of the learner's sides."""
-    opening, learner, opponent, seat, temperature = task
+    """(opening, learner model, opponent spec, learner's seat, T, group, repetition) ->
+    [(player, decisions, z)] of the learner's sides. The repetitions of a group play
+    the same opening (decks, seats, deck order, the core's random numbers): only
+    the players' sampling differs."""
+    opening, learner, opponent, seat, temperature, _, rep = task
     record = new_record(opening.decks, opening.seed)
     agents = [None, None]
-    agents[seat] = _agent(learner, opening.seed * 2 + seat, temperature, True)
-    agents[1 - seat] = _agent(learner if opponent == "self" else opponent, opening.seed * 2 + 1 - seat,
+    agents[seat] = _agent(learner, opening.seed * 2 + seat + 7919 * rep, temperature, True)
+    agents[1 - seat] = _agent(learner if opponent == "self" else opponent, opening.seed * 2 + 1 - seat + 7919 * rep,
                               temperature, opponent == "self")
     play(record, agents, max_turns=100, max_decisions=MAX_DECISIONS)
     winner = record.result.get("winner")
@@ -70,7 +76,7 @@ def selfplay_game(task):
     for p, a in enumerate(agents):
         if isinstance(a, PolicyAgent) and a.decisions is not None:
             z = 0.0 if winner not in (0, 1) else (1.0 if winner == p else -1.0)
-            out.append((a.decisions, z))
+            out.append((p, a.decisions, z))
     return out, winner
 
 
@@ -168,6 +174,7 @@ def main() -> int:
     ap.add_argument("--iterations", type=int, default=50)
     ap.add_argument("--games", type=int, default=2000)
     ap.add_argument("--temperature", type=float, default=1.0)
+    ap.add_argument("--group", type=int, default=1, help="plays of each opening (advantage relative to the group)")
     ap.add_argument("--lr", type=float, default=3e-5)
     ap.add_argument("--epochs", type=int, default=2, help="passes over each iteration's games")
     ap.add_argument("--clip", type=float, default=0.2)
@@ -199,26 +206,35 @@ def main() -> int:
     eval_ops = random_openings(args.eval_openings, args.seed - 1, 0.0)  # (the same every iteration)
     for it in range(1, args.iterations + 1):
         t0 = time.time()
-        openings = random_openings(args.games, args.seed + it * 100003, 0.0)
+        openings = random_openings(max(1, args.games // args.group), args.seed + it * 100003, 0.0)
         tasks = []
-        for op in openings:
+        for g, op in enumerate(openings):
             kind = rng.choices([k for k, _ in mix], [w for _, w in mix])[0]
             opp = {"self": "self", "heuristic": "heuristic", "past": str(rng.choice(pool))}[kind]
-            tasks.append((op, str(current), opp, rng.randrange(2), args.temperature))
-        samples, results = [], {"self": [], "heuristic": [], "past": []}
+            seat = rng.randrange(2)
+            tasks.extend((op, str(current), opp, seat, args.temperature, g, r) for r in range(args.group))
+        groups: dict[tuple, list] = {}  # (group, player) -> [(decisions, z)] of its repetitions
+        results = {"self": [], "heuristic": [], "past": []}
         for task, res in run_parallel(selfplay_game, tasks, args.jobs):
             if isinstance(res, Crash):
                 continue
             sides, _ = res
-            opp = task[2]
+            opp, g = task[2], task[5]
             kind = "self" if opp == "self" else "heuristic" if opp == "heuristic" else "past"
-            for decisions, z in sides:
+            for p, decisions, z in sides:
                 if kind != "self":
                     results[kind].append(z)
-                samples.extend((cs, sc, ac, k, lp, z) for cs, sc, ac, k, lp in decisions)
+                groups.setdefault((g, p), []).append((decisions, z))
         t_play = time.time() - t0
-        mean_z = float(np.mean([s[5] for s in samples])) if samples else 0.0
-        samples = [(cs, sc, ac, k, lp, z - mean_z) for cs, sc, ac, k, lp, z in samples]
+        # (advantage: the result less its group's mean (the same opening and side: what the
+        # decisions changed), or with groups of one, less the mean of all)
+        mean_all = float(np.mean([z for reps in groups.values() for _, z in reps])) if groups else 0.0
+        samples = []
+        for reps in groups.values():
+            base = float(np.mean([z for _, z in reps])) if args.group > 1 else mean_all
+            for decisions, z in reps:
+                samples.extend((cs, sc, ac, k, lp, z - base) for cs, sc, ac, k, lp in decisions)
+        samples = [s for s in samples if s[5] != 0.0 or args.group == 1]  # (no signal: left out)
         data = Data.__new__(Data)
         data.d, data.device = to_data(samples, codes), device
         data.card_off = np.concatenate([[0], np.cumsum(data.d["ncards"].astype(np.int64))])
