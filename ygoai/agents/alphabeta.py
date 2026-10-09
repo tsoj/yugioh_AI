@@ -85,11 +85,13 @@ HIST_BITS = 14  # (history entries: 2^14, in memory shared with the forked nodes
 HIST_DECAY = 0.5  # (per decision)
 
 # evaluation weights (points; 1 point = 100 LP)
+# (the weights: logistic regression of the result on these terms (Texel tuning), on the
+# positions of 11k alphabeta games (the SPRT records), with the LP weight fixed)
 W_LP = 1 / 100
-W_MONSTER = 8.0
-W_DOMINANT = 4.0  # (a face-up monster stronger than everything on the other side)
-W_HAND = 3.0
-W_BACKROW = 2.0
+W_MONSTER = 4.3
+W_DOMINANT = 17.6  # (a face-up monster stronger than everything on the other side)
+W_HAND = 9.1
+W_BACKROW = 5.1
 W_DECK_OUT = 20.0  # (two cards or fewer left to draw)
 
 _MZONE_QUERY = C.QUERY_POSITION | C.QUERY_ATTACK | C.QUERY_DEFENSE
