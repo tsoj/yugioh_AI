@@ -5,7 +5,7 @@ seed) whose result is not settled by the decks alone.
   scripts/make_match_book.py -n 3000 -o runs/books/match1.jsonl [--games 20] [--seed 77]
 
 Each candidate is played up to --games times by policy agents (--policies: each
-seat of each game a random one of them, default nn/policy.npz), sampling at
+game a random one of them for both seats, default nn/policy.npz), sampling at
 temperature 1 with a different seed per game: the
 decks keep their seats, only the players' choices vary. Its testing stops early
 once each seat won --stop-min games (enough for --book-min up to that). The book
@@ -48,9 +48,8 @@ def test_opening(task):
         signal.signal(signal.SIGALRM, signal.SIG_DFL)
         signal.alarm(GAME_SECONDS)
         record = new_record(opening.decks, opening.seed)
-        rng = random.Random(opening.seed * 1000 + g)
-        agents = [PolicyAgent(opening.seed * 1000 + 2 * g + p, model=load_policy(rng.choice(policies)),
-                              temperature=1.0) for p in (0, 1)]
+        model = load_policy(random.Random(opening.seed * 1000 + g).choice(policies))  # (both seats)
+        agents = [PolicyAgent(opening.seed * 1000 + 2 * g + p, model=model, temperature=1.0) for p in (0, 1)]
         play(record, agents, max_turns=100, max_decisions=MAX_DECISIONS)
         signal.alarm(0)
         w = record.result.get("winner")
