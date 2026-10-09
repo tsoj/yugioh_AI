@@ -38,9 +38,9 @@ class PolicyValueNet:
     def _static(self, codes: list[int]) -> np.ndarray:
         """Static features of cards (from the table, else from the card database)."""
         out = np.empty((len(codes), F.STATIC_DIM), dtype=np.float32)
-        table = self.w["static_table"]
+        table = self.w.get("static_table")  # (optional: else from the card database)
         for i, c in enumerate(codes):
-            j = self.index.get(c)
+            j = self.index.get(c) if table is not None else None
             if j is not None:
                 out[i] = table[j]
             else:
