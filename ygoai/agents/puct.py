@@ -8,8 +8,10 @@ the player to decide sees), visits and the summed value for the node's player:
 values are win probabilities of that player, so the players need not alternate.
 The priors: softened (PRIOR_TEMPERATURE) and mixed with a uniform one (PRIOR_MIX).
 
-A simulation walks down by pUCT (Q + C_PUCT * P * sqrt(visits) / (1 + n); an
-unvisited candidate's Q is its node's value minus FPU_REDUCTION), and at the first
+A simulation walks down by pUCT (Q + C_PUCT * P * sqrt(visits) / (1 + n), Q
+normalized to [0, 1] by the least and greatest values in the tree as in MuZero:
+the win probabilities of an evaluation stay close to one half; an unvisited
+candidate's Q is its node's value minus FPU_REDUCTION), and at the first
 candidate without a node it forks the search process, replays the path from the
 root (the core is deterministic for identical call histories) and reports the new
 node: its player, candidates, priors and value (the handmade evaluation as a win
@@ -36,7 +38,7 @@ from .alphabeta import MAX_AUTO_STEPS, AlphaBetaAgent, evaluate, ordered
 from .belief_mc import SEARCHED, candidates
 from .heuristic_agents import HeuristicAgent
 
-C_PUCT = 1.0
+C_PUCT = 1.25
 FPU_REDUCTION = 0.1
 PRIOR_TEMPERATURE = 2.0  # (the policy is far too sure for a prior: it was not trained on search visits)
 PRIOR_MIX = 0.2  # (share of a uniform prior mixed in)
@@ -63,14 +65,18 @@ class _Node:
     def value(self) -> float:
         return self.value0 if self.player == 0 else 1.0 - self.value0
 
-    def select(self) -> int:
+    def select(self, bounds: list[float]) -> int:
         total = sum(self.visits)
         root = math.sqrt(total + 1)
-        fpu = self.value - FPU_REDUCTION
+        low, span = bounds[0], bounds[1] - bounds[0]
+
+        def norm(q):
+            return (q - low) / span if span > 0 else 0.5
+        fpu = norm(self.value) - FPU_REDUCTION
 
         def score(k):
             n = self.visits[k]
-            q = self.value_sum[k] / n if n else fpu
+            q = norm(self.value_sum[k] / n) if n else fpu
             return q + C_PUCT * self.prior[k] * root / (1 + n)
         return max(range(len(self.cands)), key=score)
 
@@ -124,13 +130,14 @@ class PuctAgent(AlphaBetaAgent):
             deadline = None if budget is None else t0 + budget
             sims = 0 if budget is not None else MAX_SIMULATIONS - SIMULATIONS_NO_CLOCK
             depth = 0
+            bounds = [math.inf, -math.inf]  # (the least and greatest Q in the tree, for the nodes' players)
             while sims < MAX_SIMULATIONS:
                 if deadline is not None and time.monotonic() > deadline:
                     break
                 sims += 1
                 node, path = root, []
                 while True:
-                    k = node.select()
+                    k = node.select(bounds)
                     path.append((node, k))
                     child = node.children.get(k)
                     if child is None:
@@ -145,6 +152,8 @@ class PuctAgent(AlphaBetaAgent):
                 for n, k in path:
                     n.visits[k] += 1
                     n.value_sum[k] += value0 if n.player == 0 else 1.0 - value0
+                    q = n.value_sum[k] / n.visits[k]
+                    bounds[0], bounds[1] = min(bounds[0], q), max(bounds[1], q)
             self.nodes += sims
             best = max(range(len(root.cands)),
                        key=lambda k: (root.visits[k], root.value_sum[k] / max(root.visits[k], 1)))
