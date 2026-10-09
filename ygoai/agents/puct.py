@@ -45,6 +45,12 @@ PRIOR_MIX = 0.2  # (share of a uniform prior mixed in)
 VALUE_K = 0.0216  # (per point of the evaluation: logistic regression of the result, SPRT games)
 SIMULATIONS_NO_CLOCK = 64
 MAX_SIMULATIONS = 10000
+FINAL = "visits"  # (the move: "visits", the most visited; "q", the best value among those visited at
+FINAL_SHARE = 0.25  # least FINAL_SHARE as often as the most visited)
+# ($YGOAI_PUCT, e.g. "C_PUCT=0.5,FINAL=q": other values of the parameters above, for tuning)
+for _item in filter(None, os.environ.get("YGOAI_PUCT", "").split(",")):
+    _name, _value = _item.split("=")
+    globals()[_name] = type(globals()[_name])(_value)
 
 
 class _Node:
@@ -155,8 +161,13 @@ class PuctAgent(AlphaBetaAgent):
                     q = n.value_sum[k] / n.visits[k]
                     bounds[0], bounds[1] = min(bounds[0], q), max(bounds[1], q)
             self.nodes += sims
-            best = max(range(len(root.cands)),
-                       key=lambda k: (root.visits[k], root.value_sum[k] / max(root.visits[k], 1)))
+            if FINAL == "q":
+                most = max(root.visits)
+                best = max((k for k in range(len(root.cands)) if root.visits[k] >= FINAL_SHARE * most),
+                           key=lambda k: root.value_sum[k] / root.visits[k])
+            else:
+                best = max(range(len(root.cands)),
+                           key=lambda k: (root.visits[k], root.value_sum[k] / max(root.visits[k], 1)))
             return best, depth
         finally:
             gc.unfreeze()
