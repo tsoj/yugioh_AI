@@ -3,7 +3,7 @@
 trained by predicting what happens after a decision (build_effect_data.py).
 
   scripts/train_effect_model.py runs/data/effects1.npz -o runs/nn/effect1 [--steps 20000]
-      [--freeze-encoder] [--train-layers N] [--real-names]
+      [--freeze-encoder] [--train-layers N] [--real-names] [--encoding v1|v2|v3]
 
 Each card of the position is a token: its text's embedding (name, type line,
 effect: ygoai/nn/card_text.py, with per-game pseudo-names unless --real-names)
@@ -13,6 +13,12 @@ phase, chain and the decision (prompt type, kind, yes/no or option). A
 transformer over them; heads (discarded later):
   per card: moves, where to, position change, ATK/DEF change, which messages name it
   global: which message types occur, the next prompt (type, same player), LP changes
+Card position (--encoding): v1 a slot embedding per sequence number; v2 board
+coordinates instead (row and column as the deciding player sees the field: the
+opponent's zones mirrored, Extra Monster Zones in columns 1 and 3, materials at
+their monster's place, cards off the field none); v3 also the chain link a card
+activated and where the card it equips or targets is (needs build_effect_data.py
+data with the chain/equip/target columns).
 A batch: a few games, many decisions each (the texts are encoded once per game:
 the pseudo-names differ between games). The encoder is what it is for: saved
 to OUT/encoder (sentence-transformers), the rest to OUT/heads.pt.
@@ -93,6 +99,19 @@ class Data:
                 if a >= 0:
                     is_act[i] |= rows[i, :, f["id"]] == a
         cur_loc = _loc_class(rows[:, :, f["loc"]])
+        own = rows[:, :, f["con"]] == player[:, None]
+        brow, bcol = _board(rows[:, :, f["loc"]], rows[:, :, f["seq"]], own)
+        # (relations: the chain link a card activated; where the card it equips / targets is)
+        rel = {}
+        if "chain" in f:
+            rel["chain"] = np.clip(rows[:, :, f["chain"]], 0, 8)
+            for name in ("equip", "target"):
+                rr, rc = np.full((B, N), 5, dtype=np.int64), np.full((B, N), 7, dtype=np.int64)
+                for i, j in zip(*np.nonzero(rows[:, :, f[name]] >= 0)):
+                    k = np.flatnonzero(rows[i, :n[i], f["id"]] == rows[i, j, f[name]])
+                    if len(k):
+                        rr[i, j], rc[i, j] = brow[i, k[0]], bcol[i, k[0]]
+                rel[name] = (rr, rc)
         t_loc = rows[:, :, f["t_loc"]]
         msgs = d["msgs"][ids].astype(np.int64)
         t = lambda a, dt=torch.long: torch.as_tensor(a, dtype=dt, device=device)  # noqa: E731
@@ -104,7 +123,10 @@ class Data:
         opp_dlp = np.where(player == 0, dlp[:, 1], dlp[:, 0])
         return {
             "keys": list(keys), "tidx": t(tidx), "mask": t(mask, torch.bool),
-            "own": t(rows[:, :, f["con"]] == player[:, None]), "loc": t(cur_loc), "seq": t(np.clip(rows[:, :, f["seq"]], 0, 63)),
+            "own": t(own), "loc": t(cur_loc), "seq": t(np.clip(rows[:, :, f["seq"]], 0, 63)),
+            "brow": t(brow), "bcol": t(bcol),
+            **({"chain": t(rel["chain"]), "eq_row": t(rel["equip"][0]), "eq_col": t(rel["equip"][1]),
+                "tg_row": t(rel["target"][0]), "tg_col": t(rel["target"][1])} if rel else {}),
             "pos": t(rows[:, :, f["pos"]] & 0xF), "public": t(rows[:, :, f["public"]] != 0), "is_act": t(is_act),
             "num": t(np.stack([rows[:, :, f["atk"]] / 1000, rows[:, :, f["def"]] / 1000, rows[:, :, f["level"]] / 12,
                                rows[:, :, f["overlays"]] / 5, rows[:, :, f["counters"]] / 5], -1), torch.float32),
@@ -122,6 +144,27 @@ class Data:
         }
 
 
+N_ROW, N_COL = 6, 8  # (rows: opponent S/T, opponent monsters, Extra Monster Zones, own monsters, own S/T, off field;
+# columns 0-4, 5 field zone, 6 other S/T slots, 7 off field)
+
+
+def _board(loc: np.ndarray, seq: np.ndarray, own: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Row and column of cards on the field as the deciding player sees it (materials: their monster's)."""
+    row = np.full(loc.shape, 5, dtype=np.int64)
+    col = np.full(loc.shape, 7, dtype=np.int64)
+    mon = (loc == 0x4) | (loc == 0x80)
+    main = mon & (seq < 5)
+    row[main] = np.where(own[main], 3, 1)
+    col[main] = np.where(own[main], seq[main], 4 - seq[main])
+    emz = mon & (seq >= 5)
+    row[emz] = 2
+    col[emz] = np.where((seq[emz] == 5) == own[emz], 1, 3)
+    st = loc == 0x8
+    row[st] = np.where(own[st], 4, 0)
+    col[st] = np.where(seq[st] < 5, np.where(own[st], seq[st], 4 - seq[st]), np.where(seq[st] == 5, 5, 6))
+    return row, col
+
+
 def _loc_class(loc: np.ndarray) -> np.ndarray:
     out = np.full(loc.shape, N_LOC - 1, dtype=np.int64)
     for i, v in enumerate((0x1, 0x2, 0x4, 0x8, 0x10, 0x20, 0x40, 0x80)):
@@ -130,9 +173,17 @@ def _loc_class(loc: np.ndarray) -> np.ndarray:
 
 
 class EffectNet(nn.Module):
-    def __init__(self, encoder, n_msg: int, n_ref: int, n_prompt: int, dim: int = 256, layers: int = 4):
+    def __init__(self, encoder, n_msg: int, n_ref: int, n_prompt: int, dim: int = 256, layers: int = 4,
+                 encoding: str = "v1"):
         super().__init__()
         self.encoder = encoder
+        self.encoding = encoding
+        if encoding != "v1":
+            self.brow, self.bcol = nn.Embedding(N_ROW, dim), nn.Embedding(N_COL, dim)
+        if encoding == "v3":
+            self.chain = nn.Embedding(9, dim)
+            self.eq_row, self.eq_col = nn.Embedding(N_ROW, dim), nn.Embedding(N_COL, dim)
+            self.tg_row, self.tg_col = nn.Embedding(N_ROW, dim), nn.Embedding(N_COL, dim)
         self.text = nn.Linear(768, dim)
         self.own, self.loc, self.seq = nn.Embedding(2, dim), nn.Embedding(N_LOC, dim), nn.Embedding(64, dim)
         self.pos, self.public, self.is_act = nn.Embedding(16, dim), nn.Embedding(2, dim), nn.Embedding(2, dim)
@@ -170,8 +221,15 @@ class EffectNet(nn.Module):
 
     def forward(self, b: dict, texts: torch.Tensor):
         x = self.text(texts[b["tidx"]].to(self.text.weight.dtype))
-        x = x + self.own(b["own"]) + self.loc(b["loc"]) + self.seq(b["seq"]) + self.pos(b["pos"]) \
+        x = x + self.own(b["own"]) + self.loc(b["loc"]) + self.pos(b["pos"]) \
             + self.public(b["public"]) + self.is_act(b["is_act"]) + self.num(b["num"])
+        if self.encoding == "v1":
+            x = x + self.seq(b["seq"])
+        else:
+            x = x + self.brow(b["brow"]) + self.bcol(b["bcol"])
+        if self.encoding == "v3":
+            x = x + self.chain(b["chain"]) + self.eq_row(b["eq_row"]) + self.eq_col(b["eq_col"]) \
+                + self.tg_row(b["tg_row"]) + self.tg_col(b["tg_col"])
         a = b["act"]
         g = self.scal(b["scal"]) + self.phase(b["phase"]) + sum(e(a[:, i]) for i, e in enumerate(self.act))
         h = self.body(torch.cat([g[:, None], x], 1),
@@ -280,6 +338,7 @@ def main() -> int:
     ap.add_argument("--train-layers", type=int, default=None, help="only the encoder's last N layers train")
     ap.add_argument("--real-names", action="store_true", help="the cards' real names (an ablation)")
     ap.add_argument("--max-tokens", type=int, default=192)
+    ap.add_argument("--encoding", choices=("v1", "v2", "v3"), default="v1")
     ap.add_argument("--eval-every", type=int, default=500)
     ap.add_argument("--val", type=float, default=0.03)
     ap.add_argument("--seed", type=int, default=1)
@@ -300,7 +359,7 @@ def main() -> int:
         p.requires_grad_(train)
     train_encoder = any(p.requires_grad for p in enc.parameters())
     data = Data(args.data, args.val)
-    net = EffectNet(enc, data.n_msg, data.n_ref, data.n_prompt).to(device)
+    net = EffectNet(enc, data.n_msg, data.n_ref, data.n_prompt, encoding=args.encoding).to(device)
     enc_params = [p for p in enc.parameters() if p.requires_grad]
     head_params = [p for n, p in net.named_parameters() if not n.startswith("encoder.")]
     groups = [{"params": head_params, "lr": args.lr}]

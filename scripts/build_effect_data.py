@@ -47,7 +47,8 @@ ZONES = [("deck", C.LOCATION_DECK), ("hand", C.LOCATION_HAND), ("mzone", C.LOCAT
 LOC_CLASS = {loc: i for i, (_, loc) in enumerate(ZONES)}
 LOC_CLASS[C.LOCATION_OVERLAY] = len(ZONES)
 GONE = len(ZONES) + 1  # (target class: not in the next state, e.g. a token)
-FIELDS = ["id", "code", "con", "loc", "seq", "pos", "atk", "def", "level", "overlays", "counters", "public"]
+FIELDS = ["id", "code", "con", "loc", "seq", "pos", "atk", "def", "level", "overlays", "counters", "public",
+          "chain", "equip", "target"]  # (chain: the chain link it activated (1, 2, ...) or 0; equip, target: ids or -1)
 TARGETS = ["t_loc", "t_pos", "t_stat", "t_refs"]
 # (messages that name cards, by role; a card's t_refs has the bit of each that names it)
 REF_TYPES = ["CHAINING", "SUMMONING", "SPSUMMONING", "FLIPSUMMONING", "SET", "POS_CHANGE", "BECOME_TARGET",
@@ -64,7 +65,21 @@ def _ptype(t: str) -> int:
 
 
 def _rows(snap: dict) -> list[tuple]:
-    """(id, code, con, loc, seq, pos, atk, def, level, overlays, counters, public) of every card."""
+    """FIELDS of every card (the relations as ids of cards in the same state)."""
+    where = {}
+    for con, pl in enumerate(snap["players"]):
+        for name, loc in ZONES:
+            for seq, c in enumerate(pl[name]):
+                if c is not None:
+                    where[(con, loc, seq)] = c["id"]
+
+    def ref(x):
+        return where.get((x["con"], x["loc"], x["seq"]), -1) if isinstance(x, dict) else -1
+    links = {}
+    for k, link in enumerate(snap.get("chain") or (), 1):
+        h = link.get("handler")
+        if isinstance(h, dict):
+            links.setdefault(ref(h), k)
     out = []
     for con, pl in enumerate(snap["players"]):
         for name, loc in ZONES:
@@ -72,12 +87,14 @@ def _rows(snap: dict) -> list[tuple]:
                 if c is None:
                     continue
                 level = c.get("level") or c.get("rank") or c.get("link") or 0
+                targets = c.get("target_cards") or []
                 out.append((c["id"], c.get("code") or 0, con, loc, seq, c.get("position", 0),
                             c.get("attack", 0), c.get("defense", 0), level, len(c.get("overlays") or ()),
                             sum(n for _, n in c.get("counters") or ()) if c.get("counters") else 0,
-                            int(bool(c.get("is_public")))))
+                            int(bool(c.get("is_public"))), links.get(c["id"], 0), ref(c.get("equip_card")),
+                            ref(targets[0]) if targets else -1))
                 for oid, ocode in zip(c.get("overlay_ids") or (), c.get("overlays") or ()):
-                    out.append((oid, ocode, con, C.LOCATION_OVERLAY, seq, 0, 0, 0, 0, 0, 0, 1))
+                    out.append((oid, ocode, con, C.LOCATION_OVERLAY, seq, 0, 0, 0, 0, 0, 0, 1, 0, -1, -1))
     return out
 
 
