@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Training data for the policy and value networks, from self-play records.
 
-  scripts/build_policy_data.py runs/data/boot1.jsonl -o runs/data/boot1.npz [--games N] [--view]
+  scripts/build_policy_data.py runs/data/boot1.jsonl -o runs/data/boot1.npz [--games N] [--view] [--played]
 
 Replays each game (gen_selfplay.py records: game records with "targets") and,
 at each decision with a policy target (in a forked process, see _Decisions), takes the position from the deciding
@@ -12,6 +12,10 @@ candidates: the full state of the real game and the core's prompt, or with
 --view what the deciding player saw (its view of the state, the prompt as it got
 it: hidden cards unknown). Card codes become static indices into the saved
 table of static features (no identities reach the networks).
+
+--played: the moves played are the targets (records without "targets", e.g. the
+match records of runs/sprt/: the search's choices), at the decisions the search
+covers (belief_mc.SEARCHED, more than one candidate).
 """
 
 from __future__ import annotations
@@ -30,7 +34,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ygoai import constants as C  # noqa: E402
-from ygoai.agents.belief_mc import candidates  # noqa: E402
+from ygoai.agents.belief_mc import SEARCHED, candidates  # noqa: E402
 from ygoai.carddb import default_db  # noqa: E402
 from ygoai.game import GameRecord, Observer, replay  # noqa: E402
 from ygoai.nn import features as F  # noqa: E402
@@ -45,8 +49,8 @@ def _code(code):
 
 
 class _Decisions(Observer):
-    def __init__(self, targets: dict[int, dict], player_view: bool):
-        self.targets, self.player_view = targets, player_view
+    def __init__(self, targets: dict[int, dict], player_view: bool, searched_only: bool = False):
+        self.targets, self.player_view, self.searched_only = targets, player_view, searched_only
         self.i = 0  # (the response the next prompt gets)
         self.hint = [None, None]
         self.rows = []
@@ -60,7 +64,7 @@ class _Decisions(Observer):
         me = prompt["player"]
         hint, self.hint[me] = self.hint[me], None
         target = self.targets.get(i)
-        if target is None:
+        if target is None or self.searched_only and prompt["type"] not in SEARCHED:
             return
         # (the queries in a forked process: reading the state changes the core's memory
         # allocations, and with them where the core iterates by address, so the game
@@ -79,7 +83,7 @@ class _Decisions(Observer):
                     seen, shown = snap, prompt
                     chosen = to_core_response(prompt, me, target)
                 cands = candidates(shown)
-                if chosen in cands:
+                if chosen in cands and len(cands) > 1:
                     data = pickle.dumps((F.position(seen, me, _code), F.actions(shown, cands, seen, me, hint, _code),
                                          cands.index(chosen), V.features(snap, me)))
             finally:
@@ -96,13 +100,16 @@ class _Decisions(Observer):
 
 
 def decisions(task):
-    line, player_view = task
+    line, player_view, played = task
     d = json.loads(line)
     record = GameRecord.from_json(d)
     winner = record.result.get("winner")
     if winner not in (0, 1):
         return None
-    obs = _Decisions({int(k): v for k, v in d.get("targets", {}).items()}, player_view)
+    if played:
+        obs = _Decisions({i: r["response"] for i, r in enumerate(record.responses)}, player_view, True)
+    else:
+        obs = _Decisions({int(k): v for k, v in d.get("targets", {}).items()}, player_view)
     replay(record, [obs]).close()
     return winner, obs.rows
 
@@ -114,8 +121,9 @@ def main() -> int:
     ap.add_argument("--games", type=int, default=None, help="at most this many games")
     ap.add_argument("-j", "--jobs", type=int, default=24)
     ap.add_argument("--view", action="store_true", help="what the deciding player saw (else the full state)")
+    ap.add_argument("--played", action="store_true", help="the moves played are the targets")
     args = ap.parse_args()
-    lines = [(line, args.view) for path in args.records for line in path.open() if line.strip()][:args.games]
+    lines = [(line, args.view, args.played) for path in args.records for line in path.open() if line.strip()][:args.games]
     codes = F.CodeIndex()
     dec = {k: [] for k in ("game", "player", "label", "target", "ncards", "nacts")}
     scal, vfeat, cards, acts = [], [], [], []  # (per game: numpy arrays, the codes as static indices)
