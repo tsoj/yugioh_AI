@@ -150,6 +150,7 @@ def main() -> int:
     ap.add_argument("--value-weight", type=float, default=1.0)
     ap.add_argument("--val", type=float, default=0.05)
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--init", type=Path, help="start from these weights (an export; its static table is not used)")
     args = ap.parse_args()
     torch.manual_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -158,6 +159,10 @@ def main() -> int:
     cut = int(games.max() * (1 - args.val))
     train_ids, val_ids = np.flatnonzero(games < cut), np.flatnonzero(games >= cut)
     net = Net(torch.as_tensor(data.d["static_table"], device=device), args.dim, args.hidden).to(device)
+    if args.init is not None:
+        w = np.load(args.init)
+        net.load_state_dict({k: torch.as_tensor(w[k], device=device) for k in w.files
+                             if k not in ("codes", "static_table")}, strict=False)
     opt = torch.optim.AdamW(net.parameters(), lr=args.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, args.epochs)
     rng = np.random.default_rng(args.seed)
@@ -186,7 +191,8 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     np.savez(args.output, codes=data.d["codes"], **best_state)
     meta = {"data": str(args.data), "epoch": best[1], "held_out": best[2], "dim": args.dim, "hidden": args.hidden,
-            "epochs": args.epochs, "lr": args.lr}
+            "epochs": args.epochs, "lr": args.lr,
+            "init": None if args.init is None else str(args.init)}
     args.output.with_suffix(".json").write_text(json.dumps(meta, indent=1))
     print(f"best epoch {best[1]}: {best[2]} -> {args.output}")
     return 0
