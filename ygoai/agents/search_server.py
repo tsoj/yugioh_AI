@@ -36,7 +36,8 @@ REPLY_MARGIN = 30.0  # (seconds past the search's hard bound before the server c
 
 
 class SearchClient:
-    def __init__(self):
+    def __init__(self, agent: tuple[str, str] = ("ygoai.agents.alphabeta", "AlphaBetaAgent")):
+        """`agent`: the module and class of the agent whose search the server runs."""
         to_server, from_client = os.pipe()
         to_client, from_server = os.pipe()
         root = Path(__file__).resolve().parents[2]
@@ -51,7 +52,7 @@ class SearchClient:
         self.key, self.sent = None, 0  # (the mirrored duel and how much of its journal the server has)
         self.alive = True
         self.desyncs = 0
-        self._request(("warm",), READY_TIMEOUT)
+        self._request(("warm", agent), READY_TIMEOUT)
 
     def _request(self, msg, timeout: float):
         if not self.alive:
@@ -105,6 +106,7 @@ def _serve(inp: Connection, out: Connection) -> None:
     from .alphabeta import AlphaBetaAgent, _huge_pages
     mirror, key, n = None, None, 0
     agents: dict[int, AlphaBetaAgent] = {}
+    agent_class = AlphaBetaAgent
     while True:
         try:
             msg = inp.recv()
@@ -113,6 +115,11 @@ def _serve(inp: Connection, out: Connection) -> None:
         if msg[0] == "warm":
             from ..carddb import default_db
             Duel((0, 0, 0, 0), None, default_db()).close()  # (compiles the utility scripts)
+            if len(msg) > 1:
+                import importlib
+                agent_class = getattr(importlib.import_module(msg[1][0]), msg[1][1])
+                if hasattr(agent_class, "warm_server"):
+                    agent_class.warm_server()  # (its models, loaded once before the forks)
             out.send(("ready",))
             continue
         _, k, start, delta, player, seed, clock, prompt, cands, t0, budget, hint = msg
@@ -144,7 +151,7 @@ def _serve(inp: Connection, out: Connection) -> None:
         n += len(delta)
         agent = agents.get(player)
         if agent is None:
-            agent = agents[player] = AlphaBetaAgent(seed, completion=False)
+            agent = agents[player] = agent_class(seed, completion=False)
             agent.player = player
             agent.collapse_pages = False  # (here, before the fork)
         agent.rng = random.Random(seed)
