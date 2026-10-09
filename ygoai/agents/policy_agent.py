@@ -7,7 +7,9 @@ trained on the same, build_policy_data.py --view); everything else, and every
 decision when there is no model, goes to the heuristic player. It plays the best
 scored candidate, or with `temperature` > 0 samples by softmax(score / T).
 
-The model: $YGOAI_POLICY (a train_policy_value.py export), else none.
+The model: $YGOAI_POLICY (a train_policy_value.py or rl_policy.py export), else
+nn/policy.npz (rl_policy.py: runs/nn/rl4/iteration 71, +120 Elo against the
+heuristic player without search, 4000 games).
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from __future__ import annotations
 import math
 import os
 import random
+from pathlib import Path
 
 from .. import constants as C
 from ..actions import BATTLE_LISTS, IDLE_LISTS
@@ -23,6 +26,7 @@ from .belief_mc import SEARCHED, candidates
 from .heuristic_agents import HeuristicAgent
 
 _MODELS: dict[str, object] = {}
+DEFAULT_MODEL = Path(__file__).resolve().parent.parent / "nn" / "policy.npz"
 
 
 def load_policy(path: str | None):
@@ -41,7 +45,8 @@ class PolicyAgent(Agent):
 
     def __init__(self, seed: int | None = None, model=None, temperature: float = 0.0, record: bool = False):
         self.rng = random.Random(seed)
-        self.model = model if model is not None else load_policy(os.environ.get("YGOAI_POLICY"))
+        self.model = model if model is not None else load_policy(
+            os.environ.get("YGOAI_POLICY") or (str(DEFAULT_MODEL) if DEFAULT_MODEL.exists() else None))
         self.temperature = temperature
         self.fallback = HeuristicAgent(seed)
         self.hint = None
