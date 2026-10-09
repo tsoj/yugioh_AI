@@ -4,8 +4,9 @@ seed) whose result is not settled by the decks alone.
 
   scripts/make_match_book.py -n 3000 -o runs/books/match1.jsonl [--games 20] [--seed 77]
 
-Each candidate is played up to --games times by the policy agent (nn/policy.npz)
-on both sides, sampling at temperature 1 with a different seed per game: the
+Each candidate is played up to --games times by policy agents (--policies: each
+seat of each game a random one of them, default nn/policy.npz), sampling at
+temperature 1 with a different seed per game: the
 decks keep their seats, only the players' choices vary. Its testing stops early
 once each seat won --stop-min games (enough for --book-min up to that). The book
 lists every candidate with the number of games each seat won ("wins", over
@@ -32,10 +33,11 @@ GAME_SECONDS = 120
 
 
 def test_opening(task):
-    """(candidate index, opening, games, stop_min) -> (candidate index, wins per seat, games played)."""
-    i, opening, games, stop_min = task
+    """(candidate index, opening, games, stop_min, policies) -> (candidate index, wins per seat, games played)."""
+    i, opening, games, stop_min, policies = task
+    import random
     import signal
-    from ygoai.agents.policy_agent import PolicyAgent
+    from ygoai.agents.policy_agent import PolicyAgent, load_policy
     from ygoai.game import new_record, play
     wins = [0, 0]
     for g in range(games):
@@ -46,7 +48,9 @@ def test_opening(task):
         signal.signal(signal.SIGALRM, signal.SIG_DFL)
         signal.alarm(GAME_SECONDS)
         record = new_record(opening.decks, opening.seed)
-        agents = [PolicyAgent(opening.seed * 1000 + 2 * g + p, temperature=1.0) for p in (0, 1)]
+        rng = random.Random(opening.seed * 1000 + g)
+        agents = [PolicyAgent(opening.seed * 1000 + 2 * g + p, model=load_policy(rng.choice(policies)),
+                              temperature=1.0) for p in (0, 1)]
         play(record, agents, max_turns=100, max_decisions=MAX_DECISIONS)
         signal.alarm(0)
         w = record.result.get("winner")
@@ -61,11 +65,14 @@ def main() -> int:
     ap.add_argument("-o", "--output", type=Path, required=True)
     ap.add_argument("--games", type=int, default=20, help="test games per candidate (at most)")
     ap.add_argument("--stop-min", type=int, default=2, help="stop once each seat won this many")
+    ap.add_argument("--policies", default=None, help="comma-separated policy exports (default: nn/policy.npz)")
     ap.add_argument("--seed", type=int, default=77)
     ap.add_argument("-j", "--jobs", type=int, default=30)
     args = ap.parse_args()
     openings = random_openings(args.candidates, args.seed, 0.0)
-    tasks = [(i, op, args.games, args.stop_min) for i, op in enumerate(openings)]
+    from ygoai.agents.policy_agent import DEFAULT_MODEL
+    policies = [str(Path(p).resolve()) for p in args.policies.split(",")] if args.policies else [str(DEFAULT_MODEL)]
+    tasks = [(i, op, args.games, args.stop_min, policies) for i, op in enumerate(openings)]
     wins: list = [None] * len(openings)
     played = [0] * len(openings)
     failed = 0
