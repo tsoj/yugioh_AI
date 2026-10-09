@@ -70,8 +70,12 @@ def main() -> int:
     args = ap.parse_args()
     if len(args.engine) != 2:
         ap.error("exactly two engines are required")
-    if any(name in e.command for e in args.engine for name in ("belief_mc", "alphabeta")):
-        # (one deck model process for every worker and engine process: memory)
+    from ygoai.agents import AGENTS, BeliefMCAgent
+    belief_agents = [name for name, cls in AGENTS.items() if issubclass(cls, BeliefMCAgent)]
+    if any(name in e.command.split() or e.command.endswith(":" + name) for e in args.engine
+           for name in belief_agents):
+        # (one deck model process for every worker and engine process: memory; without
+        # it, each engine starts its own)
         try:
             from ygoai.belief.neural_completion import ensure_service
             ensure_service()
