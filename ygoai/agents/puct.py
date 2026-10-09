@@ -161,7 +161,7 @@ class PuctAgent(AlphaBetaAgent):
                     q = n.value_sum[k] / n.visits[k]
                     bounds[0], bounds[1] = min(bounds[0], q), max(bounds[1], q)
             self.nodes += sims
-            if FINAL == "q":
+            if FINAL == "q" and max(root.visits) > 0:
                 most = max(root.visits)
                 best = max((k for k in range(len(root.cands)) if root.visits[k] >= FINAL_SHARE * most),
                            key=lambda k: root.value_sum[k] / root.visits[k])
