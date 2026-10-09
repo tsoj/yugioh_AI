@@ -222,6 +222,7 @@ def ordered(prompt: dict, turn_player: int, card_order: list[int] | None = None)
 
 class AlphaBetaAgent(BeliefMCAgent):
     name = "alphabeta"
+    server_agent = ("ygoai.agents.alphabeta", "AlphaBetaAgent")  # (what the search server runs)
 
     def __init__(self, seed: int | None = None, **kw):
         super().__init__(seed=seed, **kw)
@@ -246,7 +247,7 @@ class AlphaBetaAgent(BeliefMCAgent):
             from ..core import journal_duels
             from .search_server import SearchClient
             journal_duels(True)  # (the server rebuilds the duels from their journals)
-            self._server = SearchClient()
+            self._server = SearchClient(self.server_agent)
 
     def _select(self, duel, core_prompt: dict, core_cands: list[dict], t0: float, budget: float | None) -> int | None:
         hint = self.fallback.hint  # (the select hint: the search answers this selection, not the fallback)
