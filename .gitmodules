@@ -7,3 +7,6 @@
 [submodule "external/BabelCDB"]
 	path = external/BabelCDB
 	url = https://github.com/ProjectIgnis/BabelCDB.git
+[submodule "rust"]
+	path = rust
+	url = git@github.com:tsoj/ygopro-core-rust.git
