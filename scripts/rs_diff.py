@@ -416,6 +416,72 @@ def flow_both(seed: int, decks: str, completion: str = "corpus") -> Diff:
     return d
 
 
+_INFER_NAMES = ("idle", "battle", "chain", "effectyn", "option", "place", "position", "announce", "cards",
+                "unselect", "counter", "rps", "sort")
+
+
+def _strip_none(v):
+    if isinstance(v, dict):
+        return {k: _strip_none(x) for k, x in v.items() if x is not None}
+    if isinstance(v, (list, tuple)):
+        return [_strip_none(x) for x in v]
+    return v
+
+
+def infer_both(seed: int, decks: str) -> Diff:
+    """Belief replays of a test game (both players, the whole stream) on the Python modules; every
+    call of a belief/infer.py inference is made of the Rust one too, with the same inputs (the
+    duel's cards as they are), and the results compared."""
+    import inspect
+    from ygoai.belief import infer
+    from ygoai.belief.check import check_prefix
+    from ygoai.belief.corpus import CorpusCompletion
+    from ygoai.belief.games import make_game_streams
+    d = Diff(seed)
+    pid = os.getpid()
+    originals = {n: getattr(infer, f"infer_{n}") for n in _INFER_NAMES}
+
+    def wrap(name, fn):
+        sig = inspect.signature(fn)
+
+        def call(*args, **kwargs):
+            out = fn(*args, **kwargs)
+            if os.getpid() != pid:
+                return out  # (in a probe's fork: not counted)
+            b = sig.bind(*args, **kwargs)
+            b.apply_defaults()
+            a = dict(b.arguments)
+            prompt, up, duel = a.pop("prompt"), a.pop("up"), a.pop("duel", None)
+            a.pop("db", None)
+            raw = duel.all_cards_raw() if duel is not None else None
+            plan = [(p, l, list(ids) if ids is not None else None) for p, l, ids in (getattr(duel, "shuffle_plan", None) or ())] \
+                if duel is not None else None
+            try:
+                rs = ygoai_rs.infer(name, prompt, list(up), a, raw, plan)
+                rs = (rs[0], rs[1])
+            except Exception as e:  # noqa: BLE001
+                rs = ("error", repr(e))
+            d.eq(f"infer.{name}", _strip_none([out[0], out[1]]), _strip_none([rs[0], rs[1]]),
+                 f"prompt {prompt.get('type')} up {[m.get('type') for m in up[:6]]}")
+            return out
+        return call
+    for n, fn in originals.items():
+        setattr(infer, f"infer_{n}", wrap(n, fn))
+    try:
+        record, streams = make_game_streams(seed, decks=decks, pairs=PAIRS)
+        comp = _py_completions.setdefault("corpus", None) or CorpusCompletion()
+        _py_completions["corpus"] = comp
+        for viewer in (0, 1):
+            try:
+                check_prefix(record, viewer, streams[viewer], len(streams[viewer]), completion=comp)
+            except Exception as e:  # noqa: BLE001
+                d.examples.append(f"seed {seed} viewer {viewer}: replay raised {e!r:.200}")
+    finally:
+        for n, fn in originals.items():
+            setattr(infer, f"infer_{n}", fn)
+    return d
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--games", type=int, default=50)
@@ -426,9 +492,14 @@ def main() -> None:
     ap.add_argument("--play", action="store_true", help="instead: whole games of built-in agents played by both")
     ap.add_argument("--tracker", action="store_true", help="instead: the belief trackers over the test games' streams")
     ap.add_argument("--flow", choices=["vanilla", "corpus"], help="instead: the trackers' hypotheses (flow model) with this completion")
+    ap.add_argument("--infer", action="store_true", help="instead: the inferences of Python belief replays, made by both")
     a = ap.parse_args()
     seeds = range(a.start, a.start + a.games)
-    if a.flow:
+    if a.infer:
+        from multiprocessing import get_context
+        with get_context("spawn").Pool(a.j, maxtasksperchild=10) as pool:
+            results = pool.starmap(infer_both, [(s, a.decks) for s in seeds], chunksize=1)
+    elif a.flow:
         from multiprocessing import get_context
         with get_context("spawn").Pool(a.j, maxtasksperchild=20) as pool:
             results = pool.starmap(flow_both, [(s, a.decks, a.flow) for s in seeds], chunksize=1)

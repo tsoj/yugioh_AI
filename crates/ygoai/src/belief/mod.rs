@@ -6,5 +6,6 @@
 
 pub mod completion;
 pub mod flow;
+pub mod infer;
 pub mod script_index;
 pub mod tracker;

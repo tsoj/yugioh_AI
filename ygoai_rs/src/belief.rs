@@ -139,7 +139,65 @@ pub fn hypothesis_json(h: &ygoai::belief::tracker::Hypothesis) -> Value {
     })
 }
 
+/// One of belief/infer.py's functions in Rust: `name` without "infer_", the prompt, the upcoming
+/// messages and the other arguments by name (up_ext, descs, player, ids, select_msg); for the ones
+/// that read the duel, a snapshot of its cards (all_cards_raw) and its shuffle plan. Returns
+/// (candidates, certain) with certain None for "likely".
+#[pyfunction]
+#[pyo3(signature = (name, prompt, up, kwargs, all_cards=None, plan=None))]
+fn infer<'py>(
+    py: Python<'py>,
+    name: &str,
+    prompt: &Bound<'py, PyAny>,
+    up: &Bound<'py, PyAny>,
+    kwargs: &Bound<'py, pyo3::types::PyDict>,
+    all_cards: Option<&[u8]>,
+    plan: Option<Vec<(u32, u32, Option<Vec<Option<u32>>>)>>,
+) -> PyResult<(Bound<'py, PyAny>, Option<bool>)> {
+    use ygoai::belief::infer::{self as inf, Certain, LocMap};
+    use ygoai::messages::Msg;
+    let prompt: Msg = de(prompt)?;
+    let up: Vec<Msg> = de(up)?;
+    let get = |k: &str| kwargs.get_item(k).ok().flatten().filter(|v| !v.is_none());
+    let up_ext: Option<Vec<Msg>> = get("up_ext").map(|v| de(&v)).transpose()?;
+    let lm = || {
+        let raw = all_cards.unwrap_or(&[]);
+        let all: Vec<[u32; 6]> = raw
+            .chunks_exact(24)
+            .map(|c| std::array::from_fn(|i| u32::from_le_bytes(c[4 * i..4 * i + 4].try_into().unwrap())))
+            .collect();
+        LocMap::new(&all, plan.as_deref().unwrap_or(&[]))
+    };
+    let ids: Option<Vec<Option<u32>>> = get("ids").map(|v| v.extract()).transpose()?;
+    let (cands, certain) = match name {
+        "idle" => inf::infer_idle(&prompt, &up, up_ext.as_deref()),
+        "battle" => inf::infer_battle(&prompt, &up, up_ext.as_deref()),
+        "chain" => inf::infer_chain(&prompt, &up),
+        "effectyn" => {
+            let descs: Option<Vec<u64>> = get("descs").map(|v| v.extract()).transpose()?;
+            inf::infer_effectyn(&prompt, &up, descs.as_deref())
+        }
+        "option" => inf::infer_option(&prompt, &up, get("player").map(|v| v.extract()).transpose()?.unwrap_or(0)),
+        "place" => inf::infer_place(&prompt, &up, up_ext.as_deref()),
+        "position" => inf::infer_position(&prompt, &up),
+        "announce" => inf::infer_announce(&prompt, &up),
+        "cards" => inf::infer_cards(&prompt, &up, &lm(), ids, get("select_msg").map(|v| v.extract()).transpose()?),
+        "unselect" => inf::infer_unselect(&prompt, &up, &lm(), ids),
+        "counter" => inf::infer_counter(&prompt, &up),
+        "rps" => inf::infer_rps(&prompt, &up),
+        "sort" => inf::infer_sort(&prompt, &up),
+        _ => return Err(PyValueError::new_err(format!("no infer_{name}"))),
+    };
+    let certain = match certain {
+        Certain::Yes => Some(true),
+        Certain::No => Some(false),
+        Certain::Likely => None,
+    };
+    Ok((pythonize::pythonize(py, &cands).map_err(|e| PyValueError::new_err(e.to_string()))?, certain))
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(infer, m)?)?;
     m.add_class::<PyTracker>()?;
     Ok(())
 }
