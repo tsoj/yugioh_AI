@@ -41,22 +41,9 @@ def _alarm(_signum, frame):
     raise Timeout()
 
 
-_completions: dict = {}  # (per worker process: building one takes a while)
-
-
-def get_completion(name: str):
-    if name not in _completions:
-        if name == "corpus":
-            from ygoai.belief.corpus import CorpusCompletion
-            _completions[name] = CorpusCompletion()
-        elif name == "neural":
-            # (the run's one model process if there is one: see ensure_service)
-            from ygoai.belief.neural_completion import neural_completion
-            _completions[name] = neural_completion()
-        else:
-            from ygoai.belief.completion import VanillaCompletion
-            _completions[name] = VanillaCompletion()
-    return _completions[name]
+def get_completion(name: str) -> str:
+    """The completion by name (the Rust replay's: vanilla, corpus, neural)."""
+    return name
 
 
 def _replay_case(record, items, seed: int, viewer: int, frac: float, timeout: int, completion: str) -> dict | None:
@@ -290,9 +277,6 @@ def main() -> int:
     results = []
     t0 = time.monotonic()
     out = args.output.open("w") if args.output else None  # streamed: large runs can be watched
-    if args.completion == "neural":
-        from ygoai.belief.neural_completion import ensure_service
-        ensure_service()  # (one model process for all workers: memory)
     for task, res in run_parallel(run_task, tasks, args.jobs):
         if isinstance(res, Crash):
             res = [{"seed": task[0], "viewer": v, "frac": f, "ok": False, "error": f"crash: {res.error}"}

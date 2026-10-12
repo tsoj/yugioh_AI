@@ -252,9 +252,6 @@ def main() -> int:
     tasks.sort(key=lambda ct: -ct[0])
     print(f"{len(tasks)} games of {len(names)} ranges", flush=True)
     t0, failed = time.time(), False
-    if any(t[4] == "neural" for _, t in tasks):  # (the task's completion)
-        from ygoai.belief.neural_completion import ensure_service
-        ensure_service()  # (one model process for all workers: memory)
     for task, res in run_parallel(cb.run_task, [t for _, t in tasks], args.jobs):
         name = owner[id(task)]
         if isinstance(res, Crash):

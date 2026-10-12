@@ -69,14 +69,7 @@ def main():
     cut = cut_point(items, args.cut)
     if cut is None:
         sys.exit(f"the game has no cut {args.cut}")
-    completion = None  # (the replay's own default: vanilla)
-    if args.completion == "corpus":
-        from ygoai.belief.corpus import CorpusCompletion
-        completion = CorpusCompletion()
-    elif args.completion == "neural":
-        from ygoai.belief.neural_completion import NeuralCompletion
-        completion = NeuralCompletion()
-    r = check_prefix(rec, args.viewer, items, cut, completion=completion)
+    r = check_prefix(rec, args.viewer, items, cut, completion=args.completion)
     for text in r.repairs:
         print("  ..", text[:220])
     if r.ok:

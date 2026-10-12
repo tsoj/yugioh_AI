@@ -56,12 +56,10 @@ impl Completion for PyCompletion {
 /// Python completion object (one wrapper per object, kept for the process's life).
 fn completion_of(c: &Bound<'_, PyAny>) -> PyResult<Option<&'static dyn Completion>> {
     use std::sync::Mutex;
-    use ygoai::belief::completion::CorpusCompletion;
     if let Ok(name) = c.extract::<String>() {
         return match name.as_str() {
             "vanilla" => Ok(None),
-            "corpus" => Ok(Some(CorpusCompletion::get().map_err(PyValueError::new_err)?)),
-            _ => Err(PyValueError::new_err(format!("unknown completion {name}"))),
+            name => Ok(Some(named_completion(name)?)),
         };
     }
     static WRAPPED: Mutex<Vec<(usize, &'static PyCompletion)>> = Mutex::new(Vec::new());
@@ -144,7 +142,42 @@ impl AgentBelief {
     }
 }
 
+fn named_completion(name: &str) -> PyResult<&'static dyn Completion> {
+    use ygoai::belief::completion::{CorpusCompletion, VanillaCompletion};
+    Ok(match name {
+        "vanilla" => VanillaCompletion::get(),
+        "corpus" => CorpusCompletion::get().map_err(PyValueError::new_err)?,
+        "neural" => ygoai::belief::neural::NeuralCompletion::get().map_err(PyValueError::new_err)?,
+        _ => return Err(PyValueError::new_err(format!("unknown completion {name}"))),
+    })
+}
+
+/// A completion's fills (main, extra) for a deck's unknown cards (Completion::complete), by name.
+#[pyfunction]
+#[pyo3(signature = (name, known_main, known_extra, n_main, n_extra, present=Vec::new()))]
+fn complete(name: &str, known_main: Vec<u32>, known_extra: Vec<u32>, n_main: usize, n_extra: usize, present: Vec<u32>) -> PyResult<(Vec<u32>, Vec<u32>)> {
+    named_completion(name)?.complete(&known_main, &known_extra, n_main, n_extra, &present).map_err(PyValueError::new_err)
+}
+
+/// A completion's stand-ins for a hidden card of a kind, by name; `need`: ("st",) / ("field",) /
+/// ("mset", k) / ("monster",).
+#[pyfunction]
+#[pyo3(signature = (name, need, known=Vec::new()))]
+fn stand_ins(name: &str, need: &Bound<'_, PyAny>, known: Vec<u32>) -> PyResult<Vec<u32>> {
+    let tag: String = need.get_item(0)?.extract()?;
+    let need = match tag.as_str() {
+        "st" => Need::St,
+        "field" => Need::Field,
+        "monster" => Need::Monster,
+        "mset" => Need::Mset(need.get_item(1)?.extract()?),
+        t => return Err(PyValueError::new_err(format!("unknown need {t}"))),
+    };
+    Ok(named_completion(name)?.stand_ins(need, &known))
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(complete, m)?)?;
+    m.add_function(wrap_pyfunction!(stand_ins, m)?)?;
     m.add_function(wrap_pyfunction!(check_prefix, m)?)?;
     m.add_class::<AgentBelief>()?;
     Ok(())

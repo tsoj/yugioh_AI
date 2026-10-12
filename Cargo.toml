@@ -2,7 +2,7 @@
 # binding ygoai_rs. The duel engine (rust/, ygopro-core-rust) is a workspace of its own.
 [workspace]
 resolver = "2"
-members = ["ygoai_rs", "crates/ygoai", "crates/highs"]
+members = ["ygoai_rs", "crates/ygoai", "crates/highs", "crates/deckmodels"]
 exclude = ["rust"]
 
 [workspace.package]
@@ -11,3 +11,8 @@ license = "AGPL-3.0-or-later"
 
 [profile.release]
 debug = 1
+
+# (no debug info for dependencies: burn's generic code made the binding 600 MB; ours keeps it for
+# profiling)
+[profile.release.package."*"]
+debug = 0

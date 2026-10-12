@@ -38,9 +38,10 @@ def _fits(card, need: tuple) -> bool:
     return bool(card.type & (C.TYPE_SPELL | C.TYPE_TRAP)) and not card.type & C.TYPE_FIELD
 
 
-def naive_hidden_cards(duel, me: int, completion, rng) -> dict[int, int]:
+def naive_hidden_cards(duel, me: int, completion: str, rng) -> dict[int, int]:
     """New codes for the opponent's currently hidden cards (card id -> code), guessed from the
-    cards visible now only."""
+    cards visible now only (`completion`: the name of the deck completion, as the belief's)."""
+    import ygoai_rs
     db = default_db()
     opp = 1 - me
     seen = viewer_view(duel, me)
@@ -72,10 +73,9 @@ def naive_hidden_cards(duel, me: int, completion, rng) -> dict[int, int]:
     known_extra = [c for c in opp_visible if is_extra(c)]
     n_main, n_extra = len(hidden_field) + len(hidden_main), len(hidden_extra)
     try:
-        fill_main, fill_extra = completion.complete(known_main, known_extra, n_main, n_extra, visible)
-    except RuntimeError:
-        from ..belief.completion import VanillaCompletion
-        fill_main, fill_extra = VanillaCompletion().complete(known_main, known_extra, n_main, n_extra, visible)
+        fill_main, fill_extra = ygoai_rs.complete(completion, known_main, known_extra, n_main, n_extra, visible)
+    except ValueError:
+        fill_main, fill_extra = ygoai_rs.complete("vanilla", known_main, known_extra, n_main, n_extra, visible)
     fill_main, fill_extra = list(fill_main), list(fill_extra)
     out: dict[int, int] = {}
     # face-down cards on the field: a guess of their kind (else the completion's stand-in for it)
@@ -84,7 +84,7 @@ def naive_hidden_cards(duel, me: int, completion, rng) -> dict[int, int]:
         if k is not None:
             out[cid] = fill_main.pop(k)
             continue
-        stand = [c for c in completion.stand_ins(need, known_main) if _fits(db.get(c), need)]
+        stand = [c for c in ygoai_rs.stand_ins(completion, need, known_main) if _fits(db.get(c), need)]
         if stand:
             out[cid] = stand[0]
             if fill_main:

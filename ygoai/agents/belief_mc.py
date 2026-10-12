@@ -31,22 +31,6 @@ SEARCHED = ("SELECT_IDLECMD", "SELECT_BATTLECMD", "SELECT_CHAIN", "SELECT_EFFECT
             "SELECT_OPTION", "SELECT_CARD")
 
 
-_NEURAL = None
-
-
-def _neural_completion():
-    """The learned deck models, in their own process (shared by the agents of a run: PyTorch and
-    the models are large), else the corpus completion (e.g. without PyTorch)."""
-    global _NEURAL
-    if _NEURAL is None:
-        try:
-            from ..belief.neural_completion import ensure_service, neural_completion
-            ensure_service()
-            _NEURAL = neural_completion()
-        except (ImportError, RuntimeError):
-            from ..belief.corpus import CorpusCompletion
-            _NEURAL = CorpusCompletion()
-    return _NEURAL
 
 
 def candidates(prompt: dict) -> list[dict]:
@@ -92,7 +76,8 @@ class BeliefMCAgent(Agent):
         self.rollouts = rollouts
         self.horizon = horizon
         self.max_candidates = max_candidates
-        self.completion = completion if completion is not None else _neural_completion()
+        # (the deck completion the belief uses: "neural", "corpus" or "vanilla", all in Rust)
+        self.completion = completion if completion is not None else "neural"
         self.fallback = GreedyAgent(seed)
         self.searches = 0
         self.failures = 0

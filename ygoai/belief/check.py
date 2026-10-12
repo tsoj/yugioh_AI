@@ -64,10 +64,12 @@ class CheckResult:
 
 
 def rust_completion(comp):
-    """The completion for the Rust replay: its own vanilla / corpus ones by name, any other (e.g.
-    the neural one) as the Python object, which it calls."""
-    name = type(comp).__name__ if comp is not None else "VanillaCompletion"
-    return {"VanillaCompletion": "vanilla", "CorpusCompletion": "corpus"}.get(name, comp)
+    """The completion for the Rust replay: a name ("vanilla", "corpus", "neural"; None: vanilla), or
+    a Python completion object, which it calls (e.g. to compare one with the Rust ones)."""
+    if comp is None or isinstance(comp, str):
+        return comp or "vanilla"
+    name = type(comp).__name__
+    return {"VanillaCompletion": "vanilla", "CorpusCompletion": "corpus", "NeuralCompletion": "neural"}.get(name, comp)
 
 
 def check_prefix(record: GameRecord, viewer: int, items: list[tuple], cut: int, timeout: float | None = None,

@@ -67,13 +67,6 @@ def main() -> int:
             names = tuple(args.agents.split(","))
         tasks.append((args.seed * 1_000_000 + i, names, rng.random() < args.mirror_prob))
 
-    if any("belief_mc" in names for _, names, _ in tasks):
-        # (one deck model process for every worker: memory)
-        try:
-            from ygoai.belief.neural_completion import ensure_service
-            ensure_service()
-        except (ImportError, RuntimeError) as e:
-            print(f"no deck model service ({e}): belief_mc falls back to the corpus completion", file=sys.stderr)
     stats = collections.Counter()
     reasons = collections.Counter()
     errors = []
