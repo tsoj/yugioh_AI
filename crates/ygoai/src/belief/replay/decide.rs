@@ -122,7 +122,7 @@ fn most_common<K: PartialEq + Clone>(items: impl IntoIterator<Item = K>, n: usiz
         }
     }
     // (stable: ties in order of first appearance, as Counter.most_common)
-    counts.sort_by(|a, b| b.1.cmp(&a.1));
+    counts.sort_by_key(|c| std::cmp::Reverse(c.1));
     counts.into_iter().take(n).map(|x| x.0).collect()
 }
 

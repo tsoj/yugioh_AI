@@ -943,7 +943,9 @@ impl BeliefReplay {
         }
         // (values not tried yet first, then the opponent's seen cards)
         pool.sort_by_key(|&c| (tried_values.contains(&value_of(c)), !seen.contains(&c)));
-        let (mut batch, mut values, mut taken): (Vec<Asm>, BTreeSet<(bool, u32, u32)>, BTreeSet<(u32, u32)>) = Default::default();
+        let mut batch: Vec<Asm> = Vec::new();
+        let mut values: BTreeSet<(bool, u32, u32)> = BTreeSet::new();
+        let mut taken: BTreeSet<(u32, u32)> = BTreeSet::new();
         for c in pool {
             let value = value_of(c);
             if values.contains(&value) {
@@ -1410,7 +1412,10 @@ impl BeliefReplay {
             let w = where_[&cid];
             let Ok(Some(v)) = self.lock_var(w.0, w.1, w.2) else { continue };
             let Some(sv) = solved.vars.get(v) else { continue };
-            let same = if sv.kind == Kind::Claim && sv.assigned.is_some() { sv.assigned.unwrap() } else { sv.id };
+            let same = match sv.assigned {
+                Some(a) if sv.kind == Kind::Claim => a,
+                _ => sv.id,
+            };
             let entry = (k, f, Same::Var(same));
             if !self.identities.contains(&entry) && !self.failed_identities.contains(&entry) {
                 return Some(Fix::Identify(entry));
@@ -2211,7 +2216,7 @@ impl BeliefReplay {
             check = Some(("attack", (a.i("con") as u8, a.i("loc") as u32, a.i("seq") as u32)));
         }
         if let Some(chk) = check
-            && let Some(d) = duel_ref.as_deref_mut()
+            && let Some(d) = duel_ref.as_mut()
         {
             codes = self.eligible_codes(d, field_missing[0], &codes, chk, &|_| true);
         }

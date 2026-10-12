@@ -153,7 +153,7 @@ fn infer<'py>(
     up: &Bound<'py, PyAny>,
     kwargs: &Bound<'py, pyo3::types::PyDict>,
     all_cards: Option<&[u8]>,
-    plan: Option<Vec<(u32, u32, Option<Vec<Option<u32>>>)>>,
+    plan: Option<Vec<ygoai::belief::infer::PlanEntry>>,
 ) -> PyResult<(Bound<'py, PyAny>, Option<bool>)> {
     use ygoai::belief::infer::{self as inf, Certain, LocMap};
     use ygoai::messages::Msg;
@@ -164,7 +164,9 @@ fn infer<'py>(
     let lm = || {
         let raw = all_cards.unwrap_or(&[]);
         let all: Vec<[u32; 6]> = raw
-            .chunks_exact(24)
+            .as_chunks::<24>()
+            .0
+            .iter()
             .map(|c| std::array::from_fn(|i| u32::from_le_bytes(c[4 * i..4 * i + 4].try_into().unwrap())))
             .collect();
         LocMap::new(&all, plan.as_deref().unwrap_or(&[]))

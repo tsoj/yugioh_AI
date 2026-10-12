@@ -251,8 +251,8 @@ impl CorpusCompletion {
         let (_, count) = npy_array(&mut z, "count.npy")?;
         let (_, extra) = npy_array(&mut z, "extra.npy")?;
         let (_, n) = npy_array(&mut z, "n.npy")?;
-        let deck: Vec<i32> = deck.chunks_exact(4).map(|b| i32::from_le_bytes(b.try_into().unwrap())).collect();
-        let code: Vec<i64> = code.chunks_exact(8).map(|b| i64::from_le_bytes(b.try_into().unwrap())).collect();
+        let deck: Vec<i32> = deck.as_chunks::<4>().0.iter().map(|b| i32::from_le_bytes(*b)).collect();
+        let code: Vec<i64> = code.as_chunks::<8>().0.iter().map(|b| i64::from_le_bytes(*b)).collect();
         let count: Vec<i8> = count.iter().map(|&b| b as i8).collect();
         let extra: Vec<bool> = extra.iter().map(|&b| b != 0).collect();
         let n = i64::from_le_bytes(n[..8].try_into().unwrap()) as usize;

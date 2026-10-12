@@ -7,14 +7,12 @@
 //! same place and other codes that differ in those properties. Each candidate is tried as a whole
 //! replay with the usual repairs; one that gets further is followed for a few rounds.
 
-use std::collections::BTreeMap;
-
 use indexmap::IndexMap;
 use ygo_core::constants::*;
 
 use crate::belief::completion::card;
 use crate::belief::replay::util::{V, jv};
-use crate::belief::replay::{Asm, BeliefReplay, Cp, RErr, ReadStep};
+use crate::belief::replay::{Asm, BeliefReplay, Cp, RErr, ReadStep, Swaps, Where};
 use crate::game::ObsItem;
 use crate::rduel::RDuel;
 
@@ -30,7 +28,7 @@ pub const CODES_PER_CARD: usize = 8;
 /// A candidate: (a swap: control point and pairs, assumptions, text).
 pub type Candidate = (Option<(Cp, Vec<(u32, u32)>)>, Vec<Asm>, String);
 
-fn sub_replay(br: &BeliefReplay, swaps: &BTreeMap<Cp, Vec<(u32, u32)>>, assumptions: &[Asm], restarts: usize) -> BeliefReplay {
+fn sub_replay(br: &BeliefReplay, swaps: &Swaps, assumptions: &[Asm], restarts: usize) -> BeliefReplay {
     let mut sub = BeliefReplay::new(br.viewer, br.init.clone(), br.items.clone(), Some(br.completion));
     sub.check_state = br.check_state;
     sub.max_probes = br.max_probes;
@@ -50,7 +48,7 @@ fn sub_replay(br: &BeliefReplay, swaps: &BTreeMap<Cp, Vec<(u32, u32)>>, assumpti
 
 /// A replay without repairs, logging per engine step: (divergence position: None if consistent,
 /// -1 for a tracker error), the steps, the replay.
-fn logged_run(br: &BeliefReplay, swaps: &BTreeMap<Cp, Vec<(u32, u32)>>, assumptions: &[Asm]) -> (Option<i64>, Vec<ReadStep>, BeliefReplay) {
+fn logged_run(br: &BeliefReplay, swaps: &Swaps, assumptions: &[Asm]) -> (Option<i64>, Vec<ReadStep>, BeliefReplay) {
     let mut sub = sub_replay(br, swaps, assumptions, 0);
     sub.logged_steps = Some(Vec::new());
     let r = sub.run_attempts();
@@ -65,8 +63,10 @@ fn logged_run(br: &BeliefReplay, swaps: &BTreeMap<Cp, Vec<(u32, u32)>>, assumpti
 /// The candidate repairs for the hidden cards read shortly before the divergence at `pos`.
 pub fn candidates(br: &BeliefReplay, steps: &[ReadStep], pos: usize, codes: &[u32]) -> Vec<Candidate> {
     let opp = br.opponent;
-    let mut read: IndexMap<u32, (u32, usize, (u32, u32, u32, u32))> = IndexMap::new();
-    let mut before: Option<&IndexMap<u32, (u32, u32, u32, u32)>> = None;
+    // (card id -> (properties read, at which position, where it was))
+    type Read = (u32, usize, (u32, u32, u32, u32));
+    let mut read: IndexMap<u32, Read> = IndexMap::new();
+    let mut before: Option<&Where> = None;
     for (p, reads, wh) in steps {
         if pos.saturating_sub(WINDOW) <= *p && *p <= pos && *p + WINDOW >= pos {
             for &(cid, mask) in reads {
@@ -186,7 +186,7 @@ pub fn read_guided_repair(br: &mut BeliefReplay) -> Option<RDuel> {
                 uniq.push(c);
             }
         }
-        let mut best: Option<(usize, BTreeMap<Cp, Vec<(u32, u32)>>, Vec<Asm>, String)> = None;
+        let mut best: Option<(usize, Swaps, Vec<Asm>, String)> = None;
         for (sw, asm, what) in candidates(br, &steps, pos, &uniq).into_iter().take(CANDIDATES) {
             let mut new_swaps = swaps.clone();
             if let Some((k, v)) = sw {

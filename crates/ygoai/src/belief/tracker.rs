@@ -207,6 +207,11 @@ impl Default for PoolLoc {
     }
 }
 
+/// The ranks of a shuffle's cards (None: not ranked).
+pub type Ranks = Option<Vec<u32>>;
+/// The key of leaves_memo.
+type LeavesKey = (PoolId, u32, usize, u64);
+
 /// A complete, consistent guess of the hidden information.
 #[derive(Debug, Clone, Default)]
 pub struct Hypothesis {
@@ -233,7 +238,7 @@ pub struct Hypothesis {
     pub deck_ranks: Vec<Option<Vec<u32>>>,
     pub extra_ranks: Vec<Option<Vec<u32>>>,
     /// (ranks, owners) per set card shuffle
-    pub set_card_shuffle_ranks: Vec<(Option<Vec<u32>>, Option<Vec<u32>>)>,
+    pub set_card_shuffle_ranks: Vec<(Ranks, Ranks)>,
 }
 
 type Sig = (&'static str, Option<u32>);
@@ -272,7 +277,7 @@ pub struct Tracker {
     owners_seen: u64,
     owned_at: HashMap<VarId, u64>,
     owners_memo: HashMap<VarId, (u64, BTreeSet<u32>)>,
-    leaves_memo: HashMap<(PoolId, u32, usize, u64), (Vec<VarId>, Vec<VarId>)>,
+    leaves_memo: HashMap<LeavesKey, (Vec<VarId>, Vec<VarId>)>,
     pool_owners_memo: HashMap<(PoolId, u64), Vec<BTreeSet<u32>>>,
     confirmed: Vec<VarId>,
     referenced: Vec<VarId>,
@@ -739,10 +744,12 @@ impl Tracker {
                 out.insert(o); // (shown by a state view: no need to look further)
             } else if let Some(k) = known.filter(|k| k.0 == self.owners_seen || k.1.len() == 1) {
                 out.extend(k.1.iter().copied()); // (an earlier slot's answer, still valid)
-            } else if xv.kind != Kind::Claim || xv.pool.is_none() {
+            } else if let (Kind::Claim, Some(p)) = (xv.kind, xv.pool) {
+                if seen.insert(p) {
+                    todo.extend(self.pools[p].members.iter().copied());
+                }
+            } else {
                 out.insert(xv.owner);
-            } else if seen.insert(xv.pool.unwrap()) {
-                todo.extend(self.pools[xv.pool.unwrap()].members.iter().copied());
             }
         }
         self.owners_memo.insert(v, (self.owners_seen, out.clone()));

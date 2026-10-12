@@ -244,7 +244,6 @@ impl<'a> FlowSolver<'a> {
             tag_of.insert(rid, k);
             tags_by_code.entry(code).or_default().push(k);
         }
-        drop(com);
         let commodities = commodities;
         let tag_rid = |k: usize| match commodities[k].1 {
             Key::Tag(r, _) => r,
@@ -381,7 +380,8 @@ impl<'a> FlowSolver<'a> {
 
         // variables x[e, k]
         let mut fixed_counts: Vec<(usize, Counter)> = Vec::new();
-        let (mut cols, mut lo, mut hi, mut cost): (Vec<(usize, usize)>, Vec<f64>, Vec<f64>, Vec<f64>) = Default::default();
+        let mut cols: Vec<(usize, usize)> = Vec::new();
+        let (mut lo, mut hi, mut cost): (Vec<f64>, Vec<f64>, Vec<f64>) = Default::default();
         for (ei, key) in edge_keys.iter().enumerate() {
             let vs = &edges[key];
             let mut dom = domain(vs[0]);
@@ -399,7 +399,10 @@ impl<'a> FlowSolver<'a> {
                 fixed_counts.push((ei, codes));
             }
             let v0 = &t.vars[vs[0]];
-            let holder = if v0.kind == Kind::Claim && v0.pool.is_some() { t.pools[v0.pool.unwrap()].player } else { v0.owner };
+            let holder = match v0.pool {
+                Some(p) if v0.kind == Kind::Claim => t.pools[p].player,
+                _ => v0.owner,
+            };
             let opp_atom = matches!(key.producer, Producer::Atoms(o, _) if o != viewer);
             for k in dom {
                 cols.push((ei, k));
@@ -434,7 +437,9 @@ impl<'a> FlowSolver<'a> {
         for (j, &(ei, _)) in cols.iter().enumerate() {
             by_edge[ei].push(j);
         }
-        let mut rows: Vec<(Vec<(usize, f64)>, f64, f64)> = Vec::new();
+        // (coefficients, lower bound, upper bound)
+        type Row = (Vec<(usize, f64)>, f64, f64);
+        let mut rows: Vec<Row> = Vec::new();
         // capacity of every edge
         for (ei, key) in edge_keys.iter().enumerate() {
             let n = edges[key].len() as f64;

@@ -113,6 +113,23 @@ pub type Slot = (u32, u32, u32);
 
 pub const ALL_SLOTS: i64 = -1;
 
+/// A decision for the backtracking over decisions: (decision, candidates, parent: (decision, answer)).
+pub type BtEntry = (Dkey, usize, Option<(Dkey, Option<usize>)>);
+/// A pending engine test of codes for a hidden slot: ((position, slot), (from position, codes)).
+pub type CodeTestEntry = ((usize, Slot), (usize, Vec<u32>));
+/// (position, stall, prompt, the card ids it offered)
+pub type MemoCardKey = (usize, usize, String, Vec<Option<u32>>);
+/// (assumptions, exclusions, identities, the assumption tested)
+pub type FeasibleKey = (Vec<Asm>, Vec<Excl>, Vec<Ident>, Asm);
+/// The card ids a selection offered and the places they were in.
+pub type Offered = (HashSet<Option<u32>>, HashSet<(u32, u32)>);
+/// (decision, card ids, answers, the answer taken, the valid answers)
+pub type SilentChoice = (Dkey, Vec<Option<u32>>, usize, usize, Option<Vec<Response>>);
+/// Where every card is: id -> (player, location, index, code), in the engine's order.
+pub type Where = indexmap::IndexMap<u32, (u32, u32, u32, u32)>;
+/// Copy swaps by control point.
+pub type Swaps = BTreeMap<Cp, Vec<(u32, u32)>>;
+
 /// What an identity says of the card in a slot.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Same {
@@ -346,7 +363,7 @@ impl LazyTracker {
 
 /// A logging run's record per engine step: (stream position, the card properties read, where
 /// each card was: id -> (player, location, index, code)).
-pub type ReadStep = (usize, Vec<(u32, u32)>, indexmap::IndexMap<u32, (u32, u32, u32, u32)>);
+pub type ReadStep = (usize, Vec<(u32, u32)>, Where);
 
 #[derive(Clone, Debug)]
 pub struct SuspectLog {
@@ -376,7 +393,7 @@ pub struct StateBt {
     pub sig: DivSig,
     pub list: Vec<(Dkey, usize, i64)>,
     pub key: Dkey,
-    pub queue: Vec<(Dkey, usize, Option<(Dkey, Option<usize>)>)>,
+    pub queue: Vec<BtEntry>,
     pub state: bool,
     pub tries: usize,
     pub fallback: Option<Fix>,
@@ -423,9 +440,9 @@ pub struct BeliefReplay {
     pub identities: Vec<Ident>,
     pub failed_identities: BTreeSet<Ident>,
     pub folded_swaps: BTreeSet<(Cp, u32, u32)>,
-    pub swaps: BTreeMap<Cp, Vec<(u32, u32)>>,
+    pub swaps: Swaps,
     pub matches: BTreeMap<usize, Vec<u32>>,
-    pub code_tests: Vec<((usize, Slot), (usize, Vec<u32>))>,
+    pub code_tests: Vec<CodeTestEntry>,
     pub code_tests_done: BTreeSet<(usize, Slot)>,
     pub suspects_on: bool,
     pub suspect_done: HashMap<usize, usize>,
@@ -460,14 +477,14 @@ pub struct BeliefReplay {
     pub last_hyp_fix: Option<&'static str>,
     pub last_identify_count: usize,
     pub memo: HashMap<(usize, usize, String), MemoEntry>,
-    pub memo_cards: HashMap<(usize, usize, String, Vec<Option<u32>>), Response>,
+    pub memo_cards: HashMap<MemoCardKey, Response>,
     pub use_memo: bool,
     pub hypothesis: Option<Rc<Hypothesis>>,
     /// the tracker the latest hypothesis was solved with (its claims assigned)
     pub solved: Option<Rc<Tracker>>,
     pub assumed_vars: HashMap<VarId, Asm>,
     pub assume_conflict: Option<Asm>,
-    pub feasible_cache: HashMap<(Vec<Asm>, Vec<Excl>, Vec<Ident>, Asm), bool>,
+    pub feasible_cache: HashMap<FeasibleKey, bool>,
     pub property_tried: HashMap<u32, BTreeSet<u32>>,
     pub property_values: HashMap<u32, BTreeSet<(bool, u32, u32)>>,
     pub property_placed: HashMap<u32, Vec<Asm>>,
@@ -517,10 +534,10 @@ pub struct BeliefReplay {
     pub card_decisions: HashMap<Dkey, HashMap<Option<u32>, usize>>,
     pub window_choices: Vec<(Dkey, usize)>,
     pub window_activations: Vec<(Dkey, usize)>,
-    pub offered: HashMap<Dkey, (HashSet<Option<u32>>, HashSet<(u32, u32)>)>,
+    pub offered: HashMap<Dkey, Offered>,
     pub hidden_picks: Vec<(usize, (usize, usize))>,
     pub sim_marks: HashMap<u64, Vec<u32>>,
-    pub silent_choices: Vec<(Dkey, Vec<Option<u32>>, usize, usize, Option<Vec<Response>>)>,
+    pub silent_choices: Vec<SilentChoice>,
     pub assumed_moves: Vec<(usize, Asm)>,
     pub multi_decisions: HashMap<Dkey, (Vec<Option<u32>>, Response)>,
     pub roll_dirty: bool,
@@ -1139,7 +1156,7 @@ impl BeliefReplay {
                 self.force_windows.push(w);
             }
         }
-        push_random(duel, &self.items[n..].to_vec());
+        push_random(duel, &self.items[n..]);
         self.jit_from = Some(self.jit_from.unwrap_or(n));
         let ObsItem::Response(resp) = self.items[self.pos].clone() else { return div(Divergence::new(self.pos, "expected the viewer's response")) };
         self.advance()?;
@@ -1395,7 +1412,7 @@ impl BeliefReplay {
                         }
                     }
                 }
-                front.extend(bt.queue.drain(..));
+                front.append(&mut bt.queue);
                 bt.queue = front;
             }
             if bt.tries > decision_tries() || bt.queue.is_empty() {
@@ -1495,7 +1512,7 @@ impl BeliefReplay {
             let todo: Vec<(Dkey, Vec<usize>)> =
                 recent.iter().rev().filter(|(k, _, _)| !self.overrides.contains_key(k)).map(|&(k, n, i)| (k, (0..n).filter(|&j| j as i64 != i).collect())).collect();
             let maxd = todo.iter().map(|(_, a)| a.len()).max().unwrap_or(0);
-            let mut queue: Vec<(Dkey, usize, Option<(Dkey, Option<usize>)>)> = Vec::new();
+            let mut queue: Vec<BtEntry> = Vec::new();
             for d in 0..maxd {
                 for (k, alts) in &todo {
                     if d < alts.len() {

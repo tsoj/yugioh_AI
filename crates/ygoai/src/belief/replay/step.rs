@@ -70,7 +70,7 @@ pub fn other<E: std::fmt::Display>(e: E) -> RErr {
 }
 
 /// Where every card is: id -> (player, location, index, code) (read_guided._where).
-pub fn where_cards(duel: &RDuel) -> indexmap::IndexMap<u32, (u32, u32, u32, u32)> {
+pub fn where_cards(duel: &RDuel) -> Where {
     duel.all_cards().into_iter().filter(|e| e[3] == 0 && e[5] != 0).map(|e| (e[5], (e[0], e[1], e[2], e[4]))).collect()
 }
 
@@ -161,18 +161,15 @@ impl BeliefReplay {
             }
             return;
         }
-        if self.logged_steps.is_some() {
+        let pos = self.pos;
+        if let Some(steps) = self.logged_steps.as_mut() {
             let reads = duel.read_log(true);
-            let w = where_cards(duel);
-            let pos = self.pos;
-            self.logged_steps.as_mut().unwrap().push((pos, reads, w));
+            steps.push((pos, reads, where_cards(duel)));
         }
-        if self.suspect_log.is_some() {
+        if let Some(log) = self.suspect_log.as_mut() {
             let reads = duel.read_log(true);
-            if self.pos >= self.suspect_log.as_ref().unwrap().from {
-                let w = where_cards(duel);
-                let pos = self.pos;
-                self.suspect_log.as_mut().unwrap().steps.push((pos, reads, w));
+            if pos >= log.from {
+                log.steps.push((pos, reads, where_cards(duel)));
             }
         }
     }
@@ -484,9 +481,12 @@ impl BeliefReplay {
                     // (the viewer's answer was invalid in the real game too)
                     continue;
                 }
-                if matches!(m, Msg::Retry {}) && self.lenient && self.depth == 0 && answered.is_some() {
+                if matches!(m, Msg::Retry {})
+                    && self.lenient
+                    && self.depth == 0
+                    && let Some(a) = answered.as_ref()
+                {
                     // (lenient: the core asks again; another answer next time)
-                    let a = answered.as_ref().unwrap();
                     let r = answered_resp.as_ref().map(resp_sig).unwrap_or_default();
                     self.lenient_rejected.insert((prompt_sig(a), r));
                     self.lenient_skips += 1;
