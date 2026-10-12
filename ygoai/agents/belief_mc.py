@@ -1,18 +1,16 @@
 """Flat Monte Carlo search on a reconstructed belief state.
 
 At every important decision the agent reconstructs a complete duel from its
-own observations (belief replay), then evaluates each candidate response by
-forking the process, applying the response and playing the game forward with
-a randomized greedy policy for both players. The response with the best
-average evaluation is played. This is deliberately simple; it demonstrates
-the pipeline observation stream -> belief duel -> fork() based search.
+own observations (belief replay), then evaluates each candidate response on a
+copy of that duel, applying the response and playing the game forward with a
+randomized greedy policy for both players. The response with the best average
+evaluation is played. This is deliberately simple; it demonstrates the pipeline
+observation stream -> belief duel -> search.
 """
 
 from __future__ import annotations
 
-import os
 import random
-import struct
 import time
 
 from ..actions import battle_options, encode, idle_options
@@ -37,8 +35,8 @@ _NEURAL = None
 
 
 def _neural_completion():
-    """The learned deck models, in their own process (this one stays small: its
-    probes fork it), else the corpus completion (e.g. without PyTorch)."""
+    """The learned deck models, in their own process (shared by the agents of a run: PyTorch and
+    the models are large), else the corpus completion (e.g. without PyTorch)."""
     global _NEURAL
     if _NEURAL is None:
         try:
@@ -102,10 +100,10 @@ class BeliefMCAgent(Agent):
         self.approximate = 0  # (searches on a best-effort reconstruction)
 
     def warm_up(self) -> None:
-        from ..belief import agent, flow  # noqa: F401 - (the replay's modules: scipy, ...)
+        from ..belief import agent  # noqa: F401
         from ..carddb import default_db
         from ..core import Duel
-        Duel((0, 0, 0, 0), None, default_db()).close()  # (compiles the utility scripts)
+        Duel((0, 0, 0, 0), None, default_db()).close()  # (loads the card database)
 
     def start(self, player: int, init: dict) -> None:
         super().start(player, init)
@@ -132,8 +130,7 @@ class BeliefMCAgent(Agent):
     def _search(self, prompt: dict, cands: list[dict]) -> dict | None:
         t0 = time.monotonic()
         budget = self._budget()
-        # (from the previous decision's reconstruction: only the new part needs work;
-        # the duel belongs to self._belief)
+        # (from the previous decision's reconstruction: only the new part needs work)
         br, duel = self._belief.reconstruct(self.items)
         if duel is None:
             self.failures += 1
@@ -151,8 +148,6 @@ class BeliefMCAgent(Agent):
         self.approximate += br.approximate
         from ..observe import to_core_response
         core_prompt = getattr(br, "final_prompt", None) or prompt
-        # (the duel stays as it is, the search runs in forks: the next decision's
-        # reconstruction goes on from it, see AgentBelief)
         core_cands = [to_core_response(core_prompt, self.player, c) for c in cands]
         k = self._select(duel, core_prompt, core_cands, t0, budget)
         return None if k is None else cands[k]
@@ -190,33 +185,14 @@ class BeliefMCAgent(Agent):
         return max(tried, key=lambda k: totals[k] / counts[k])
 
     def _rollout(self, duel, prompt: dict, cand: dict, seed: int) -> float:
-        """Forks (or copies the duel, where the engine can: the Rust engine), plays `cand` and
-        continues greedily; returns the evaluation."""
-        if hasattr(duel, "clone"):
-            copy = duel.clone()
-            try:
-                return self._play_out(copy, prompt, cand, seed)
-            except Exception:  # noqa: BLE001 - (as a failed forked rollout)
-                return -1.0
-            finally:
-                copy.close()
-        rfd, wfd = os.pipe()
-        pid = os.fork()
-        if pid == 0:
-            os.close(rfd)
-            value = -1.0
-            try:
-                value = self._play_out(duel, prompt, cand, seed)
-            except BaseException:
-                value = -1.0
-            finally:
-                os.write(wfd, struct.pack("<d", value))
-                os._exit(0)
-        os.close(wfd)
-        data = os.read(rfd, 8)
-        os.close(rfd)
-        os.waitpid(pid, 0)
-        return struct.unpack("<d", data)[0] if len(data) == 8 else -1.0
+        """Plays `cand` on a copy of the duel and continues greedily; returns the evaluation."""
+        copy = duel.clone()
+        try:
+            return self._play_out(copy, prompt, cand, seed)
+        except Exception:  # noqa: BLE001 - (a broken line: the worst value)
+            return -1.0
+        finally:
+            copy.close()
 
     def _play_out(self, duel, prompt: dict, cand: dict, seed: int) -> float:
         me = self.player

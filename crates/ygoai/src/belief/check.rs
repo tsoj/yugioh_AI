@@ -29,6 +29,8 @@ pub struct CheckResult {
     pub end_ignored: bool,
     /// the reconstruction ran out of time
     pub timeout: bool,
+    /// the divergence's two sides, when it ended in one: {"expected", "got", "first_difference"}
+    pub details: serde_json::Map<String, serde_json::Value>,
 }
 
 fn err_text(e: &RErr) -> String {
@@ -90,6 +92,16 @@ pub fn check_prefix(
         }
         Err(e) => {
             res.error = err_text(&e);
+            if let RErr::Div(d) = &e {
+                let (exp, got) = (d.expected.as_ref().and_then(|x| x.dict()), d.got.as_ref().and_then(|x| x.dict()));
+                if let (Some(x), Some(y)) = (&exp, &got)
+                    && let Some(diff) = crate::belief::replay::util::first_difference(x, y, "")
+                {
+                    res.details.insert("first_difference".into(), diff.into());
+                }
+                res.details.insert("expected".into(), exp.unwrap_or_default());
+                res.details.insert("got".into(), got.unwrap_or_default());
+            }
             res.timeout = matches!(&e, RErr::Other(s) if s == "timeout");
             if let RErr::Div(d) = &e
                 && ends_in_win
@@ -108,6 +120,7 @@ pub fn check_prefix(
                     res.stage = "done".into();
                     res.end_ignored = true;
                     res.error.clear();
+                    res.details.clear();
                     br = retry;
                 } else {
                     br.log = retry.log.take();

@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Generates ygoai/constants_gen.py from ygopro-core's ocgapi_constants.h."""
+"""Generates ygoai/constants_gen.py from ygopro-core's ocgapi_constants.h (the oracle's source, the
+submodule rust/oracle/ygopro-core: `git -C rust submodule update --init oracle/ygopro-core`)."""
 
 import re
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-HEADER = ROOT / "external" / "ygopro-core" / "ocgapi_constants.h"
-EXTRA_HEADERS = [ROOT / "external" / "ygopro-core" / "common.h"]
+HEADER = ROOT / "rust" / "oracle" / "ygopro-core" / "ocgapi_constants.h"
+EXTRA_HEADERS = [ROOT / "rust" / "oracle" / "ygopro-core" / "common.h"]
 OUT = ROOT / "ygoai" / "constants_gen.py"
 
 DEFINE_RE = re.compile(r"^\s*#define\s+([A-Z_][A-Z0-9_]*)\s+(.+?)\s*(?://.*)?$")

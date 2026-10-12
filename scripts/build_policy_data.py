@@ -23,11 +23,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import pickle
 import sys
 from pathlib import Path
 
-os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")  # (the workers fork per decision, see _Decisions)
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")  # (many worker processes)
 
 import numpy as np
 
@@ -66,37 +65,19 @@ class _Decisions(Observer):
         target = self.targets.get(i)
         if target is None or self.searched_only and prompt["type"] not in SEARCHED:
             return
-        # (the queries in a forked process: reading the state changes the core's memory
-        # allocations, and with them where the core iterates by address, so the game
-        # could go on differently than it was played)
-        r, w = os.pipe()
-        pid = os.fork()
-        if pid == 0:
-            os.close(r)
-            data = b""
-            try:
-                snap = capture(duel)
-                if self.player_view:
-                    seen, shown = view(snap, me), filter_prompt(prompt, me)
-                    chosen = target
-                else:
-                    seen, shown = snap, prompt
-                    chosen = to_core_response(prompt, me, target)
-                cands = candidates(shown)
-                if chosen in cands and len(cands) > 1:
-                    data = pickle.dumps((F.position(seen, me, _code), F.actions(shown, cands, seen, me, hint, _code),
-                                         cands.index(chosen), V.features(snap, me)))
-            finally:
-                with os.fdopen(w, "wb") as f:
-                    f.write(data)
-                os._exit(0)
-        os.close(w)
-        with os.fdopen(r, "rb") as f:
-            data = f.read()
-        os.waitpid(pid, 0)
-        if data:
-            (cards, scalars), acts, chosen, vfeat = pickle.loads(data)
-            self.rows.append((me, cards, scalars, acts, chosen, vfeat))
+        # (the queries on a copy: the game goes on exactly as it was played)
+        snap = capture(duel.clone())
+        if self.player_view:
+            seen, shown = view(snap, me), filter_prompt(prompt, me)
+            chosen = target
+        else:
+            seen, shown = snap, prompt
+            chosen = to_core_response(prompt, me, target)
+        cands = candidates(shown)
+        if chosen in cands and len(cands) > 1:
+            cards, scalars = F.position(seen, me, _code)
+            acts = F.actions(shown, cands, seen, me, hint, _code)
+            self.rows.append((me, cards, scalars, acts, cands.index(chosen), V.features(snap, me)))
 
 
 def decisions(task):

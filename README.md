@@ -1,9 +1,11 @@
 # yugioh_AI_2
 
-A testing framework for Yu-Gi-Oh! AIs built on [ygopro-core](https://github.com/edo9300/ygopro-core)
-(the EDOPro rules engine), with the card scripts from
-[ProjectIgnis/CardScripts](https://github.com/ProjectIgnis/CardScripts) and the card database
-from [ProjectIgnis/BabelCDB](https://github.com/ProjectIgnis/BabelCDB).
+A testing framework for Yu-Gi-Oh! AIs built on a Rust port of
+[ygopro-core](https://github.com/edo9300/ygopro-core) (the EDOPro rules engine) and of the card
+scripts from [ProjectIgnis/CardScripts](https://github.com/ProjectIgnis/CardScripts): the submodule
+`rust/` ([ygopro-core-rust](https://github.com/tsoj/ygopro-core-rust)), which plays message for
+message like the patched C++ core and copies a duel in microseconds. The card database comes from
+[ProjectIgnis/BabelCDB](https://github.com/ProjectIgnis/BabelCDB).
 
 It has three parts:
 
@@ -11,9 +13,9 @@ It has three parts:
    counterpart): plays games between AIs, gives every AI exactly the information its player is
    allowed to have, records games, and reports W/D/L, Elo and SPRT results.
 2. **Belief replay**: a library for AIs with imperfect information. From a player's observations
-   alone it reconstructs a complete ygopro-core duel that is indistinguishable from the real one
-   from that player's point of view, so search algorithms (MCTS, alpha-beta, ...) can simulate
-   ahead, e.g. with `fork()`.
+   alone it reconstructs a complete duel that is indistinguishable from the real one from that
+   player's point of view, so search algorithms (MCTS, alpha-beta, ...) can simulate ahead on
+   copies of it.
 3. **Consistency tests** for the belief replay: random and greedy AIs play thousands of games
    with human deck lists; for every game, both players and several cut points, the
    reconstruction must reproduce the player's observation stream exactly.
@@ -21,12 +23,16 @@ It has three parts:
 ## Setup
 
 ```sh
-git submodule update --init --recursive   # ygopro-core (+lua), CardScripts, BabelCDB
-scripts/build_core.sh                      # builds build/libocgcore.so (patched core)
-python3 scripts/gen_constants.py           # only needed after updating ygopro-core
+git submodule update --init external/CardScripts external/BabelCDB external/HiGHS rust
+# the Python binding of the engine and the belief replay (ygoai_rs/), into the venv below
+cd ygoai_rs && CARGO_TARGET_DIR=../rust/target VIRTUAL_ENV=../.venv ../.venv/bin/maturin develop --release
 ```
 
-Requirements: a C++17 compiler, meson, ninja, Python >= 3.11 with numpy and scipy. The learned deck
+Requirements: Rust (stable), cmake (HiGHS is built from `external/HiGHS`), a C++ compiler, Python >=
+3.11 with numpy and maturin. The Rust code is one Cargo workspace (`Cargo.toml`): the ygoai crate
+(`crates/ygoai`: messages, observations, the arbiter `ygoai-match`, the agents' search, the belief
+replay), the binding (`ygoai_rs`) and HiGHS (`crates/highs`). The C++ core is only the Rust engine's
+test oracle, in `rust/oracle/` (not fetched by default; see rust/README.md). The learned deck
 completion (`--completion neural`, ygoai/belief/neural_completion.py) also needs PyTorch and the models in
 `download_human_decks/` (`deck_existence.pt`, `deck_counts.pt`); the project environment is made with uv:
 
@@ -95,18 +101,15 @@ python3 scripts/compare_runs.py runs/check.jsonl runs/retry.jsonl
 python3 scripts/index_games.py -n 1000 --start 1000 -o runs/index.jsonl
 python3 scripts/check_belief.py --index runs/index.jsonl --tags shuffle_set_card,toss_coin -o runs/t.jsonl
 
-# look at one reconstruction in detail (--max-restarts N stops after N repairs)
+# look at one reconstruction in detail: its repairs, the divergence and the real game around it
 python3 scripts/debug_belief.py SEED VIEWER [--cut 0.5]   # (--cut -2: the end of turn 2)
-
-# which hidden card or copy a failed reconstruction has wrong: the hidden cards the
-# engine read before the first divergence (core read log), and trial swaps/codes
-python3 scripts/suggest_repair.py SEED VIEWER [--cut 0.5] [--pairs ...] [--decks ...]
 
 # leak check: does the (secret) card creation order show in the observations?
 python3 scripts/diff_creation.py -n 1000 --start 5000
 
 # unit and integration tests
 python3 -m unittest discover tests
+cargo test --release -p ygoai                    # (with CARGO_TARGET_DIR=rust/target)
 ```
 
 ## The engine protocol
@@ -132,9 +135,13 @@ is the time the player has left; the time the response takes is subtracted, then
 added, and below zero the player loses on time. `python -m ygoai.engine greedy` runs a built-in agent as an engine, which doubles as a
 minimal example.
 
-## How the belief replay works (`ygoai/belief/`)
+## How the belief replay works (`crates/ygoai/src/belief/`)
 
-* `tracker.py` follows every card slot of both players through the observation stream,
+The belief replay is Rust (it was Python, `ygoai/belief/`, until the port; the module names are the
+same). Python uses it through `ygoai_rs` (`ygoai/belief/check.py`, `ygoai/belief/agent.py`); the deck
+completions stay Python where they need PyTorch (the neural one is called from Rust).
+
+* `tracker.rs` follows every card slot of both players through the observation stream,
   mirroring the core's pile semantics exactly. Unknown identities are variables; a shuffle turns
   the cards of a pile into a *pool* whose members are assigned to the new slots in an unknown
   way. Everything the stream implies becomes a constraint of this model:
@@ -153,21 +160,22 @@ minimal example.
     * the hand card the viewer's own command summons or Sets is the card that moves to the
       field next, even if the hand is shuffled in between (e.g. after a reveal as a cost);
     * cards kept revealed in a hand stay revealed through a shuffle.
-* `flow.py` solves that model exactly: every slot carries one card code and every shuffle
+* `flow.rs` solves that model exactly: every slot carries one card code and every shuffle
   conserves the multiset of codes, which makes it an integer multi-commodity flow over the DAG
-  of shuffles (a few thousand variables, solved by HiGHS through `scipy.optimize.milp`; no search
-  budget, no random restarts). Unknown opponent cards stay typed wildcards ("some spell/trap")
+  of shuffles (a few thousand variables, solved by HiGHS; no search budget, no random
+  restarts). Unknown opponent cards stay typed wildcards ("some spell/trap")
   until a `DeckCompletion` fills them (effect-less vanilla cards, or the corpus-based
   `CorpusCompletion` which uses the most similar human decks). Identity constraints enter the
   model where they imply something about codes (a slot has the code of the card it is known to
   be, or its code comes from a card other than the one it is known not to be); copy identity is
   then fixed by matching claims to members per shuffle (copies nothing tells apart are
   interchangeable), and the duel is built by card id (deck order and every shuffle result).
-* `replay.py` creates a duel from that hypothesis and replays it in lockstep with the stream,
-  using a small core extension (`core_ext/`) to force shuffle results, coin/dice results and
-  random selections. The viewer's prompts are answered with the recorded responses; the
-  opponent's hidden decisions are inferred from what the viewer saw next (`infer.py`), and
-  ambiguous ones are verified by probing candidates in forked processes.
+* `replay/` creates a duel from that hypothesis and replays it in lockstep with the stream,
+  using the engine's extension hooks (`rust/ygo-core/src/ext.rs`) to force shuffle results,
+  coin/dice results and random selections. The viewer's prompts are answered with the recorded
+  responses; the opponent's hidden decisions are inferred from what the viewer saw next
+  (`infer.rs`), and ambiguous ones are verified by probing candidates on copies of the replay and
+  the duel.
 * Opponent effects that the stream shows being activated are made activatable regardless of
   hidden costs and targets (e.g. a negated search whose target was never revealed), but only
   from the start of the phase in which they were activated until the activation, and only if
@@ -178,7 +186,7 @@ minimal example.
   the stream after the chain tells in which window the opponent activated.
 * The goal is a single pass. When the replay still cannot reproduce an observation it repairs
   the hypothesis and restarts; the check scripts report how many reconstructions needed no
-  restart at all. The repairs (see the docstring of `replay.py`):
+  restart at all. The repairs (see `replay/mod.rs`):
   * force an effect the stream shows (also one a continuous trap was activated together with);
   * assume a card of a certain kind or code where the opponent took a hidden card;
   * let a hidden card satisfy every filter during one step, or, when the opponent chose an
@@ -203,8 +211,8 @@ minimal example.
   The main line keeps the positions of the latest step, which most repairs need, so finding a
   repair takes no restart of its own.
 
-  When these repairs give up, a last resort (`read_guided.py`): replayed without repairs, the
-  core's read log names the hidden cards the engine read just before the first divergence;
+  When these repairs give up, a last resort (`read_guided.rs`): replayed without repairs, the
+  engine's read log names the hidden cards the engine read just before the first divergence;
   each is tried as another copy of its name in the same place (copies differ in history: which
   one was revealed, drawn, used) or with other codes that differ in the properties it read,
   each candidate a whole replay with the usual repairs. It covers the wrong hidden card no rule
@@ -218,7 +226,7 @@ minimal example.
 
 An AI keeps its observation stream as a list of items `("msg", message)`, `("prompt", prompt,
 state)` and `("response", response)`, exactly as the engine protocol delivers them. At a
-decision it reconstructs the duel and searches from it with `fork()`:
+decision it reconstructs the duel and searches from it on copies (`duel.clone()`, microseconds):
 
 ```python
 from ygoai.belief.agent import AgentBelief
@@ -228,22 +236,22 @@ from ygoai.observe import to_core_response
 
 belief = AgentBelief(player, init, completion=neural_completion())   # one per game
 ...
-replay, duel = belief.reconstruct(items)   # a live duel, waiting for this player's response
-pid = os.fork()                            # e.g. one child per candidate response
-if pid == 0:
-    core_prompt = replay.final_prompt   # (the core's version of the prompt)
-    duel.set_response(encode(core_prompt, to_core_response(core_prompt, player, candidate)))
-    ...                                    # simulate on, evaluate, report through a pipe
+replay, duel = belief.reconstruct(items)   # a duel waiting for this player's response (yours to keep)
+core_prompt = replay.final_prompt          # (the core's version of the prompt)
+for candidate in candidates:
+    copy = duel.clone()
+    copy.set_response(encode(core_prompt, to_core_response(core_prompt, player, candidate)))
+    ...                                    # simulate on, evaluate
 ```
 
 `AgentBelief` reconstructs decision by decision: the previous consistent duel goes on with the
-new observations (`BeliefReplay.extend`; the viewer's own draws and hand shuffles are arranged
+new observations (`BeliefReplay::extend`; the viewer's own draws and hand shuffles are arranged
 just in time, as a hypothesis of the longer stream would arrange them); when that runs into a
 mismatch, a full replay inherits the previous one's repairs and decisions
-(`BeliefReplay.inherit`); when that fails too, one from scratch. The duels belong to the
-`AgentBelief` (search in forks, never change or close them). When no consistent reconstruction
-exists, `replay.approximate` is set: the best effort re-aligned with the stream, its public state
-re-synchronized with what the player saw at each of its Idle/Battle commands (`belief/sync.py`).
+(`BeliefReplay::inherit`); when that fails too, one from scratch. The duel it returns is a copy,
+the caller's to change. When no consistent reconstruction exists, `replay.approximate` is set: the
+best effort re-aligned with the stream, its public state re-synchronized with what the player saw
+at each of its Idle/Battle commands (`belief/sync.rs`).
 
 `ygoai/agents/belief_mc.py` is a complete (deliberately simple) example: flat Monte Carlo with
 greedy rollouts on the reconstructed duel. `scripts/check_belief.py --agent-sequence K` checks
@@ -321,7 +329,7 @@ Open design questions (from the remaining failures):
 * **Hidden decisions with late consequences.** Opponent decisions are inferred from the next
   visible messages and verified by short probes; when the consequence only shows much later
   (e.g. after a whole chain resolved), a probe can accept a wrong choice. A backtracking search
-  over hidden decisions (with fork() checkpoints) would handle these uniformly.
+  over hidden decisions (with duel copies as checkpoints) would handle these uniformly.
 * **Hidden option availability.** Some script-level choices (e.g. which effect of a card can be
   chosen) depend on hidden cards; forcing activation and forcing a card to satisfy a filter
   cover the common cases, but not options built inside a script.
@@ -371,7 +379,7 @@ whenever something asks (e.g. a hidden card's activation check reading Levels), 
 "becomes 2" before or after a "+2 in the Main Phase" depended on the opponent's hidden cards. The
 patched core checks the conditions at fixed points instead (every adjustment, in id order, see
 `field::refresh_effect_conditions`); only these checks give new timestamps, as the official rules
-do when an effect starts applying anew (`tests/test_core_rules.py`). And conversely, a card kept revealed in the hand now
+do when an effect starts applying anew (`crates/ygoai/tests/core_rules.rs`). And conversely, a card kept revealed in the hand now
 stays visible through hand shuffles (the shuffle message marks face-up cards), as it would at the
 table.
 
@@ -394,8 +402,9 @@ that order); these single events are raised in location order now too.
 
 ## Changes to ygopro-core
 
-`core_ext/ocgcore.patch` (applied by `scripts/build_core.sh` to a copy of the submodule) plus
-`core_ext/ocgext.cpp`:
+The Rust engine reproduces ygopro-core with these changes, which were made to the C++ core first:
+`rust/oracle/ocgcore.patch` and `rust/oracle/ocgext.cpp` (the oracle the Rust engine is tested
+against; `rust/oracle/build.sh`):
 
 * Hooks for forcing outcomes, all no-ops unless the `OCG_Ext*` API is used: shuffle results
   (deck, hand, extra, `Duel.ShuffleSetCard` and the zone assignment of a group SSet), coin and
@@ -408,8 +417,9 @@ that order); these single events are raised in location order now too.
 * Extra API: reorder a pile (by code or by card id), force shuffle results by card id, swap two
   cards within a pile, read card ids per location (or of every location of both players in
   one call: `OCG_ExtGetAllCards`), clear the forced activations.
-* `core_ext/lua/ygoai_overrides.lua`, loaded after `utility.lua`: script helpers with exactly
-  the same results, but faster. `aux.SelectUnselectGroup`'s search visited every group of k
+* (in the oracle) `rust/oracle/ygoai_overrides.lua`, loaded after `utility.lua`: script helpers
+  with exactly the same results, but faster (the Rust engine has its own faster versions, e.g. a
+  memoized Fusion material search). `aux.SelectUnselectGroup`'s search visited every group of k
   cards in up to k! orders (Rainbow Dark Dragon's check of 7 DARK monsters with different
   names took seconds at every idle prompt); it now remembers per group whether the rest can
   complete it. Likewise the Fusion material search for "N materials + X or more"
@@ -420,8 +430,8 @@ that order); these single events are raised in location order now too.
   `YGOAI_NO_OVERRIDES=1` loads the original helpers: 780 games compared (seeds 1000-1099,
   5000-5099, 6000-6099, 6900-6999 and the whole opening book) are identical, except one game
   from the point where the original ran into the budget.
-* `core_ext/lua/cards/`: corrected copies of card scripts with bugs, used instead of the
-  CardScripts originals (e.g. Oracle of the Herald imposed a chain limit when its activation
+* `lua_fixes/`: corrected copies of card scripts with bugs, used instead of the CardScripts
+  originals (the Rust cards are translated from them; the belief's script scans read them) (e.g. Oracle of the Herald imposed a chain limit when its activation
   was only checked, so a set copy kept the opponent from responding to unrelated events).
 * A card entering the hand, deck or Extra Deck forgets its position and activation history
   (JUST_POS, CONTINUOUS_POS, ATTACK_CANCELED, ACT_FROM_HAND status bits): it is a new object by
@@ -447,8 +457,8 @@ that order); these single events are raised in location order now too.
   moments than the game itself, so observing the state could change what happened next (about
   1 in 25 games with the upstream core diverged when every prompt queried levels). Now only the
   checks at fixed points give new timestamps (see the information leaks above).
-* A step that runs more than 10^9 Lua instructions raises a script error instead of never
-  returning: some scripts take exponential time in rare situations (e.g.
+* (in the oracle) A step that runs more than 10^9 Lua instructions raises a script error
+  instead of never returning: some scripts take exponential time in rare situations (e.g.
   `aux.SelectUnselectGroup` over 24 cards whose condition no subset can meet any more), which
   would hang a match. The count is deterministic, so replays stop at the same point.
 * A fix for an upstream crash: `field::reset_phase`/`reset_chain` iterated a pointer-keyed hash
@@ -457,24 +467,30 @@ that order); these single events are raised in location order now too.
   addresses. They now iterate a snapshot sorted by effect id.
 
 The command line tools run games in a crash tolerant process pool (`ygoai/parallel.py`): a
-worker that dies is reported with its seed instead of hanging the run. `scripts/build_core.sh`
-replaces the library atomically, so running test processes are not affected by a rebuild.
-
-Known upstream issue: `c87257460.lua` (Allure Queen LV3) raises Lua errors with the current
-CardScripts; games using it still run.
+worker that dies is reported with its seed instead of hanging the run. Long runs (the suite,
+SPRTs) work from snapshots of the code and the binding (`scripts/snapshot.py`), so a rebuild
+during a run does not affect it.
 
 ## Layout
 
 ```
-core_ext/      patch + extension for ygopro-core (forced outcomes, reordering, forcing)
-external/      submodules: ygopro-core, CardScripts, BabelCDB
+rust/          submodule: the engine (ygo-core), the cards (ygo-cards), the differential tester
+               (ygo-diff) and its C++ oracle (oracle/)
+crates/ygoai/  the ygoai crate: messages, observations, actions, state views, games and records,
+               the arbiter (bin ygoai-match), agents and alpha-beta search, the belief replay
+crates/highs/  HiGHS (external/HiGHS) for the belief's flow model
+ygoai_rs/      the Python binding (engine, belief replay, search)
+external/      submodules: CardScripts, BabelCDB, HiGHS
+lua_fixes/     corrected card scripts
 scripts/       command line tools
-tests/         unit and integration tests
+tests/         unit and integration tests (baselines/: the belief suite's)
 ygoai/         the Python package
-  core.py        ctypes binding          messages.py   message parser
+  core.py        the engine (ygoai_rs)  messages.py   message parser
   actions.py     responses              observe.py    per-player filtering
   state.py       state snapshots        game.py       arbiter, records, replays
   protocol.py    engine protocol        match.py      matches, Elo, SPRT
-  agents/        AIs (random, summon_attack, heuristic,     belief/       tracker, replay, inference
-                 greedy, setter, mixed, belief_mc, alphabeta)
+  agents/        AIs (random, summon_attack, heuristic,     belief/       checks, agent belief, deck
+                 greedy, setter, mixed, belief_mc,                        completions, script scans
+                 alphabeta, puct, policy)
+  nn/            policy/value networks
 ```

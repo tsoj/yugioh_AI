@@ -24,7 +24,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import pickle
 import random
 import sys
 from pathlib import Path
@@ -190,23 +189,8 @@ class _Game(Observer):
         if not kept and not (self.items and self.items[-1][5]):
             self.items.append([prompt, None, None, None, [], False])
             return
-        r, w = os.pipe()
-        pid = os.fork()
-        if pid == 0:
-            os.close(r)
-            data = b""
-            try:
-                snap = capture(duel)
-                data = pickle.dumps((_rows(snap), _scalars(snap)))
-            finally:
-                with os.fdopen(w, "wb") as f:
-                    f.write(data)
-                os._exit(0)
-        os.close(w)
-        with os.fdopen(r, "rb") as f:
-            data = f.read()
-        os.waitpid(pid, 0)
-        rows, scalars = pickle.loads(data) if data else (None, None)
+        snap = capture(duel.clone())  # (the queries on a copy: the game goes on exactly as it was played)
+        rows, scalars = _rows(snap), _scalars(snap)
         self.items.append([prompt, None, rows, scalars, [], kept])
 
     def response(self, player: int, response: dict) -> None:

@@ -5,12 +5,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 EXTERNAL = ROOT / "external"
-CORE_LIB = Path(os.environ.get("YGOAI_CORE_LIB", ROOT / "build" / "libocgcore.so"))
 CARD_SCRIPTS_DIR = Path(os.environ.get("YGOAI_SCRIPTS", EXTERNAL / "CardScripts"))
-# our replacements of script helpers (same results, faster), loaded after utility.lua
-OVERRIDE_SCRIPTS = ROOT / "core_ext" / "lua" / "ygoai_overrides.lua"
-# corrected card scripts (bugs in CardScripts), used instead of the originals
-FIXED_CARD_SCRIPTS_DIR = ROOT / "core_ext" / "lua" / "cards"
+# corrected card scripts (bugs in CardScripts), read instead of the originals (the Rust cards are
+# translated from them; the belief's script scans read them)
+FIXED_CARD_SCRIPTS_DIR = ROOT / "lua_fixes"
 BABEL_CDB_DIR = Path(os.environ.get("YGOAI_CDB_DIR", EXTERNAL / "BabelCDB"))
 DECKS_DIR = Path(os.environ.get("YGOAI_DECKS", ROOT / "download_human_decks" / "decks"))
 # decks downloaded later (newer than the corpus): test games only, the corpus stays as is

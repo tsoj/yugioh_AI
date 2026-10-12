@@ -3,7 +3,7 @@
 
   scripts/sprt.py NEW [BASE] [--agent alphabeta] [--tc 30+0.3] [--elo 0 25]
 
-Each ref's code (ygoai/, scripts/, core_ext/, its core library) is exported to
+Each ref's code (ygoai/, scripts/, lua_fixes/, its Rust binding) is exported to
 build/snapshots/engine-<sha>; the engines run from there as engine protocol
 processes (python -m ygoai.engine AGENT), so both versions play in one match
 (scripts/match.py: random deck pairs from the corpus, both seats, Fischer clock

@@ -12,22 +12,18 @@ A simulation walks down by pUCT (Q + C_PUCT * P * sqrt(visits) / (1 + n), Q
 normalized to [0, 1] by the least and greatest values in the tree as in MuZero:
 the win probabilities of an evaluation stay close to one half; an unvisited
 candidate's Q is its node's value minus FPU_REDUCTION), and at the first
-candidate without a node it forks the search process, replays the path from the
-root (the core is deterministic for identical call histories) and reports the new
+candidate without a node it copies the root's duel, replays the path from the root
+(the engine is deterministic for identical call histories) and reports the new
 node: its player, candidates, priors and value (the handmade evaluation as a win
 probability: sigmoid(VALUE_K * evaluate), VALUE_K fitted on the SPRT games'
 results), or the result if the game ended. The value is backed up along the path,
 for each node's player. The move: the root's most visited candidate.
-
-It runs in alphabeta's search server (search_server.py), whose mirror it searches.
 """
 
 from __future__ import annotations
 
-import gc
 import math
 import os
-import pickle
 import time
 
 from ..actions import encode
@@ -100,24 +96,24 @@ def _policy_net():
         from ..carddb import default_db
         from .policy_agent import DEFAULT_MODEL, load_policy
         _policy = load_policy(str(DEFAULT_MODEL))
-        # (every card's static features now, before the forks: each would compute them
-        # again from the card database)
+        # (every card's static features now, before the first search)
         _policy._static(sorted(default_db().cards))
     return _policy
 
 
 class PuctAgent(AlphaBetaAgent):
     name = "puct"
-    server_agent = ("ygoai.agents.puct", "PuctAgent")
-
-    @staticmethod
-    def warm_server() -> None:
-        _policy_net()
 
     def warm_up(self) -> None:
         super().warm_up()
-        if self._server is None:
-            _policy_net()
+        _policy_net()
+
+    def _select(self, duel, core_prompt: dict, core_cands: list[dict], t0: float, budget: float | None) -> int | None:
+        hint = self.fallback.hint  # (the select hint: the search answers this selection, not the fallback)
+        self.fallback.hint = None
+        best, done = self.search(duel, core_prompt, core_cands, t0, budget, hint)
+        self.depths.append(done)
+        return best
 
     def search(self, duel, core_prompt: dict, core_cands: list[dict], t0: float,
                budget: float | None, hint: int | None = None) -> tuple[int, int]:
@@ -126,51 +122,47 @@ class PuctAgent(AlphaBetaAgent):
             a.player = p
         self._policies = policies
         policies[core_prompt["player"]].hint = hint
-        gc.freeze()  # (the forks never collect the inherited objects: no copies of their pages)
-        try:
-            info = self._simulate(duel, core_prompt, [], core_cands)
-            if info is None or info[0] != "leaf":
-                return 0, 0
-            _, player, cands, prior, value0 = info
-            root = _Node(player, core_cands, prior, value0)
-            deadline = None if budget is None else t0 + budget
-            sims = 0 if budget is not None else MAX_SIMULATIONS - SIMULATIONS_NO_CLOCK
-            depth = 0
-            bounds = [math.inf, -math.inf]  # (the least and greatest Q in the tree, for the nodes' players)
-            while sims < MAX_SIMULATIONS:
-                if deadline is not None and time.monotonic() > deadline:
+        info = self._simulate(duel, core_prompt, [], core_cands)
+        if info is None or info[0] != "leaf":
+            return 0, 0
+        _, player, cands, prior, value0 = info
+        root = _Node(player, core_cands, prior, value0)
+        deadline = None if budget is None else t0 + budget
+        sims = 0 if budget is not None else MAX_SIMULATIONS - SIMULATIONS_NO_CLOCK
+        depth = 0
+        bounds = [math.inf, -math.inf]  # (the least and greatest Q in the tree, for the nodes' players)
+        while sims < MAX_SIMULATIONS:
+            if deadline is not None and time.monotonic() > deadline:
+                break
+            sims += 1
+            node, path = root, []
+            while True:
+                k = node.select(bounds)
+                path.append((node, k))
+                child = node.children.get(k)
+                if child is None:
+                    child = self._expand(duel, core_prompt, path)
+                    node.children[k] = child
                     break
-                sims += 1
-                node, path = root, []
-                while True:
-                    k = node.select(bounds)
-                    path.append((node, k))
-                    child = node.children.get(k)
-                    if child is None:
-                        child = self._expand(duel, core_prompt, path)
-                        node.children[k] = child
-                        break
-                    if child.terminal:
-                        break
-                    node = child
-                depth = max(depth, len(path))
-                value0 = child.value0
-                for n, k in path:
-                    n.visits[k] += 1
-                    n.value_sum[k] += value0 if n.player == 0 else 1.0 - value0
-                    q = n.value_sum[k] / n.visits[k]
-                    bounds[0], bounds[1] = min(bounds[0], q), max(bounds[1], q)
-            self.nodes += sims
-            if FINAL == "q" and max(root.visits) > 0:
-                most = max(root.visits)
-                best = max((k for k in range(len(root.cands)) if root.visits[k] >= FINAL_SHARE * most),
-                           key=lambda k: root.value_sum[k] / root.visits[k])
-            else:
-                best = max(range(len(root.cands)),
-                           key=lambda k: (root.visits[k], root.value_sum[k] / max(root.visits[k], 1)))
-            return best, depth
-        finally:
-            gc.unfreeze()
+                if child.terminal:
+                    break
+                node = child
+            depth = max(depth, len(path))
+            value0 = child.value0
+            for n, k in path:
+                n.visits[k] += 1
+                n.value_sum[k] += value0 if n.player == 0 else 1.0 - value0
+                q = n.value_sum[k] / n.visits[k]
+                bounds[0], bounds[1] = min(bounds[0], q), max(bounds[1], q)
+        self.nodes += sims
+        if FINAL == "q" and max(root.visits) > 0:
+            most = max(root.visits)
+            best = max((k for k in range(len(root.cands)) if root.visits[k] >= FINAL_SHARE * most),
+                       key=lambda k: root.value_sum[k] / root.visits[k])
+        else:
+            best = max(range(len(root.cands)),
+                       key=lambda k: (root.visits[k], root.value_sum[k] / max(root.visits[k], 1)))
+        return best, depth
 
     def _expand(self, duel, root_prompt: dict, path: list[tuple]) -> _Node:
         responses = [n.cands[k] for n, k in path]
@@ -184,41 +176,20 @@ class PuctAgent(AlphaBetaAgent):
         return _Node(player, cands, prior, value0)
 
     def _simulate(self, duel, prompt: dict, responses: list[dict], cands: list[dict] | None):
-        """(in a fork) Plays `responses` from the root and reports where they lead:
+        """Plays `responses` from the root on a copy of the duel and reports where they lead:
         ("end", player 0's result) or ("leaf", player, candidates, priors, player 0's
-        win probability); None on an engine error. (On a copy of the duel where the engine can
-        copy one, the Rust engine: the rules' players' state is restored after it, as the fork
-        discards it.)"""
-        if hasattr(duel, "clone"):
-            copy = duel.clone()
-            saved = [(dict(p.activations), p.hint) for p in self._policies]
-            try:
-                return self._play(copy, prompt, responses, cands)
-            except Exception:  # noqa: BLE001 - (a broken line: no report)
-                return None
-            finally:
-                copy.close()
-                for p, (act, hint) in zip(self._policies, saved):
-                    p.activations, p.hint = act, hint
-        r, w = os.pipe()
-        pid = os.fork()
-        if pid == 0:
-            os.close(r)
-            gc.disable()  # (short-lived)
-            data = b""
-            try:
-                data = pickle.dumps(self._play(duel, prompt, responses, cands))
-            except BaseException:  # noqa: BLE001 - (a broken line: no report)
-                data = b""
-            finally:
-                with os.fdopen(w, "wb") as f:
-                    f.write(data)
-                os._exit(0)
-        os.close(w)
-        with os.fdopen(r, "rb") as f:
-            data = f.read()
-        os.waitpid(pid, 0)
-        return pickle.loads(data) if data else None
+        win probability); None on an engine error. (The rules' players' state is restored after
+        it.)"""
+        copy = duel.clone()
+        saved = [(dict(p.activations), p.hint) for p in self._policies]
+        try:
+            return self._play(copy, prompt, responses, cands)
+        except Exception:  # noqa: BLE001 - (a broken line: no report)
+            return None
+        finally:
+            copy.close()
+            for p, (act, hint) in zip(self._policies, saved):
+                p.activations, p.hint = act, hint
 
     def _play(self, duel, prompt: dict, responses: list[dict], cands: list[dict] | None):
         for resp in responses:

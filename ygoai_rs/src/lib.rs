@@ -16,11 +16,17 @@ use ygo_core::ext::{ForcedLoc, FORCED_COIN, FORCED_DICE};
 use ygo_core::script::Scripts;
 
 mod belief;
-mod port;
+mod search;
 
 static SHARED: OnceLock<(Arc<CardDb>, Arc<Scripts>)> = OnceLock::new();
 
 /// Loads the card database (the BabelCDB directory) and the card scripts once per process.
+/// Hashes of the sources the binding was built from: (engine, belief modules) (see build.rs).
+#[pyfunction]
+fn source_hashes() -> (&'static str, &'static str) {
+    (env!("YGOAI_ENGINE_SOURCES"), env!("YGOAI_BELIEF_SOURCES"))
+}
+
 #[pyfunction]
 fn init(cdb_dir: &str) -> PyResult<()> {
     if SHARED.get().is_some() {
@@ -396,8 +402,9 @@ impl RustDuel {
 #[pymodule]
 fn ygoai_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(init, m)?)?;
+    m.add_function(wrap_pyfunction!(source_hashes, m)?)?;
     m.add_class::<RustDuel>()?;
-    port::register(m)?;
+    search::register(m)?;
     belief::register(m)?;
     Ok(())
 }

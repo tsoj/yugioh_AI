@@ -18,7 +18,7 @@ pub fn card_scripts_dir() -> PathBuf {
 
 /// The project's corrected card scripts.
 pub fn fixed_card_scripts_dir() -> PathBuf {
-    root().join("core_ext").join("lua").join("cards")
+    root().join("lua_fixes")
 }
 
 /// The deck corpus ($YGOAI_DECKS, else download_human_decks/decks).

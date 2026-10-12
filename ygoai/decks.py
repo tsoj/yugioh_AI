@@ -9,8 +9,7 @@ from pathlib import Path
 
 from . import constants as C
 from .carddb import CardDB
-from .core import _find_script
-from .paths import DECKS_DIR, ROOT
+from .paths import CARD_SCRIPTS_DIR, DECKS_DIR, FIXED_CARD_SCRIPTS_DIR, ROOT
 
 
 @dataclass
@@ -66,7 +65,14 @@ def card_supported(db: CardDB, code: int) -> bool:
         return False
     vanilla = card.type & C.TYPE_NORMAL and not card.type & (C.TYPE_PENDULUM | C.EXTRA_DECK_TYPES)
     # vanilla monsters have no script
-    return bool(vanilla) or _find_script(f"c{code}.lua") is not None
+    return bool(vanilla) or _has_script(code)
+
+
+def _has_script(code: int) -> bool:
+    """Whether the card has a script (the Rust cards are translated from these)."""
+    name = f"c{code}.lua"
+    return any(p.exists() for p in [FIXED_CARD_SCRIPTS_DIR / name] + [
+        CARD_SCRIPTS_DIR / d / name for d in ("official", "pre-release", "pre-errata", "goat")] + [CARD_SCRIPTS_DIR / name])
 
 
 def normalize(deck: Deck, db: CardDB) -> Deck | None:

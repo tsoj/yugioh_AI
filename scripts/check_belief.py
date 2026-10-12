@@ -18,7 +18,6 @@ import gzip
 import json
 import multiprocessing as mp
 import os
-import random
 import signal
 import sys
 import time
@@ -35,23 +34,11 @@ class Timeout(BaseException):  # not swallowed by check_prefix
 
 
 def _alarm(_signum, frame):
-    if os.getpid() != _main_pid:
-        os._exit(3)  # a forked probe inherited the alarm
-    f = frame
-    while f is not None:
-        if f.f_code.co_name in ("close", "__del__") and f.f_code.co_filename.endswith("core.py"):
-            # (not while a duel is destroyed: an exception between the core's destroy
-            # and forgetting the handle destroys it a second time, a crash)
-            signal.alarm(1)
-            return
-        f = f.f_back
-    # an exception raised inside e.g. an os.fork() callback is ignored: try again
-    # a second later (the task cancels the alarm when it ends)
+    # (an exception raised where Python ignores it, e.g. in a destructor: try again a second
+    # later; the task cancels the alarm when it ends. The Rust replay is not interrupted by it:
+    # it gets the timeout as its deadline)
     signal.alarm(1)
     raise Timeout()
-
-
-_main_pid = os.getpid()
 
 
 _completions: dict = {}  # (per worker process: building one takes a while)
@@ -157,25 +144,10 @@ def _agent_sequence(record, items, seed: int, viewer: int, every: int, timeout: 
 
 
 def run_task(task: tuple) -> list[dict]:
-    """All reconstructions of one game (see _run_task); with YGOAI_ENGINE=tee, a difference
-    between the engines fails the game's cases (and is logged by ygoai/core_tee.py)."""
-    if os.environ.get("YGOAI_ENGINE") != "tee":
-        return _run_task(task)
-    from ygoai.core_tee import TeeMismatch
-    try:
-        return _run_task(task)
-    except TeeMismatch as e:
-        return [{"seed": task[0], "viewer": v, "frac": f, "ok": False, "error": f"engines differ: {e}"}
-                for v, f in task[1]]
-
-
-def _run_task(task: tuple) -> list[dict]:
     """All reconstructions of one game: (seed, [(viewer, cut), ...], ...). The game
     is played once, recording both players' observation streams on the way."""
     seed, cases, mirror_prob, timeout, completion, pairs, decks, book, deck_pair, *opt = task
     every = opt[0] if opt else int(os.environ.get("YGOAI_AGENT_SEQUENCE") or 0)
-    global _main_pid
-    _main_pid = os.getpid()
     signal.signal(signal.SIGALRM, _alarm)
     try:
         record, streams = make_game_streams(seed, mirror_prob, [tuple(p) for p in pairs] if pairs else None,

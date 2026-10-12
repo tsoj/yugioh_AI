@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Is a failing reconstruction a regression? Checks it at older commits.
 
-The case runs in a git worktree (build/bisect-worktree) at each commit tried,
-with that commit's core built there; the card scripts, databases and decks are
-the current ones. If one of the older commits tried passes, the commit that
+The case runs from a snapshot of each commit tried (scripts/snapshot.py: the
+commit's code, with its own build of the Rust binding where its Rust sources
+differ); the card scripts, databases and decks are the current ones. If one of the older commits tried passes, the commit that
 broke the case is searched by bisection between it and the newest failing one.
 
     python3 scripts/bisect_case.py SEED VIEWER FRAC [check_belief flags...]
@@ -22,7 +22,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-WORKTREE = ROOT / "build" / "bisect-worktree"
+sys.path.insert(0, str(ROOT / "scripts"))
+import snapshot  # noqa: E402
 
 
 def git(*args: str, cwd: Path = ROOT) -> str:
@@ -35,18 +36,11 @@ def passes(commit: str, seed: int, viewer: int, frac: float, flags: list[str], t
     or that commit plays another game for the seed, e.g. after a core change: then
     its result says nothing about this case). `game` collects the game's identity
     when empty and is compared with otherwise."""
-    wt = WORKTREE
-    if not wt.exists():
-        git("worktree", "add", "-f", str(wt), commit)
-    git("checkout", "-q", "-f", commit, cwd=wt)
-    core = wt / "external" / "ygopro-core"
-    if core.is_dir() and not core.is_symlink() and not any(core.iterdir()):
-        core.rmdir()
-    if not core.exists():
-        core.symlink_to(ROOT / "external" / "ygopro-core")
-    if subprocess.run(["bash", "scripts/build_core.sh"], cwd=wt, capture_output=True).returncode != 0:
+    try:
+        wt = snapshot.make(f"bisect-{commit[:12]}", commit)
+    except (subprocess.CalledProcessError, OSError):
         return None
-    env = dict(os.environ, YGOAI_CORE_LIB=str(wt / "build" / "libocgcore.so"),
+    env = dict(os.environ, YGOAI_SNAPSHOT=str(ROOT),  # (it is one: no snapshot of the snapshot)
                YGOAI_SCRIPTS=str(ROOT / "external" / "CardScripts"), YGOAI_CDB_DIR=str(ROOT / "external" / "BabelCDB"),
                YGOAI_DECKS=str(ROOT / "download_human_decks" / "decks"),
                YGOAI_NEW_DECKS=str(ROOT / "download_human_decks" / "decks_new"), YGOAI_GAME_CACHE="0")
@@ -82,11 +76,7 @@ def main() -> int:
     ap.add_argument("--back", default="5,15,40,100", help="commits back to try first")
     ap.add_argument("--timeout", type=int, default=180)
     ap.add_argument("--at", default="HEAD", help="the commit the case fails at (default HEAD)")
-    ap.add_argument("--worktree", type=Path, help="the git worktree to use (several bisections at once)")
     args, flags = ap.parse_known_args()  # (the rest: check_belief's flags of the case)
-    global WORKTREE
-    if args.worktree is not None:
-        WORKTREE = args.worktree.resolve()
     args.flags = flags
     commits = git("rev-list", "--first-parent", args.at).split()
     game: dict = {}

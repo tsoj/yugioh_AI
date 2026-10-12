@@ -1,4 +1,4 @@
-"""Integration tests (need build/libocgcore.so, see scripts/build_core.sh)."""
+"""Integration tests (games on the Rust engine through the ygoai_rs binding)."""
 
 import random
 import sys
@@ -7,7 +7,7 @@ import unittest
 from ygoai.agents import GreedyAgent, RandomAgent
 from ygoai.carddb import default_db
 from ygoai.decks import DeckPool
-from ygoai.game import ObservationLog, init_info, new_record, play, replay
+from ygoai.game import ObservationLog, new_record, play, replay
 from ygoai.match import MatchStats
 from ygoai.protocol import EngineProcess
 

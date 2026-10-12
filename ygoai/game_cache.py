@@ -2,8 +2,8 @@
 
 Playing a test game is a large part of a belief check run, and regression runs
 play the same games again and again. A game is determined by its seed, settings
-and decks and by everything the duel and the agents run on: the core library,
-the card database, the card scripts, the Python code that plays and observes
+and decks and by everything the duel and the agents run on: the Rust engine and
+binding sources, the card database, the card scripts, the Python code that plays and observes
 games and a few environment variables. The cache key covers all of them (files
 by content, the many card scripts by size and modification time), so a change
 to any of them plays the games anew. YGOAI_GAME_CACHE=0 turns the cache off.
@@ -24,11 +24,10 @@ import time
 import zlib
 from pathlib import Path
 
-from .paths import BABEL_CDB_DIR, CARD_SCRIPTS_DIR, CORE_LIB, ROOT
+from .paths import BABEL_CDB_DIR, CARD_SCRIPTS_DIR, FIXED_CARD_SCRIPTS_DIR, ROOT
 
 CACHE_DIR = Path(os.environ.get("YGOAI_GAME_CACHE_DIR", ROOT / "build" / "game_cache"))
-_ENV = ("YGOAI_NO_OVERRIDES", "YGOAI_CORE_LIB", "YGOAI_SCRIPTS", "YGOAI_CDB_DIR", "YGOAI_DECKS",
-        "YGOAI_NEW_DECKS")
+_ENV = ("YGOAI_SCRIPTS", "YGOAI_CDB_DIR", "YGOAI_DECKS", "YGOAI_NEW_DECKS")
 _fingerprints: dict[bool, str] = {}
 KEEP = 3  # most recently used fingerprints kept
 _used: set[str] = set()  # fingerprint directories this process has marked as used
@@ -56,10 +55,15 @@ def fingerprint(with_belief: bool = False) -> str:
     if with_belief in _fingerprints:
         return _fingerprints[with_belief]
     h = hashlib.sha256()
-    for path in [CORE_LIB] + _python_sources(with_belief):
+    for path in _python_sources(with_belief):
         h.update(str(path).encode())
         h.update(path.read_bytes() if path.exists() else b"-")
-    for d in (CARD_SCRIPTS_DIR, ROOT / "core_ext" / "lua", BABEL_CDB_DIR):
+    # (the Rust code: hashes of its sources, made when the binding was built; the belief modules
+    # only for games of agents that use them)
+    import ygoai_rs
+    engine, belief = ygoai_rs.source_hashes()
+    h.update(f"rust {engine} {belief if with_belief else ''}\n".encode())
+    for d in (CARD_SCRIPTS_DIR, FIXED_CARD_SCRIPTS_DIR, BABEL_CDB_DIR):
         for dirpath, dirnames, filenames in os.walk(d):
             dirnames.sort()
             for name in sorted(filenames):

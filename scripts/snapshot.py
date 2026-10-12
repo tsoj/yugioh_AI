@@ -2,8 +2,8 @@
 
 A suite or exploration run takes an hour or more and its worker processes are
 recycled, importing the code again: an edit during the run would mix versions.
-`reexec` copies the code (ygoai/, scripts/, core_ext/, the core library, the Rust
-engine's binding ygoai_rs) to
+`reexec` copies the code (ygoai/, scripts/, lua_fixes/, the Rust engine's binding
+ygoai_rs) to
 build/snapshots/NAME and runs the calling script again from there; the data
 (external/, the decks, tests/, runs/ and the rest of build/, e.g. the game cache)
 are symlinks to the checkout's, so the results land where they always do and the
@@ -21,9 +21,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SNAPSHOTS = ROOT / "build" / "snapshots"
-_CODE = ("ygoai", "scripts", "core_ext")
+_CODE = ("ygoai", "scripts", "lua_fixes")
 _SHARED = ("external", "download_human_decks", "tests", "runs")
-_NOT_SHARED = ("snapshots", "ocgcore", "ocgcore-src", "ocgcore-exp")
+_NOT_SHARED = ("snapshots",)
 _RUST = ("crates", "ygoai_rs", "Cargo.toml", "Cargo.lock")  # (the binding's sources besides the rust/ submodule)
 _ENV = "YGOAI_SNAPSHOT"  # (set in the snapshot's process: the checkout it was taken from)
 _KEEP_DAYS = 3
@@ -42,8 +42,8 @@ def reexec(name: str) -> None:
 
 def make(name: str, ref: str | None = None) -> Path:
     """A snapshot of the code in build/snapshots/NAME: of the checkout, or of a
-    git commit `ref` (its core library built from its core_ext/ if that differs
-    from the checkout's)."""
+    git commit `ref` (with its own build of the Rust binding if its Rust sources
+    differ from the checkout's)."""
     SNAPSHOTS.mkdir(parents=True, exist_ok=True)
     for old in SNAPSHOTS.iterdir():
         if old.is_dir() and time.time() - old.stat().st_mtime > _KEEP_DAYS * 86400:
@@ -57,7 +57,9 @@ def make(name: str, ref: str | None = None) -> Path:
         for d in _CODE:
             shutil.copytree(ROOT / d, dst / d, ignore=ignore, symlinks=True)
     else:
-        archive = subprocess.run(["git", "-C", str(ROOT), "archive", ref, *_CODE], check=True,
+        code = [d for d in _CODE if subprocess.run(["git", "-C", str(ROOT), "cat-file", "-e", f"{ref}:{d}"],
+                                                     capture_output=True).returncode == 0]
+        archive = subprocess.run(["git", "-C", str(ROOT), "archive", ref, *code], check=True,
                                  capture_output=True).stdout
         subprocess.run(["tar", "-x", "-C", str(dst)], input=archive, check=True)
     for d in _SHARED:
@@ -67,15 +69,7 @@ def make(name: str, ref: str | None = None) -> Path:
     for p in (ROOT / "build").iterdir():
         if p.name in _NOT_SHARED or p.name.startswith("bisect"):
             continue
-        if p.name.startswith("libocgcore"):
-            shutil.copy2(p, dst / "build" / p.name)  # (the core is code too)
-        else:
-            (dst / "build" / p.name).symlink_to(p)
-    if ref is not None and subprocess.run(["git", "-C", str(ROOT), "diff", "--quiet", ref, "--", "core_ext"]).returncode:
-        # (its core differs from the checkout's: build its own)
-        for p in (dst / "build").glob("libocgcore*"):
-            p.unlink()
-        subprocess.run(["bash", str(dst / "scripts" / "build_core.sh")], check=True, capture_output=True)
+        (dst / "build" / p.name).symlink_to(p)
     _rust_binding(dst, ref)
     return dst
 

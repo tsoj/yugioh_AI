@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ygoai.belief.check import make_game  # noqa: E402
-from ygoai.game import GameError, ObservationLog, replay  # noqa: E402
+from ygoai.game import ObservationLog, replay  # noqa: E402
 from ygoai.parallel import run_parallel  # noqa: E402
 
 
