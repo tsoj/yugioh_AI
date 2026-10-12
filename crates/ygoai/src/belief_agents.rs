@@ -38,11 +38,6 @@ pub enum Search {
     AlphaBeta { ab: Box<AlphaBeta>, max_nodes: Option<u64> },
     /// alpha-beta on a copy whose opponent's hidden cards are guessed from the visible ones only
     AlphaBetaNaive { ab: Box<AlphaBeta>, max_nodes: Option<u64> },
-    /// alpha-beta on a minimal reconstruction (belief/minimal.rs: the view at the latest command and
-    /// the stream since) where that command is in the viewer's current turn and the result matches
-    /// what the viewer sees (as an approximate one must), the full one elsewhere (made at every
-    /// decision: the same time)
-    AlphaBetaMinimal { ab: Box<AlphaBeta>, max_nodes: Option<u64> },
     Mcts { max_sims: Option<u64>, c: Option<f64>, rollout_turns: Option<u32>, cutoff_eval: bool },
 }
 
@@ -52,7 +47,6 @@ impl Search {
         let ab = Box::default();
         match kind {
             "naive" => Search::AlphaBetaNaive { ab, max_nodes },
-            "minimal" => Search::AlphaBetaMinimal { ab, max_nodes },
             _ => Search::AlphaBeta { ab, max_nodes },
         }
     }
@@ -93,14 +87,11 @@ pub struct BeliefSearchAgent {
     search: Search,
     completion: Option<&'static dyn Completion>,
     player: u32,
-    init: Option<InitInfo>,
     items: Vec<ObsItem>,
     belief: Option<AgentBelief>,
     // statistics
     pub searches: usize,
     pub failures: usize,
-    /// (alphabeta_minimal) searches on the minimal reconstruction
-    pub minimal_used: usize,
     pub nodes: u64,
 }
 
@@ -110,7 +101,6 @@ impl BeliefSearchAgent {
         let search = match name {
             "alphabeta" => Search::alphabeta("full"),
             "alphabeta_naive" => Search::alphabeta("naive"),
-            "alphabeta_minimal" => Search::alphabeta("minimal"),
             "mcts" => Search::mcts(),
             _ => return Err(format!("unknown belief agent {name}")),
         };
@@ -124,12 +114,10 @@ impl BeliefSearchAgent {
             search,
             completion,
             player: 0,
-            init: None,
             items: Vec::new(),
             belief: None,
             searches: 0,
             failures: 0,
-            minimal_used: 0,
             nodes: 0,
         })
     }
@@ -143,37 +131,14 @@ impl BeliefSearchAgent {
     fn search(&mut self, prompt: &Msg, state: Option<&Snapshot>, cands: &[Response], clock: Option<(f64, f64)>) -> Option<usize> {
         let t0 = Instant::now();
         let budget = self.budget(clock);
-        let (mut r, mut duel) = self.belief.as_mut()?.reconstruct(&self.items, None);
-        if matches!(self.search, Search::AlphaBetaMinimal { .. }) && command_this_turn(&self.items, self.player) {
-            // (the full reconstruction above only for the time it takes; the minimal one only from a
-            // command in the viewer's current turn: the opponent's hidden play between would be guesses)
-            // (where it does not match what the viewer sees now, the full one after all)
-            let seed = self.rng.getrandbits(32) as u64;
-            if let Some((mr, mut md)) = crate::belief::minimal::minimal_reconstruct(self.init.as_ref()?, &self.items, self.completion, seed) {
-                let fits = state.is_some_and(|s| count_diffs(&jv(s), &jv(&viewer_view(&mut md.d, self.player))) <= MAX_APPROX_DIFFS);
-                if fits {
-                    (r, duel) = (mr, Some(md));
-                    self.minimal_used += 1;
-                }
-            }
-        }
+        let (r, duel) = self.belief.as_mut()?.reconstruct(&self.items, None);
         let Some(mut duel) = duel else {
             self.failures += 1;
             return None;
         };
         if r.approximate {
             // (a best-effort state only if it matches what this agent observes now)
-            let got = jv(&viewer_view(&mut duel.d, self.player));
-            let diffs = state.map(|s| count_diffs(&jv(s), &got));
-            if std::env::var_os("YGOAI_MINIMAL_DEBUG").is_some()
-                && let (Some(d), Some(s)) = (diffs, state)
-                && d > MAX_APPROX_DIFFS
-            {
-                let mut paths = Vec::new();
-                diff_paths(&jv(s), &got, String::new(), &mut paths);
-                eprintln!("approximate state: {d} differences: {}", paths.join(" "));
-            }
-            let ok = diffs.is_some_and(|d| d <= MAX_APPROX_DIFFS);
+            let ok = state.is_some_and(|s| count_diffs(&jv(s), &jv(&viewer_view(&mut duel.d, self.player))) <= MAX_APPROX_DIFFS);
             if !ok {
                 self.failures += 1;
                 return None;
@@ -189,7 +154,7 @@ impl BeliefSearchAgent {
             naive_hidden_cards(&mut duel, self.player, self.completion, &mut self.rng);
         }
         Some(match &mut self.search {
-            Search::AlphaBeta { ab, max_nodes } | Search::AlphaBetaNaive { ab, max_nodes } | Search::AlphaBetaMinimal { ab, max_nodes } => {
+            Search::AlphaBeta { ab, max_nodes } | Search::AlphaBetaNaive { ab, max_nodes } => {
                 let budget = if max_nodes.is_some() { None } else { budget };
                 let seeds = [self.rng.getrandbits(32) as u32, self.rng.getrandbits(32) as u32];
                 ab.prepare();
@@ -227,35 +192,6 @@ pub fn count_diffs(a: &Value, b: &Value) -> usize {
     }
 }
 
-/// Whether the viewer's latest Idle/Battle command (outside a chain) is in the current turn and
-/// the turn is the viewer's.
-fn command_this_turn(items: &[ObsItem], viewer: u32) -> bool {
-    let Some(k) = items.iter().rposition(|it| matches!(it, ObsItem::Prompt(Msg::SelectIdlecmd { .. } | Msg::SelectBattlecmd { .. }, Some(s)) if s.chain.is_empty())) else {
-        return false;
-    };
-    let ObsItem::Prompt(_, Some(s)) = &items[k] else { return false };
-    s.turn_player == viewer && !items[k..].iter().any(|it| matches!(it, ObsItem::Msg(Msg::NewTurn { .. })))
-}
-
-/// (debugging) The paths where two views differ.
-pub fn diff_paths(a: &Value, b: &Value, path: String, out: &mut Vec<String>) {
-    match (a, b) {
-        (Value::Object(x), Value::Object(y)) => {
-            let keys: BTreeSet<&String> = x.keys().chain(y.keys()).collect();
-            for k in keys {
-                diff_paths(x.get(k).unwrap_or(&Value::Null), y.get(k).unwrap_or(&Value::Null), format!("{path}.{k}"), out);
-            }
-        }
-        (Value::Array(x), Value::Array(y)) if x.len() == y.len() => {
-            for (i, (p, q)) in x.iter().zip(y).enumerate() {
-                diff_paths(p, q, format!("{path}[{i}]"), out);
-            }
-        }
-        _ if a != b => out.push(format!("{path}={a}/{b}")),
-        _ => {}
-    }
-}
-
 fn entropy() -> i128 {
     let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     (t ^ ((std::process::id() as u128) << 64)) as i128 & ((1i128 << 64) - 1)
@@ -273,7 +209,6 @@ impl Agent for BeliefSearchAgent {
         self.fallback.player = player;
         self.items.clear();
         self.belief = Some(AgentBelief::new(player, init.clone(), self.completion));
-        self.init = Some(init.clone());
         Ok(())
     }
     fn observe(&mut self, msg: &Msg) {
@@ -297,7 +232,7 @@ impl Agent for BeliefSearchAgent {
     }
     fn end(&mut self, _result: &serde_json::Map<String, Value>) {
         if std::env::var_os("YGOAI_AGENT_STATS").is_some() {
-            eprintln!("{} stats: searches {} failures {} minimal {} nodes {}", self.name, self.searches, self.failures, self.minimal_used, self.nodes);
+            eprintln!("{} stats: searches {} failures {} nodes {}", self.name, self.searches, self.failures, self.nodes);
         }
     }
 }

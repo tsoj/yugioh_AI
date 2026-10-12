@@ -1251,31 +1251,6 @@ impl BeliefReplay {
     }
 
     /// The best effort when no consistent reconstruction exists (see the Python docstring).
-    /// (belief/minimal.rs) Follows the stream leniently from item `k`, a command prompt of the viewer
-    /// that `duel` (built some other way, synced to the view there) is at: the duel at the stream's end.
-    pub fn segment_run(&mut self, k: usize, mut duel: RDuel) -> Option<RDuel> {
-        self.reset();
-        for it in &self.items[..k] {
-            self.lockstep.process(it.clone());
-        }
-        self.pos = k;
-        self.lenient = true;
-        self.lenient_skips = 0;
-        self.lenient_syncs = 0;
-        self.synced_at = Some(k); // (synced there already)
-        self.lenient_rejected.clear();
-        push_random(&mut duel, &self.items[k..]);
-        let r = self.run_loop(&mut duel, None, None, None);
-        self.lenient = false;
-        if let Err(e) = r {
-            self.log(format!("no reconstruction from item {k}: {e}"));
-            return None;
-        }
-        self.final_prompt.as_ref()?;
-        self.approximate = true;
-        Some(duel)
-    }
-
     pub fn lenient_run(&mut self) -> Option<RDuel> {
         self.reset();
         if self.hypothesis.is_none() && self.build_hypothesis().is_err() {

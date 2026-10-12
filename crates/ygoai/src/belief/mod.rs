@@ -9,7 +9,6 @@ pub mod check;
 pub mod completion;
 pub mod flow;
 pub mod infer;
-pub mod minimal;
 pub mod neural;
 pub mod read_guided;
 pub mod replay;
