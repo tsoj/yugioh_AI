@@ -252,7 +252,9 @@ class AlphaBetaAgent(BeliefMCAgent):
     def _select(self, duel, core_prompt: dict, core_cands: list[dict], t0: float, budget: float | None) -> int | None:
         hint = self.fallback.hint  # (the select hint: the search answers this selection, not the fallback)
         self.fallback.hint = None
-        if self._server is not None and duel.journal is not None:
+        # (the server rebuilds the duel in a small process to fork it cheaply: not needed where the
+        # engine can copy a duel)
+        if self._server is not None and duel.journal is not None and not hasattr(duel, "clone"):
             result = self._server.search(duel, self.player, self.rng.getrandbits(32), self.clock, core_prompt,
                                          core_cands, t0, budget, hint)
             if result is not None:
@@ -293,6 +295,8 @@ class AlphaBetaAgent(BeliefMCAgent):
             order = order[:ROOT_CARD_WIDTH]
         deadline = None if budget is None else \
             t0 + max(budget, min(HARD_FACTOR * budget, HARD_SHARE * self.clock[0]))
+        if hasattr(duel, "clone"):  # (copies instead of forks: nothing to prepare)
+            return self._deepen(duel, core_prompt, core_cands, order, t0, budget, deadline)
         # (the forked nodes never collect the inherited objects: no copies of their pages)
         gc.freeze()
         if self.collapse_pages:
@@ -405,10 +409,13 @@ class AlphaBetaAgent(BeliefMCAgent):
 
     def _child(self, duel, prompt: dict, cand: dict, depth: int, alpha: float, beta: float, deadline,
                ply: int) -> float:
-        """The value of `cand` (searched `depth` plies deeper) in a forked process."""
+        """The value of `cand` (searched `depth` plies deeper) in a forked process, or on a copy
+        of the duel where the engine can copy one (the Rust engine: ygoai/core_rust.py)."""
         if deadline is not None and time.monotonic() > deadline:
             raise _Abort()
         self.nodes += 1
+        if hasattr(duel, "clone"):
+            return self._child_copy(duel, prompt, cand, depth, alpha, beta, deadline, ply)
         rfd, wfd = os.pipe()
         pid = os.fork()
         if pid == 0:
@@ -432,6 +439,25 @@ class AlphaBetaAgent(BeliefMCAgent):
                 raise _Abort()
             value = -WIN  # (an engine error: the player to move avoids the line)
         return value
+
+    def _child_copy(self, duel, prompt: dict, cand: dict, depth: int, alpha: float, beta: float, deadline,
+                    ply: int) -> float:
+        """`_child` on a copy of the duel: the line's state (the duel, the rules' players' caps and
+        select hint) is the copy's; this node's is as before afterwards, as in the forked version."""
+        copy = duel.clone()
+        saved = [(dict(p.activations), p.hint) for p in self._policies]
+        try:
+            return self._expand(copy, prompt, cand, depth, alpha, beta, deadline, ply)
+        except _Abort:
+            raise
+        except Exception:  # noqa: BLE001 - (a broken line: as an engine error in a forked node)
+            if deadline is not None and time.monotonic() > deadline:
+                raise _Abort() from None
+            return -WIN  # (an engine error: the player to move avoids the line)
+        finally:
+            copy.close()
+            for p, (act, hint) in zip(self._policies, saved):
+                p.activations, p.hint = act, hint
 
     def _expand(self, duel, prompt: dict, cand: dict, depth: int, alpha: float, beta: float, deadline,
                 ply: int) -> float:

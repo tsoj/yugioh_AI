@@ -190,7 +190,16 @@ class BeliefMCAgent(Agent):
         return max(tried, key=lambda k: totals[k] / counts[k])
 
     def _rollout(self, duel, prompt: dict, cand: dict, seed: int) -> float:
-        """Forks, plays `cand` and continues greedily; returns the evaluation."""
+        """Forks (or copies the duel, where the engine can: the Rust engine), plays `cand` and
+        continues greedily; returns the evaluation."""
+        if hasattr(duel, "clone"):
+            copy = duel.clone()
+            try:
+                return self._play_out(copy, prompt, cand, seed)
+            except Exception:  # noqa: BLE001 - (as a failed forked rollout)
+                return -1.0
+            finally:
+                copy.close()
         rfd, wfd = os.pipe()
         pid = os.fork()
         if pid == 0:

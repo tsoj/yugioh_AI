@@ -186,7 +186,20 @@ class PuctAgent(AlphaBetaAgent):
     def _simulate(self, duel, prompt: dict, responses: list[dict], cands: list[dict] | None):
         """(in a fork) Plays `responses` from the root and reports where they lead:
         ("end", player 0's result) or ("leaf", player, candidates, priors, player 0's
-        win probability); None on an engine error."""
+        win probability); None on an engine error. (On a copy of the duel where the engine can
+        copy one, the Rust engine: the rules' players' state is restored after it, as the fork
+        discards it.)"""
+        if hasattr(duel, "clone"):
+            copy = duel.clone()
+            saved = [(dict(p.activations), p.hint) for p in self._policies]
+            try:
+                return self._play(copy, prompt, responses, cands)
+            except Exception:  # noqa: BLE001 - (a broken line: no report)
+                return None
+            finally:
+                copy.close()
+                for p, (act, hint) in zip(self._policies, saved):
+                    p.activations, p.hint = act, hint
         r, w = os.pipe()
         pid = os.fork()
         if pid == 0:
