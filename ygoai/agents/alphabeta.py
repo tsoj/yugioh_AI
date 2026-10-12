@@ -237,6 +237,7 @@ class AlphaBetaAgent(BeliefMCAgent):
         self._server = None  # (the search server, see warm_up)
         self.collapse_pages = True  # (huge pages before each search, see _huge_pages)
         self.server_failures = 0
+        self._rs = None  # (the Rust search's tables, on the Rust engine)
 
     def _budget(self) -> float | None:
         return None if self.clock is None else self.clock[0] / MOVES_TO_GO + self.clock[1]
@@ -263,6 +264,18 @@ class AlphaBetaAgent(BeliefMCAgent):
                 self.depths.append(done)
                 return best
             self.server_failures += 1  # (then here, as without the server)
+        if hasattr(duel, "_d") and os.environ.get("YGOAI_RUST_SEARCH", "1") != "0" and type(self).search is AlphaBetaAgent.search:
+            # (the Rust engine's duel: the same search in Rust, crates/ygoai/src/search.rs)
+            if self._rs is None:
+                import ygoai_rs
+                self._rs = ygoai_rs.AlphaBetaSearch()
+            self._rs.prepare()
+            seeds = [self.rng.getrandbits(32), self.rng.getrandbits(32)]  # (the rules' players, as in search)
+            best, done, nodes = self._rs.search(duel._d, core_prompt, core_cands, seeds, hint, budget,
+                                                time.monotonic() - t0, self.clock[0] if self.clock else 0.0)
+            self.nodes += nodes
+            self.depths.append(done)
+            return best
         self.prepare()
         best, done = self.search(duel, core_prompt, core_cands, t0, budget, hint)
         self.depths.append(done)

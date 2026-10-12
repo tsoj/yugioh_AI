@@ -134,6 +134,57 @@ pub fn observation_streams(py: Python<'_>, record: &str, with_state: bool) -> Py
     serde_json::to_string(&[stream(&l0), stream(&l1)]).map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
+/// alphabeta's search (agents/alphabeta.py) on a Rust duel, with its tables kept from one
+/// decision to the next.
+#[pyclass(module = "ygoai_rs", unsendable)]
+pub struct AlphaBetaSearch {
+    ab: ygoai::search::AlphaBeta,
+}
+
+#[pymethods]
+impl AlphaBetaSearch {
+    #[new]
+    fn new() -> Self {
+        AlphaBetaSearch { ab: ygoai::search::AlphaBeta::default() }
+    }
+
+    /// The tables for a new decision.
+    fn prepare(&mut self) {
+        self.ab.prepare();
+    }
+
+    /// (best candidate index, depth completed, nodes) for the duel's pending prompt `prompt`
+    /// (the core's, a dict as messages.parse makes it) and its candidates `cands` (core responses).
+    #[pyo3(signature = (duel, prompt, cands, seeds, hint, budget, elapsed, clock_remaining))]
+    #[allow(clippy::too_many_arguments)]
+    fn search(
+        &mut self,
+        py: Python<'_>,
+        duel: &RustDuel,
+        prompt: &Bound<'_, PyAny>,
+        cands: &Bound<'_, PyAny>,
+        seeds: [u32; 2],
+        hint: Option<u64>,
+        budget: Option<f64>,
+        elapsed: f64,
+        clock_remaining: f64,
+    ) -> PyResult<(usize, i32, u64)> {
+        let prompt: Msg = pythonize::depythonize(prompt).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let cands: Vec<Response> = pythonize::depythonize(cands).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        if cands.is_empty() {
+            return Err(PyValueError::new_err("no candidates"));
+        }
+        let params = ygoai::search::SearchParams { budget, elapsed, clock_remaining, hint, seeds };
+        let before = self.ab.nodes;
+        let d = &duel.d;
+        let ab = &mut self.ab;
+        let (best, done) = py
+            .detach(|| std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ab.search(d, &prompt, &cands, &params))))
+            .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("the search panicked"))?;
+        Ok((best, done, self.ab.nodes - before))
+    }
+}
+
 #[pymethods]
 impl RustDuel {
     /// state.capture(duel)
@@ -159,6 +210,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(check_sum, m)?)?;
     m.add_function(wrap_pyfunction!(is_declarable, m)?)?;
     m.add_function(wrap_pyfunction!(play_game, m)?)?;
+    m.add_class::<AlphaBetaSearch>()?;
     m.add_function(wrap_pyfunction!(observation_streams, m)?)?;
     Ok(())
 }

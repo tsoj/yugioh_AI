@@ -7,7 +7,8 @@
 //! * [`actions`]: responses to prompts and their binary form (ygoai/actions.py)
 //! * [`state`]: god view snapshots of a duel and each player's view (ygoai/state.py)
 //! * [`game`]: setting up, playing and replaying games, game records (ygoai/game.py)
-//! * [`agents`]: built-in agents (ygoai/agents)
+//! * [`agents`], [`heuristic`]: built-in agents (ygoai/agents)
+//! * [`search`]: alpha-beta search on a duel (agents/alphabeta.py's search)
 //! * [`pyrandom`]: Python's random.Random, for the same games and choices as the Python package
 //!
 //! Every type serializes (serde) to the dicts of the Python modules, under the same keys.
@@ -15,9 +16,11 @@
 pub mod actions;
 pub mod agents;
 pub mod game;
+pub mod heuristic;
 pub mod matchrun;
 pub mod messages;
 pub mod observe;
 pub mod protocol;
 pub mod pyrandom;
+pub mod search;
 pub mod state;
