@@ -23,6 +23,7 @@ pub mod messages;
 pub mod observe;
 pub mod paths;
 pub mod protocol;
+pub mod rduel;
 pub mod pyrandom;
 pub mod search;
 pub mod state;

@@ -10,6 +10,7 @@ ygo-core = { path = "../../rust/ygo-core" }
 ygo-cards = { path = "../../rust/ygo-cards" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+indexmap = "2"
 blake2 = "0.10"
 regex = "1"
 highs = { path = "../highs" }

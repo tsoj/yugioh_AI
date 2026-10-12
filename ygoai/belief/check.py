@@ -66,8 +66,26 @@ class CheckResult:
     state_diffs: int = 0  # (agent mode) public facts of its state that differ from the real one
 
 
-def check_prefix(record: GameRecord, viewer: int, items: list[tuple], cut: int,
+def _rust_completion(replay_kwargs: dict) -> str | None:
+    """The Rust replay's name of the completion asked for (None: it has none such)."""
+    comp = replay_kwargs.get("completion")
+    if set(replay_kwargs) - {"completion"}:
+        return None
+    name = type(comp).__name__ if comp is not None else "VanillaCompletion"
+    return {"VanillaCompletion": "vanilla", "CorpusCompletion": "corpus"}.get(name)
+
+
+def check_prefix(record: GameRecord, viewer: int, items: list[tuple], cut: int, timeout: float | None = None,
                  **replay_kwargs) -> CheckResult:
+    """`timeout`: seconds for the Rust replay (error "timeout"; the Python one is stopped from outside)."""
+    comp = _rust_completion(replay_kwargs)
+    if os.environ.get("YGOAI_REPLAY", "python") == "rust" and comp is not None:
+        import ygoai_rs
+        stopped = cut == len(items) and (record.result or {}).get("reason") in ("turn_limit", "decision_limit",
+                                                                                 "time_limit")
+        r = ygoai_rs.check_prefix(init_info(record, viewer), items, cut, stopped, comp, timeout)
+        r.pop("timeout", None)
+        return CheckResult(**r)
     prefix = items[:cut]
     res = CheckResult(viewer=viewer, cut=cut, length=len(items), ok=False)
     t0 = time.monotonic()

@@ -719,6 +719,7 @@ version = "0.1.0"
 dependencies = [
  "blake2",
  "highs",
+ "indexmap",
  "regex",
  "serde",
  "serde_json",

@@ -145,6 +145,8 @@ fn fill(pool: &[u32], known: &[u32], n: usize) -> Result<Vec<u32>, String> {
 
 /// Fills unknown cards with effect-less cards (never interferes with the game).
 pub struct VanillaCompletion {
+    /// every Normal Monster of the pool (sorted by code)
+    pub vanillas: Vec<u32>,
     pub main_pool: Vec<u32>,
     pub extra_pool: Vec<u32>,
     pub settable_monsters_all: Vec<u32>,
@@ -191,7 +193,7 @@ impl VanillaCompletion {
         let mut settable_spells: Vec<u32> = normal_st.iter().copied().take(10).collect();
         settable_spells.extend(normal_st.iter().copied().skip(10).step_by(step));
         settable_spells.extend(sorted(&|c| c.type_ == TYPE_SPELL | TYPE_FIELD && c.alias == 0 && ot(c.code) & 0x3 != 0).into_iter().take(5));
-        VanillaCompletion { main_pool, extra_pool, settable_monsters_all, settable_spells }
+        VanillaCompletion { vanillas, main_pool, extra_pool, settable_monsters_all, settable_spells }
     }
 }
 

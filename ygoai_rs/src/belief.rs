@@ -196,8 +196,38 @@ fn infer<'py>(
     Ok((pythonize::pythonize(py, &cands).map_err(|e| PyValueError::new_err(e.to_string()))?, certain))
 }
 
+/// The Rust belief replay's check of a stream prefix (check.check_prefix): the CheckResult's
+/// fields as a dict. `completion`: "vanilla" or "corpus"; `timeout` in seconds.
+#[pyfunction]
+#[pyo3(signature = (init, items, cut, stopped, completion, timeout=None))]
+fn check_prefix<'py>(
+    py: Python<'py>,
+    init: &Bound<'py, PyAny>,
+    items: &Bound<'py, PyAny>,
+    cut: usize,
+    stopped: bool,
+    completion: &str,
+    timeout: Option<f64>,
+) -> PyResult<Bound<'py, PyAny>> {
+    use ygoai::belief::completion::{Completion, CorpusCompletion};
+    let init: InitInfo = de(init)?;
+    let items: Vec<ObsItem> = items.try_iter()?.map(|it| obs_item(&it?)).collect::<PyResult<_>>()?;
+    if cut > items.len() {
+        return Err(PyValueError::new_err("cut past the stream"));
+    }
+    let comp: Option<&'static dyn Completion> = match completion {
+        "vanilla" => None,
+        "corpus" => Some(CorpusCompletion::get().map_err(PyValueError::new_err)?),
+        _ => return Err(PyValueError::new_err(format!("unknown completion {completion}"))),
+    };
+    let timeout = timeout.map(std::time::Duration::from_secs_f64);
+    let res = py.detach(|| ygoai::belief::check::check_prefix(&init, &items, cut, stopped, comp, timeout));
+    pythonize::pythonize(py, &res).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(infer, m)?)?;
+    m.add_function(wrap_pyfunction!(check_prefix, m)?)?;
     m.add_class::<PyTracker>()?;
     Ok(())
 }

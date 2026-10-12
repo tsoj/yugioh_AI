@@ -12,6 +12,11 @@ fn is_none<T>(v: &Option<T>) -> bool {
     v.is_none()
 }
 
+/// A field that is present (even as null) is Some: Some(None) for null.
+fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<Option<T>>, D::Error> {
+    Option::<T>::deserialize(d).map(Some)
+}
+
 pub const QUERY_ALL: u32 = QUERY_CODE
     | QUERY_POSITION
     | QUERY_ALIAS
@@ -87,9 +92,9 @@ pub struct CardQuery {
     pub base_defense: Option<i32>,
     #[serde(default, skip_serializing_if = "is_none")]
     pub reason: Option<u32>,
-    #[serde(default, skip_serializing_if = "is_none")]
+    #[serde(default, skip_serializing_if = "is_none", deserialize_with = "present")]
     pub reason_card: Option<Option<Loc>>,
-    #[serde(default, skip_serializing_if = "is_none")]
+    #[serde(default, skip_serializing_if = "is_none", deserialize_with = "present")]
     pub equip_card: Option<Option<Loc>>,
     #[serde(default, skip_serializing_if = "is_none")]
     pub target_cards: Option<Vec<Option<Loc>>>,

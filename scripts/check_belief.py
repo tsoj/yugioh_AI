@@ -83,8 +83,8 @@ def _replay_case(record, items, seed: int, viewer: int, frac: float, timeout: in
             from ygoai.belief.check import check_agent
             r = check_agent(record, viewer, items, cut, completion=get_completion(completion))
         else:
-            r = check_prefix(record, viewer, items, cut, completion=get_completion(completion))
-        if time.monotonic() - t0 > timeout:
+            r = check_prefix(record, viewer, items, cut, timeout=timeout, completion=get_completion(completion))
+        if time.monotonic() - t0 > timeout or r.error == "timeout":
             # (the alarm came while the core ran one long step: the only Python code
             # running then is its log callback, which swallows the exception)
             raise Timeout()

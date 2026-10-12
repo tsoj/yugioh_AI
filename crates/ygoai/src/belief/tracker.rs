@@ -474,6 +474,11 @@ impl Tracker {
         index
     }
 
+    /// (the number of cards revealed before the latest shuffle, the piles they were revealed in)
+    pub fn referenced_state(&self) -> (usize, &BTreeSet<(u32, u32)>) {
+        (self.referenced.len(), &self.referenced_piles)
+    }
+
     pub fn var(&self, v: VarId) -> &Var {
         &self.vars[v]
     }
