@@ -273,11 +273,13 @@ fn assume_props(d: &mut Duel, c: ygo_core::types::CardId, p: &Props) {
 impl RustDuel {
     // -- the questions the belief replay asked the C++ core as Lua chunks ----------------------------
 
-    /// `c:Recreate(code, nil, ..., true)` for the card with this id.
+    /// `c:Recreate(code, nil, ..., true)` for the card with this id, as the C++ core runs the replay's
+    /// Lua for it: there `true` is the 15th argument, but Recreate reads `replace_effect` from the
+    /// 14th (nil), so the card keeps its effects; the same here.
     fn recreate_card(&mut self, card_id: u32, code: u32) {
         self.d.outside_change(move |d| {
             let Some(c) = d.card_by_id(card_id) else { return };
-            as_query(d, |d| ygo_core::api::card::recreate(d, c, code, |_| {}, true));
+            as_query(d, |d| ygo_core::api::card::recreate(d, c, code, |_| {}, false));
         });
     }
 

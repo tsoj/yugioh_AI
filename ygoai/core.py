@@ -589,7 +589,8 @@ class Duel:
     # -- questions to the scripts' view of cards, as Lua chunks (the Rust engine, which runs no
     # Lua, answers the same questions natively: ygoai/core_rust.py) ---------------------------------
     def recreate_card(self, card_id: int, code: int) -> None:
-        """The card becomes `code` (`Card.Recreate`, its effects replaced)."""
+        """The card becomes `code` (`Card.Recreate`). (Its effects stay: `true` below is
+        Recreate's 15th argument, replace_effect is the 14th; the baselines were made so.)"""
         self.lua_messages(f"local c=Duel.GetCardFromCardID({card_id}) if c then "
                           f"c:Recreate({code},nil,nil,nil,nil,nil,nil,nil,nil,nil,nil,nil,nil,true) end")
 
