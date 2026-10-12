@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import ygoai_rs  # noqa: E402
 
 from ygoai import actions, observe, state  # noqa: E402
+from ygoai import constants as C  # noqa: E402
 from ygoai.carddb import default_db  # noqa: E402
 from ygoai.game import setup_duel  # noqa: E402
 from ygoai.messages import ParseError, parse  # noqa: E402
@@ -266,6 +267,90 @@ def play_both(seed: int, decks: str) -> Diff:
     return d
 
 
+def py_tracker_dump(t) -> dict:
+    """The Python tracker's state in the form of the Rust tracker's dump (ygoai_rs/src/belief.rs)."""
+    from ygoai.belief.tracker import Var
+
+    def need(n):
+        if n is None:
+            return None
+        return f"mset{n[1]}" if n[0] == "mset" else n[0]
+
+    def mark(mk):
+        return f"p{mk[1]}" if mk[0] == "public" else f"h{mk[0]}:{mk[1]}"
+
+    def vid(v):
+        return v.id if isinstance(v, Var) else v
+    vars_ = [{"owner": v.owner, "kind": v.kind, "fixed": v.fixed_code, "code": v.code,
+              "pool": v.pool.index if v.pool is not None else None, "faceup": v.faceup,
+              "overlays": [x.id for x in v.overlays], "excluded": sorted(v.excluded), "need": need(v.need),
+              "marks": sorted(mark(m) for m in v.marks),
+              "allowed": sorted(v.allowed) if v.allowed is not None else None,
+              "same_as": vid(v.same_as), "not_same": [vid(x) for x in v.not_same], "prefer": [vid(x) for x in v.prefer],
+              "seen_owner": v.seen_owner} for v in t.all_vars]
+    pools = [{"player": p.player, "location": p.location, "members": [m.id for m in p.members],
+              "claims": [c.id for c in p.claims], "zones": p.zones} for p in t.pools]
+    from ygoai.belief.tracker import LIST_LOCS
+    return {"vars": vars_, "pools": pools,
+            "lists": [[[v.id for v in t.lists[p][loc]] for loc in LIST_LOCS] for p in (0, 1)],
+            "mzones": [[vid(v) for v in t.zones[p][C.LOCATION_MZONE]] for p in (0, 1)],
+            "szones": [[vid(v) for v in t.zones[p][C.LOCATION_SZONE]] for p in (0, 1)],
+            "observations": [[v.id, c] for v, c in t.observations], "searched": [[v.id, c] for v, c in t.searched],
+            "exclusions": [v.id for v in t.exclusions], "needs": [v.id for v in t.needs],
+            "contains": sorted([list(x) for x in t.contains]), "shuffle_events": [p.index for p in t.shuffle_events],
+            "set_shuffle_events": [p.index for p in t.set_shuffle_events], "turn_player": t.turn_player}
+
+
+def first_diff(a, b, path="") -> str:
+    if type(a) is not type(b) and not (isinstance(a, (int, float)) and isinstance(b, (int, float))):
+        return f"{path}: {str(a)[:200]} vs {str(b)[:200]}"
+    if isinstance(a, dict):
+        for k in a:
+            if k not in b or a[k] != b[k]:
+                return first_diff(a[k], b.get(k), f"{path}.{k}")
+        return f"{path}: keys {set(b) - set(a)}"
+    if isinstance(a, list):
+        for i, (x, y) in enumerate(zip(a, b)):
+            if x != y:
+                return first_diff(x, y, f"{path}[{i}]")
+        return f"{path}: length {len(a)} vs {len(b)}"
+    return f"{path}: {a!r} vs {b!r}"
+
+
+def tracker_both(seed: int, decks: str) -> Diff:
+    """Both trackers (belief/tracker.py, crates/ygoai/src/belief/tracker.rs) over both players'
+    observation streams of a test game: the same errors at the same items and the same state
+    (every 25 items and at the end)."""
+    from ygoai.belief.games import make_game_streams
+    from ygoai.belief.tracker import Tracker, TrackerError
+    from ygoai.game import init_info
+    d = Diff(seed)
+    record, streams = make_game_streams(seed, decks=decks, pairs=PAIRS)
+    for viewer in (0, 1):
+        init = init_info(record, viewer)
+        py, rs = Tracker(viewer, init), ygoai_rs.Tracker(viewer, init)
+        for i, item in enumerate(streams[viewer]):
+            try:
+                py.process(item)
+                pe = None
+            except TrackerError as e:
+                pe = str(e)
+            re_ = rs.process(item)
+            d.eq("tracker.error", pe is not None, re_ is not None, f"viewer {viewer} item {i}: py {pe} / rs {re_}")
+            if pe is not None or re_ is not None:
+                break
+            if i % 25 == 0 or i == len(streams[viewer]) - 1:
+                a, b = py_tracker_dump(py), json.loads(rs.dump())
+                d.checked["tracker.state"] += 1
+                if a != b:
+                    d.counts["tracker.state"] += 1
+                    if d.counts["tracker.state"] <= 2:
+                        d.examples.append(f"seed {seed} viewer {viewer} item {i} {item[0]} "
+                                          f"{item[1].get('type') if isinstance(item[1], dict) else ''}: {first_diff(a, b)}")
+                    break
+    return d
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--games", type=int, default=50)
@@ -274,9 +359,14 @@ def main() -> None:
     ap.add_argument("-j", type=int, default=1)
     ap.add_argument("--fuzz", type=int, default=0, help="instead of games: N random messages per seed")
     ap.add_argument("--play", action="store_true", help="instead: whole games of built-in agents played by both")
+    ap.add_argument("--tracker", action="store_true", help="instead: the belief trackers over the test games' streams")
     a = ap.parse_args()
     seeds = range(a.start, a.start + a.games)
-    if a.play:
+    if a.tracker:
+        from multiprocessing import get_context
+        with get_context("spawn").Pool(a.j, maxtasksperchild=20) as pool:
+            results = pool.starmap(tracker_both, [(s, a.decks) for s in seeds], chunksize=1)
+    elif a.play:
         from multiprocessing import get_context
         with get_context("spawn").Pool(a.j, maxtasksperchild=20) as pool:
             results = pool.starmap(play_both, [(s, a.decks) for s in seeds], chunksize=1)

@@ -14,12 +14,14 @@
 //! Every type serializes (serde) to the dicts of the Python modules, under the same keys.
 
 pub mod actions;
+pub mod belief;
 pub mod agents;
 pub mod game;
 pub mod heuristic;
 pub mod matchrun;
 pub mod messages;
 pub mod observe;
+pub mod paths;
 pub mod protocol;
 pub mod pyrandom;
 pub mod search;

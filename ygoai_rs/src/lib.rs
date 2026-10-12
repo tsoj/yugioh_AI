@@ -15,6 +15,7 @@ use ygo_core::duel::{Duel, DuelOptions, PlayerOptions};
 use ygo_core::ext::{ForcedLoc, FORCED_COIN, FORCED_DICE};
 use ygo_core::script::Scripts;
 
+mod belief;
 mod port;
 
 static SHARED: OnceLock<(Arc<CardDb>, Arc<Scripts>)> = OnceLock::new();
@@ -397,5 +398,6 @@ fn ygoai_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(init, m)?)?;
     m.add_class::<RustDuel>()?;
     port::register(m)?;
+    belief::register(m)?;
     Ok(())
 }
