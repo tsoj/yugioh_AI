@@ -15,6 +15,8 @@
 
 pub mod actions;
 pub mod belief;
+pub mod belief_agents;
+pub mod engine;
 pub mod agents;
 pub mod game;
 pub mod heuristic;
