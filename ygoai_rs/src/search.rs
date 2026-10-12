@@ -34,7 +34,6 @@ impl AlphaBetaSearch {
     #[allow(clippy::too_many_arguments)]
     fn search(
         &mut self,
-        py: Python<'_>,
         duel: &RustDuel,
         prompt: &Bound<'_, PyAny>,
         cands: &Bound<'_, PyAny>,
@@ -54,8 +53,8 @@ impl AlphaBetaSearch {
         let before = self.ab.nodes;
         let d = &duel.d;
         let ab = &mut self.ab;
-        let (best, done) = py
-            .detach(|| std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ab.search(d, &prompt, &cands, &params))))
+        // (with the GIL: a duel stays on its thread)
+        let (best, done) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ab.search(d, &prompt, &cands, &params)))
             .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("the search panicked"))?;
         Ok((best, done, self.ab.nodes - before))
     }
@@ -87,8 +86,7 @@ fn mcts_search<'py>(
     }
     let params = ygoai::mcts::MctsParams { budget, elapsed, max_sims, c, rollout_turns, cutoff_eval, hint, seeds };
     let d = &duel.d;
-    let (best, stats) = py
-        .detach(|| std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ygoai::mcts::search(d, &prompt, &cands, &params))))
+    let (best, stats) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ygoai::mcts::search(d, &prompt, &cands, &params)))
         .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("the search panicked"))?;
     Ok((best, pythonize::pythonize(py, &stats).map_err(|e| PyValueError::new_err(e.to_string()))?))
 }
