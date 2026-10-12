@@ -6,19 +6,17 @@
 
 use std::time::Instant;
 
-use blake2::Blake2bVar;
-use blake2::digest::{Update, VariableOutput};
-use serde_json::Value;
 use ygo_core::api::QueryInfo;
 use ygo_core::constants::*;
 use ygo_core::duel::Duel;
+use ygo_core::types::CardId;
 
 use crate::actions::{Response, battle_options, encode, idle_options};
 use crate::game::run_until_prompt;
 use crate::heuristic::{Heuristic, db_attack};
 use crate::messages::Msg;
 use crate::observe::{auto_response, is_hidden_prompt};
-use crate::state::{LOCATIONS, QUERY_ALL, QUERY_BASIC, parse_location_query};
+use crate::state::parse_location_query;
 
 pub const WIN: f64 = 100000.0;
 pub const MAX_DEPTH: i32 = 12;
@@ -266,83 +264,60 @@ pub fn evaluate(d: &mut Duel, me: u32) -> f64 {
     value
 }
 
-/// Python's repr() of a JSON value as the dicts and lists of the Python module hold it.
-fn py_repr(v: &Value, out: &mut String) {
-    match v {
-        Value::Null => out.push_str("None"),
-        Value::Bool(b) => out.push_str(if *b { "True" } else { "False" }),
-        Value::Number(n) => out.push_str(&n.to_string()),
-        Value::String(s) => {
-            out.push('\'');
-            out.push_str(s);
-            out.push('\'');
-        }
-        Value::Array(a) => {
-            out.push('[');
-            for (i, x) in a.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                py_repr(x, out);
-            }
-            out.push(']');
-        }
-        Value::Object(o) => {
-            out.push('{');
-            for (i, (k, x)) in o.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                out.push('\'');
-                out.push_str(k);
-                out.push_str("': ");
-                py_repr(x, out);
-            }
-            out.push('}');
-        }
-    }
-}
-
-/// repr(sorted(prompt.items())) of the prompt's dict (its fields in the parser's order, "type"
-/// among them).
-fn prompt_repr(m: &Msg) -> String {
-    let Value::Object(o) = serde_json::to_value(m).expect("json") else { unreachable!() };
-    let mut items: Vec<(&String, &Value)> = o.iter().collect();
-    items.sort_by(|a, b| a.0.cmp(b.0));
-    let mut out = String::from("[");
-    for (i, (k, v)) in items.iter().enumerate() {
-        if i > 0 {
-            out.push_str(", ");
-        }
-        out.push_str("('");
-        out.push_str(k);
-        out.push_str("', ");
-        py_repr(v, &mut out);
-        out.push(')');
-    }
-    out.push(']');
-    out
-}
-
+/// The transposition table key of a position and its pending decision: a fast hash over the
+/// engine's state (where every card is, its position, status, counters, materials and equip target;
+/// what the cards on the field are now, stats included; turn, phase, LP, chain) and the prompt.
 /// The transposition table key of a position and its pending decision (alphabeta._tt_key).
 pub fn tt_key(d: &mut Duel, m: &Msg) -> u64 {
-    let mut h = Blake2bVar::new(8).unwrap();
-    let info = d.ext_get_info();
-    h.update(
-        format!("{{'turn': {}, 'turn_player': {}, 'phase': {}, 'lp': [{}, {}]}}", info[0], info[1], info[2], info[3] as i32, info[4] as i32)
-            .as_bytes(),
-    );
-    h.update(&d.ocg_query_field());
+    use std::hash::{Hash, Hasher};
+    let mut h = rustc_hash::FxHasher::default();
+    d.ext_get_info().hash(&mut h);
+    for link in &d.core.current_chain {
+        (link.chain_count, link.triggering_effect.map(|e| e.0), link.triggering_controler, link.triggering_location, link.triggering_sequence).hash(&mut h);
+    }
     for p in 0..2 {
-        for (_, loc) in LOCATIONS {
-            h.update(&query(d, p, loc, if loc == LOCATION_DECK { QUERY_BASIC } else { QUERY_ALL }));
+        let pl = &d.player[p];
+        // (the piles: which card where; the zones also what the card is now, stats included)
+        let piles: [&Vec<CardId>; 5] = [&pl.list_main, &pl.list_hand, &pl.list_extra, &pl.list_grave, &pl.list_remove];
+        for pile in piles {
+            pile.len().hash(&mut h);
+            for &c in pile {
+                card_state(d, c, &mut h);
+            }
+        }
+        let zones: Vec<Option<CardId>> = pl.list_mzone.iter().chain(&pl.list_szone).copied().collect();
+        for (i, z) in zones.into_iter().enumerate() {
+            i.hash(&mut h);
+            if let Some(c) = z {
+                card_state(d, c, &mut h);
+                (c.get_code(d), c.get_attack(d), c.get_defense(d), c.get_level(d), c.get_rank(d)).hash(&mut h);
+            }
         }
     }
-    h.update(prompt_repr(m).as_bytes());
-    let mut out = [0u8; 8];
-    h.finalize_variable(&mut out).unwrap();
-    let k = u64::from_le_bytes(out);
+    // (the pending prompt, as its JSON text, streamed into the hash)
+    struct W<'a>(&'a mut rustc_hash::FxHasher);
+    impl std::io::Write for W<'_> {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.write(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let _ = serde_json::to_writer(W(&mut h), m);
+    let k = h.finish();
     if k == 0 { 1 } else { k }
+}
+
+/// What the key takes of a card: which one, its position, status bits, counters, materials and
+/// equip target.
+fn card_state(d: &Duel, c: CardId, h: &mut rustc_hash::FxHasher) {
+    use std::hash::Hash;
+    let x = d.card(c);
+    (x.cardid, x.current.position, x.status, &x.counters).hash(h);
+    x.xyz_materials.iter().map(|m| d.card(*m).cardid).for_each(|id| id.hash(h));
+    x.equiping_target.map(|t| d.card(t).cardid).hash(h);
 }
 
 #[derive(Clone, Copy, Default)]
