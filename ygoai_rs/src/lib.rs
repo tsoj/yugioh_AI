@@ -15,6 +15,8 @@ use ygo_core::duel::{Duel, DuelOptions, PlayerOptions};
 use ygo_core::ext::{ForcedLoc, FORCED_COIN, FORCED_DICE};
 use ygo_core::script::Scripts;
 
+mod port;
+
 static SHARED: OnceLock<(Arc<CardDb>, Arc<Scripts>)> = OnceLock::new();
 
 /// Loads the card database (the BabelCDB directory) and the card scripts once per process.
@@ -47,7 +49,7 @@ fn split_messages(buf: &[u8]) -> Vec<Vec<u8>> {
 
 #[pyclass(module = "ygoai_rs")]
 struct RustDuel {
-    d: Duel,
+    pub(crate) d: Duel,
 }
 
 #[pymethods]
@@ -394,5 +396,6 @@ impl RustDuel {
 fn ygoai_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(init, m)?)?;
     m.add_class::<RustDuel>()?;
+    port::register(m)?;
     Ok(())
 }

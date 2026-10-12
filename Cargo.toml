@@ -1,0 +1,13 @@
+# The Rust side of ygoai: crates/ygoai (the port of the Python package ygoai) and its Python
+# binding ygoai_rs. The duel engine (rust/, ygopro-core-rust) is a workspace of its own.
+[workspace]
+resolver = "2"
+members = ["ygoai_rs", "crates/ygoai"]
+exclude = ["rust"]
+
+[workspace.package]
+edition = "2024"
+license = "AGPL-3.0-or-later"
+
+[profile.release]
+debug = 1
