@@ -57,7 +57,11 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--book", type=Path, help="openings from this book (match.py --book)")
     ap.add_argument("--book-min", type=int, default=2)
+    ap.add_argument("--arbiter", choices=["python", "rust"], default="python",
+                    help="scripts/match.py or the Rust arbiter ygoai-match (needs --book)")
     args = ap.parse_args()
+    if args.arbiter == "rust" and args.book is None:
+        ap.error("--arbiter rust needs --book")
 
     shas = {}
     for side, ref in (("new", args.new), ("base", args.base)):
@@ -76,7 +80,12 @@ def main() -> int:
            f"{time.strftime('%Y%m%d-%H%M%S')}"
     OUT.mkdir(parents=True, exist_ok=True)
     log = OUT / f"{name}.log"
-    cmd = [str(python), str(ROOT / "scripts" / "match.py"), "--engine", engine("new"), "--engine", engine("base"),
+    arbiter = [str(python), str(ROOT / "scripts" / "match.py")]
+    if args.arbiter == "rust":
+        arbiter = [str(ROOT / "rust" / "target" / "release" / "ygoai-match")]
+        subprocess.run(["cargo", "build", "--release", "-q", "--bin", "ygoai-match"], check=True, cwd=ROOT,
+                       env={**os.environ, "CARGO_TARGET_DIR": str(ROOT / "rust" / "target")})
+    cmd = [*arbiter, "--engine", engine("new"), "--engine", engine("base"),
            "-n", str(args.openings), "-c", str(args.concurrency), "--mirror-prob", "0", "--tc", args.tc,
            "--sprt", str(args.elo[0]), str(args.elo[1]), "--seed", str(args.seed),
            "--records", str(OUT / f"{name}.jsonl")]
