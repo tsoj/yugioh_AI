@@ -89,7 +89,8 @@ class CorpusCompletion(DeckCompletion):
             rng = random.Random(zlib.crc32(repr(sorted(known.items())).encode()))
             best = np.array(rng.sample(range(self.n), self.top_k))
         else:
-            best = np.argsort(-scores)[:self.top_k]
+            # (stable: numpy's default sort of float32 arrays orders ties by machine, e.g. with SIMD)
+            best = np.argsort(-scores, kind="stable")[:self.top_k]
         weights: Counter = Counter()
         mask = np.isin(self.deck, best)
         for d, code, k, is_extra in zip(self.deck[mask], self.code[mask], self.count[mask], self.extra[mask]):

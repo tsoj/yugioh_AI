@@ -104,6 +104,39 @@ impl PyTracker {
     fn dump(&self) -> String {
         dump(&self.t).to_string()
     }
+
+    /// Tracker.solve with the completion "vanilla" or "corpus": the hypothesis as a JSON text,
+    /// or the TrackerError's text (prefixed "error: ").
+    fn solve(&mut self, py: Python<'_>, completion: &str) -> PyResult<String> {
+        use ygoai::belief::completion::{Completion, CorpusCompletion, VanillaCompletion};
+        let comp: &dyn Completion = match completion {
+            "vanilla" => VanillaCompletion::get(),
+            "corpus" => CorpusCompletion::get().map_err(PyValueError::new_err)?,
+            _ => return Err(PyValueError::new_err(format!("unknown completion {completion}"))),
+        };
+        let t = &mut self.t;
+        Ok(match py.detach(|| t.solve(Some(comp))) {
+            Err(e) => format!("error: {}", e.0),
+            Ok(h) => hypothesis_json(&h).to_string(),
+        })
+    }
+}
+
+pub fn hypothesis_json(h: &ygoai::belief::tracker::Hypothesis) -> Value {
+    let mut var_codes: Vec<(usize, Option<u32>)> = h.var_codes.iter().map(|(&k, &v)| (k, v)).collect();
+    var_codes.sort();
+    let mut observed: Vec<usize> = h.observed.iter().copied().collect();
+    observed.sort();
+    json!({
+        "decks": h.decks.iter().map(|(m, e)| json!({"main": m, "extra": e})).collect::<Vec<_>>(),
+        "deck_orders": h.deck_orders, "extra_orders": h.extra_orders,
+        "shuffles": h.shuffles.iter().map(|s| json!({"player": s.player, "location": pool_loc(s.location), "codes": s.codes,
+                                                   "ranks": s.ranks, "owners": s.owners})).collect::<Vec<_>>(),
+        "set_card_shuffles": h.set_card_shuffles,
+        "set_card_shuffle_ranks": h.set_card_shuffle_ranks.iter().map(|(r, o)| json!([r, o])).collect::<Vec<_>>(),
+        "unknown_atoms": h.unknown_atoms, "var_codes": var_codes, "observed": observed,
+        "deck_ranks": h.deck_ranks, "extra_ranks": h.extra_ranks,
+    })
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

@@ -2,7 +2,7 @@
 # binding ygoai_rs. The duel engine (rust/, ygopro-core-rust) is a workspace of its own.
 [workspace]
 resolver = "2"
-members = ["ygoai_rs", "crates/ygoai"]
+members = ["ygoai_rs", "crates/ygoai", "crates/highs"]
 exclude = ["rust"]
 
 [workspace.package]

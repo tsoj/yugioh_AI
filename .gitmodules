@@ -10,3 +10,6 @@
 [submodule "rust"]
 	path = rust
 	url = git@github.com:tsoj/ygopro-core-rust.git
+[submodule "external/HiGHS"]
+	path = external/HiGHS
+	url = https://github.com/ERGO-Code/HiGHS.git

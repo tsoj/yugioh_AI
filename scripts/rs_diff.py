@@ -351,6 +351,71 @@ def tracker_both(seed: int, decks: str) -> Diff:
     return d
 
 
+def py_hypothesis(h) -> dict:
+    return {"decks": h.decks, "deck_orders": h.deck_orders, "extra_orders": h.extra_orders,
+            "shuffles": [{"player": s["player"], "location": s["location"], "codes": s["codes"], "ranks": s["ranks"],
+                          "owners": s["owners"]} for s in h.shuffles],
+            "set_card_shuffles": h.set_card_shuffles,
+            "set_card_shuffle_ranks": [list(x) for x in h.set_card_shuffle_ranks],
+            "unknown_atoms": h.unknown_atoms, "var_codes": sorted([k, v] for k, v in h.var_codes.items()),
+            "observed": sorted(h.observed), "deck_ranks": h.deck_ranks, "extra_ranks": h.extra_ranks}
+
+
+_py_completions: dict = {}
+
+
+def flow_both(seed: int, decks: str, completion: str = "corpus") -> Diff:
+    """Both trackers over prefixes of both players' streams, then Tracker.solve (the flow model and
+    the deck completion): the same hypotheses (or the same failures)."""
+    from ygoai.belief.games import make_game_streams
+    from ygoai.belief.tracker import Tracker, TrackerError
+    from ygoai.carddb import default_db
+    from ygoai.game import init_info
+    if completion not in _py_completions:
+        if completion == "corpus":
+            from ygoai.belief.corpus import CorpusCompletion
+            _py_completions[completion] = CorpusCompletion()
+        else:
+            from ygoai.belief.completion import VanillaCompletion
+            _py_completions[completion] = VanillaCompletion()
+    comp = _py_completions[completion]
+    d = Diff(seed)
+    record, streams = make_game_streams(seed, decks=decks, pairs=PAIRS)
+    for viewer in (0, 1):
+        items = streams[viewer]
+        prompts = [i for i, it in enumerate(items) if it[0] == "prompt"]
+        cuts = sorted({prompts[int(f * (len(prompts) - 1))] + 1 for f in (0.25, 0.5, 0.75, 1.0)}) if prompts else []
+        for cut in cuts:
+            init = init_info(record, viewer)
+            py, rs = Tracker(viewer, init), ygoai_rs.Tracker(viewer, init)
+            try:
+                for it in items[:cut]:
+                    py.process(it)
+            except TrackerError:
+                break
+            for it in items[:cut]:
+                rs.process(it)
+            try:
+                a = py_hypothesis(py.solve(comp, default_db()))
+            except TrackerError as e:
+                a = f"error: {e}"
+            b = rs.solve(completion)
+            b = b if b.startswith("error: ") else json.loads(b)
+            d.checked["flow.ok"] += 1
+            if isinstance(a, str) != isinstance(b, str):
+                d.counts["flow.ok"] += 1
+                d.examples.append(f"seed {seed} viewer {viewer} cut {cut}: py {str(a)[:200]} / rs {str(b)[:200]}")
+                continue
+            if isinstance(a, str):
+                continue
+            d.checked["flow.hypothesis"] += 1
+            if a != b:
+                d.counts["flow.hypothesis"] += 1
+                if d.counts["flow.hypothesis"] <= 2:
+                    d.examples.append(f"seed {seed} viewer {viewer} cut {cut}: {first_diff(a, b)}")
+    return d
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--games", type=int, default=50)
@@ -360,9 +425,14 @@ def main() -> None:
     ap.add_argument("--fuzz", type=int, default=0, help="instead of games: N random messages per seed")
     ap.add_argument("--play", action="store_true", help="instead: whole games of built-in agents played by both")
     ap.add_argument("--tracker", action="store_true", help="instead: the belief trackers over the test games' streams")
+    ap.add_argument("--flow", choices=["vanilla", "corpus"], help="instead: the trackers' hypotheses (flow model) with this completion")
     a = ap.parse_args()
     seeds = range(a.start, a.start + a.games)
-    if a.tracker:
+    if a.flow:
+        from multiprocessing import get_context
+        with get_context("spawn").Pool(a.j, maxtasksperchild=20) as pool:
+            results = pool.starmap(flow_both, [(s, a.decks, a.flow) for s in seeds], chunksize=1)
+    elif a.tracker:
         from multiprocessing import get_context
         with get_context("spawn").Pool(a.j, maxtasksperchild=20) as pool:
             results = pool.starmap(tracker_both, [(s, a.decks) for s in seeds], chunksize=1)
