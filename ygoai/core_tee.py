@@ -101,8 +101,7 @@ class Duel:
             self.b.close()
         self.handle = None
 
-    def clone(self):
-        raise NotImplementedError("the C++ core cannot copy a duel")
+    # (no clone(): the C++ core cannot copy a duel, and the agents check for the method)
 
     def new_card(self, owner, code, location, controller=None, sequence=0, position=None):
         from . import constants as C
