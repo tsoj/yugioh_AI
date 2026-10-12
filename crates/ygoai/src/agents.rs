@@ -1,5 +1,5 @@
-//! Built-in agents (ygoai/agents): so far the random agent, which makes exactly the choices of
-//! the Python one with the same seed.
+//! Built-in agents (ygoai/agents): random and greedy (the heuristic player: crate::heuristic),
+//! which make exactly the choices of the Python ones with the same seeds.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -219,4 +219,130 @@ impl Agent for RandomAgent {
     fn respond(&mut self, prompt: &Msg, _state: Option<&Snapshot>, _clock: Option<(f64, f64)>) -> Result<Response, AgentError> {
         random_response(prompt, &mut self.rng, 0.05)
     }
+}
+
+pub const MAX_SAME_ACTIVATION_PER_TURN: u32 = 3;
+
+/// Activates everything it can, summons, sets, always attacks; random where it has no opinion
+/// (agents/greedy_agent.py, the same choices with the same seed).
+pub struct GreedyAgent {
+    rng: PyRandom,
+    activations: HashMap<(u32, u32, u32, Option<u64>), u32>,
+}
+
+impl GreedyAgent {
+    pub fn new(seed: i64) -> GreedyAgent {
+        GreedyAgent { rng: PyRandom::new(seed as i128), activations: HashMap::new() }
+    }
+
+    fn key(e: &crate::messages::Card) -> (u32, u32, u32, Option<u64>) {
+        (e.code, e.loc, e.seq, e.desc)
+    }
+
+    fn allowed(&self, e: &crate::messages::Card) -> bool {
+        self.activations.get(&Self::key(e)).copied().unwrap_or(0) < MAX_SAME_ACTIVATION_PER_TURN
+    }
+
+    fn note(&mut self, e: &crate::messages::Card) {
+        *self.activations.entry(Self::key(e)).or_insert(0) += 1;
+    }
+
+    fn pick(&mut self, opts: &[Response]) -> Result<Response, AgentError> {
+        if opts.is_empty() {
+            return Err(AgentError::Failed("IndexError: Cannot choose from an empty sequence".into()));
+        }
+        Ok(self.rng.choice(opts).clone())
+    }
+}
+
+impl Agent for GreedyAgent {
+    fn name(&self) -> String {
+        "greedy".into()
+    }
+    fn observe(&mut self, msg: &Msg) {
+        if let Msg::NewTurn { .. } = msg {
+            self.activations.clear();
+        }
+    }
+    fn respond(&mut self, prompt: &Msg, _state: Option<&Snapshot>, _clock: Option<(f64, f64)>) -> Result<Response, AgentError> {
+        let kind_is = |o: &Response, k: &str| o.kind.as_deref() == Some(k);
+        match prompt {
+            Msg::SelectIdlecmd { activatable, spsummonable, .. } => {
+                let opts = idle_options(prompt);
+                for kind in ["activate", "spsummon", "summon", "sset", "mset", "to_bp", "to_ep"] {
+                    let list = match kind {
+                        "activate" => Some(activatable),
+                        "spsummon" => Some(spsummonable),
+                        _ => None,
+                    };
+                    let cands: Vec<Response> = opts
+                        .iter()
+                        .filter(|o| kind_is(o, kind) && list.is_none_or(|l| self.allowed(&l[o.index.unwrap() as usize])))
+                        .cloned()
+                        .collect();
+                    if !cands.is_empty() {
+                        let choice = self.pick(&cands)?;
+                        if let Some(l) = list {
+                            self.note(&l[choice.index.unwrap() as usize]);
+                        }
+                        return Ok(choice);
+                    }
+                }
+                self.pick(&opts)
+            }
+            Msg::SelectBattlecmd { activatable, .. } => {
+                let opts = battle_options(prompt);
+                let acts: Vec<Response> =
+                    opts.iter().filter(|o| kind_is(o, "activate") && self.allowed(&activatable[o.index.unwrap() as usize])).cloned().collect();
+                if !acts.is_empty() {
+                    let choice = self.pick(&acts)?;
+                    self.note(&activatable[choice.index.unwrap() as usize]);
+                    return Ok(choice);
+                }
+                let attacks: Vec<Response> = opts.iter().filter(|o| kind_is(o, "attack")).cloned().collect();
+                if !attacks.is_empty() {
+                    return self.pick(&attacks);
+                }
+                for kind in ["to_m2", "to_ep"] {
+                    if let Some(o) = opts.iter().find(|o| kind_is(o, kind)) {
+                        return Ok(o.clone());
+                    }
+                }
+                self.pick(&opts)
+            }
+            Msg::SelectChain { chains, forced, .. } => {
+                let cands: Vec<usize> = (0..chains.len()).filter(|&i| self.allowed(&chains[i])).collect();
+                if !cands.is_empty() {
+                    let i = *self.rng.choice(&cands);
+                    self.note(&chains[i]);
+                    return Ok(index(i));
+                }
+                Ok(Response { index: Some(if *forced != 0 { 0 } else { -1 }), ..Response::default() })
+            }
+            Msg::SelectEffectyn { .. } | Msg::SelectYesno { .. } => Ok(Response { yes: Some(true), ..Response::default() }),
+            Msg::SelectPosition { positions, .. } if positions & POS_FACEUP_ATTACK != 0 => {
+                Ok(Response { position: Some(POS_FACEUP_ATTACK as i64), ..Response::default() })
+            }
+            Msg::SelectCard { cancelable, min, max, cards, .. } if *cancelable != 0 && (*max).min(cards.len() as u32) >= (*min).max(1) => {
+                // never cancel: pick the maximum amount of cards
+                let n = cards.len() as i64;
+                let k = (*max as i64).min(n) as usize;
+                let mut idx = self.rng.sample(&(0..n).collect::<Vec<_>>(), k);
+                idx.sort();
+                Ok(Response { indices: Some(idx), ..Response::default() })
+            }
+            Msg::SelectUnselectCard { select_cards, .. } if !select_cards.is_empty() => Ok(index(self.rng.randrange(select_cards.len()))),
+            _ => random_response(prompt, &mut self.rng, 0.0),
+        }
+    }
+}
+
+/// A built-in agent by name (random, greedy, heuristic), seeded as make_agent(name, seed).
+pub fn make_agent(name: &str, seed: i64) -> Option<Box<dyn Agent + Send>> {
+    Some(match name {
+        "random" => Box::new(RandomAgent::new(seed)),
+        "greedy" => Box::new(GreedyAgent::new(seed)),
+        "heuristic" => Box::new(crate::heuristic::HeuristicAgent::new(seed)),
+        _ => return None,
+    })
 }

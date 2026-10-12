@@ -10,7 +10,6 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::agents::RandomAgent;
 use crate::game::{Agent, AgentError, Clock, Deck, DuelConfig, GameError, GameRecord, PlayOptions, new_record, play};
 use crate::protocol::{EngineProcess, shlex_split};
 
@@ -33,18 +32,18 @@ impl EngineSpec {
 /// engine's memory does not grow over a match).
 pub fn get_engine(spec: &EngineSpec, seed: i64) -> Result<Box<dyn Agent>, AgentError> {
     if let Some(name) = spec.command.strip_prefix("builtin:") {
-        return match name {
-            "random" => Ok(Box::new(Named(RandomAgent::new(seed), spec.name.clone()))),
-            _ => Err(AgentError::Failed(format!("no built-in agent {name}"))),
+        return match crate::agents::make_agent(name, seed) {
+            Some(a) => Ok(Box::new(Named(a, spec.name.clone()))),
+            None => Err(AgentError::Failed(format!("no built-in agent {name}"))),
         };
     }
     Ok(Box::new(EngineProcess::start(&shlex_split(&spec.command), &spec.name)?))
 }
 
 /// An agent under the engine's name.
-struct Named<A: Agent>(A, String);
+struct Named<A: Agent + ?Sized>(Box<A>, String);
 
-impl<A: Agent> Agent for Named<A> {
+impl<A: Agent + ?Sized> Agent for Named<A> {
     fn name(&self) -> String {
         self.1.clone()
     }

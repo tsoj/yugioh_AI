@@ -235,18 +235,23 @@ def check_messages_fuzz(d: Diff, raw: bytes, rng) -> None:
         d.eq("check_sum", actions.check_sum(msg, resp["indices"]), ygoai_rs.check_sum(raw, resp["indices"]), ctx)
 
 
+PLAY_PAIRS = [("random", "random"), ("random", "greedy"), ("greedy", "heuristic"), ("heuristic", "random"),
+              ("greedy", "greedy"), ("heuristic", "heuristic")]
+
+
 def play_both(seed: int, decks: str) -> Diff:
-    """One game of two random agents played by Python (game.play) and by Rust (game::play): the
-    records must be equal; then both players' observation streams of the game (game.replay with
-    ObservationLog), replayed by both."""
-    from ygoai.agents.random_agent import RandomAgent
+    """One game of two built-in agents (PLAY_PAIRS by seed) played by Python (game.play) and by
+    Rust (game::play): the records must be equal; then both players' observation streams of the
+    game (game.replay with ObservationLog), replayed by both."""
+    from ygoai.agents import make_agent
     from ygoai.belief.games import game_decks
     from ygoai.game import GameRecord, ObservationLog, new_record, play, replay
     d = Diff(seed)
     record = new_record(list(game_decks(seed, decks=decks)), seed)
     blank = json.dumps(record.to_json())
-    play(record, [RandomAgent(seed * 2), RandomAgent(seed * 2 + 1)])
-    rs = json.loads(ygoai_rs.play_game(blank, [("random", seed * 2), ("random", seed * 2 + 1)]))
+    names = PLAY_PAIRS[seed % len(PLAY_PAIRS)]
+    play(record, [make_agent(names[0], seed * 2), make_agent(names[1], seed * 2 + 1)])
+    rs = json.loads(ygoai_rs.play_game(blank, [(names[0], seed * 2), (names[1], seed * 2 + 1)]))
     py = record.to_json()
     for key in ("core_seed", "deck_orders", "agents", "result"):
         d.eq(f"record.{key}", py[key], rs[key], "")
@@ -268,7 +273,7 @@ def main() -> None:
     ap.add_argument("--decks", default="random")
     ap.add_argument("-j", type=int, default=1)
     ap.add_argument("--fuzz", type=int, default=0, help="instead of games: N random messages per seed")
-    ap.add_argument("--play", action="store_true", help="instead: whole games of random agents played by both")
+    ap.add_argument("--play", action="store_true", help="instead: whole games of built-in agents played by both")
     a = ap.parse_args()
     seeds = range(a.start, a.start + a.games)
     if a.play:

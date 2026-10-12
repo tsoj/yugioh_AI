@@ -95,19 +95,15 @@ pub fn is_declarable(card: (u32, u32, u32, u64, u32, Vec<u16>), opcodes: Vec<u64
 #[pyfunction]
 #[pyo3(signature = (record, agents, max_turns=100, max_decisions=20000))]
 pub fn play_game(py: Python<'_>, record: &str, agents: Vec<(String, i64)>, max_turns: u32, max_decisions: usize) -> PyResult<String> {
-    use ygoai::agents::RandomAgent;
     use ygoai::game::{self, GameRecord, PlayOptions};
     let mut record: GameRecord = serde_json::from_str(record).map_err(|e| PyValueError::new_err(e.to_string()))?;
-    let mut made: Vec<RandomAgent> = Vec::new();
+    let mut made = Vec::new();
     for (name, seed) in &agents {
-        match name.as_str() {
-            "random" => made.push(RandomAgent::new(*seed)),
-            _ => return Err(PyValueError::new_err(format!("no built-in Rust agent {name}"))),
-        }
+        made.push(ygoai::agents::make_agent(name, *seed).ok_or_else(|| PyValueError::new_err(format!("no built-in Rust agent {name}")))?);
     }
     let [a, b] = &mut made[..] else { return Err(PyValueError::new_err("two agents")) };
     let mut opts = PlayOptions { max_turns, max_decisions, ..PlayOptions::default() };
-    py.detach(|| game::play(&mut record, &mut [a, b], &mut [], &mut opts)).map_err(|e| PyValueError::new_err(e.0))?;
+    py.detach(|| game::play(&mut record, &mut [&mut **a, &mut **b], &mut [], &mut opts)).map_err(|e| PyValueError::new_err(e.0))?;
     serde_json::to_string(&record).map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
