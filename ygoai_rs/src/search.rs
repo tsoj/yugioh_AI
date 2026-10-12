@@ -29,7 +29,7 @@ impl AlphaBetaSearch {
 
     /// (best candidate index, depth completed, nodes) for the duel's pending prompt `prompt`
     /// (the core's, a dict as messages.parse makes it) and its candidates `cands` (core responses).
-    #[pyo3(signature = (duel, prompt, cands, seeds, hint, budget, elapsed, clock_remaining))]
+    #[pyo3(signature = (duel, prompt, cands, seeds, hint, budget, elapsed, clock_remaining, max_nodes=None))]
     #[allow(clippy::too_many_arguments)]
     fn search(
         &mut self,
@@ -42,13 +42,14 @@ impl AlphaBetaSearch {
         budget: Option<f64>,
         elapsed: f64,
         clock_remaining: f64,
+        max_nodes: Option<u64>,
     ) -> PyResult<(usize, i32, u64)> {
         let prompt: Msg = pythonize::depythonize(prompt).map_err(|e| PyValueError::new_err(e.to_string()))?;
         let cands: Vec<Response> = pythonize::depythonize(cands).map_err(|e| PyValueError::new_err(e.to_string()))?;
         if cands.is_empty() {
             return Err(PyValueError::new_err("no candidates"));
         }
-        let params = ygoai::search::SearchParams { budget, elapsed, clock_remaining, hint, seeds };
+        let params = ygoai::search::SearchParams { budget, elapsed, clock_remaining, hint, seeds, max_nodes };
         let before = self.ab.nodes;
         let d = &duel.d;
         let ab = &mut self.ab;

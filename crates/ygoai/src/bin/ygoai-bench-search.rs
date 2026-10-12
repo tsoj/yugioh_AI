@@ -42,7 +42,7 @@ fn main() {
                 ab.prepare();
                 let before = ab.nodes;
                 let t = Instant::now();
-                let params = SearchParams { budget: Some(budget), elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2] };
+                let params = SearchParams { budget: Some(budget), elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2], max_nodes: None };
                 let (_, done) = ab.search(&duel, &p, &cands, &params);
                 secs += t.elapsed().as_secs_f64();
                 nodes += ab.nodes - before;

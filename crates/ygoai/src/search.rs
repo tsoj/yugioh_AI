@@ -376,22 +376,27 @@ impl Default for AlphaBeta {
     }
 }
 
-/// One search: the rules' players and the deadline.
+/// One search: the rules' players, the deadline and the node limit.
 struct Ctx<'a> {
     ab: &'a mut AlphaBeta,
     policies: [Heuristic; 2],
     deadline: Option<Instant>,
+    /// (in the count of `ab.nodes`)
+    node_limit: Option<u64>,
 }
 
 /// What a search is given besides the duel: time (`budget` in seconds for this decision, None
 /// for a fixed depth; `elapsed` already spent on it; the clock's remaining seconds), the select
-/// hint before a card selection and the seeds of the rules' two players.
+/// hint before a card selection and the seeds of the rules' two players. `max_nodes`: a fixed
+/// number of nodes instead (deepening until it is used up; deterministic).
+#[derive(Default)]
 pub struct SearchParams {
     pub budget: Option<f64>,
     pub elapsed: f64,
     pub clock_remaining: f64,
     pub hint: Option<u64>,
     pub seeds: [u32; 2],
+    pub max_nodes: Option<u64>,
 }
 
 impl AlphaBeta {
@@ -415,7 +420,8 @@ impl AlphaBeta {
         policies[player].hint = p.hint;
         let turn_player = duel.ext_get_info()[1];
         let deadline = p.budget.map(|b| t0 + std::time::Duration::from_secs_f64(b.max((HARD_FACTOR * b).min(HARD_SHARE * p.clock_remaining))));
-        let mut ctx = Ctx { ab: self, policies, deadline };
+        let node_limit = p.max_nodes.map(|n| self.nodes + n);
+        let mut ctx = Ctx { ab: self, policies, deadline, node_limit };
         let card_order = ctx.card_order(core_prompt);
         let pref = ordered(core_prompt, turn_player, card_order.as_deref());
         let mut order: Vec<usize> = (0..core_cands.len()).collect();
@@ -423,13 +429,14 @@ impl AlphaBeta {
         if matches!(core_prompt, Msg::SelectCard { .. }) {
             order.truncate(ROOT_CARD_WIDTH);
         }
-        ctx.deepen(duel, core_prompt, core_cands, order, t0, p.budget)
+        let unbounded = p.budget.is_none() && p.max_nodes.is_none();
+        ctx.deepen(duel, core_prompt, core_cands, order, t0, p.budget, unbounded)
     }
 }
 
 impl Ctx<'_> {
     fn timed_out(&self) -> bool {
-        self.deadline.is_some_and(|d| Instant::now() > d)
+        self.deadline.is_some_and(|d| Instant::now() > d) || self.node_limit.is_some_and(|n| self.ab.nodes >= n)
     }
 
     /// For a card selection: the rules' order of its cards (by the select hint the player got,
@@ -442,9 +449,10 @@ impl Ctx<'_> {
         Some(order)
     }
 
-    fn deepen(&mut self, duel: &Duel, prompt: &Msg, cands: &[Response], mut order: Vec<usize>, t0: Instant, budget: Option<f64>) -> (usize, i32) {
+    #[allow(clippy::too_many_arguments)]
+    fn deepen(&mut self, duel: &Duel, prompt: &Msg, cands: &[Response], mut order: Vec<usize>, t0: Instant, budget: Option<f64>, fixed_depth: bool) -> (usize, i32) {
         let (mut best, mut done) = (order[0], 0);
-        let max_depth = if budget.is_none() { DEPTH_NO_CLOCK } else { MAX_DEPTH };
+        let max_depth = if fixed_depth { DEPTH_NO_CLOCK } else { MAX_DEPTH };
         for depth in 1..=max_depth {
             if let Some(b) = budget
                 && depth > 1

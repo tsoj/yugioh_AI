@@ -25,6 +25,7 @@ ygoai_rs.AlphaBetaSearch), on copies of the duel:
 
 from __future__ import annotations
 
+import os
 import time
 
 from .. import constants as C
@@ -122,6 +123,8 @@ class AlphaBetaAgent(BeliefMCAgent):
         self.depths: list[int] = []  # (depth completed per search)
         self.nodes = 0
         self._rs = None  # (the Rust search: its tables live across decisions)
+        # (a fixed number of nodes per search instead of the clock's budget: YGOAI_SEARCH_NODES)
+        self.max_nodes = int(os.environ.get("YGOAI_SEARCH_NODES") or 0) or None
 
     def _budget(self) -> float | None:
         return None if self.clock is None else self.clock[0] / MOVES_TO_GO + self.clock[1]
@@ -134,8 +137,11 @@ class AlphaBetaAgent(BeliefMCAgent):
             self._rs = ygoai_rs.AlphaBetaSearch()
         self._rs.prepare()
         seeds = [self.rng.getrandbits(32), self.rng.getrandbits(32)]  # (the rules' players)
+        if self.max_nodes is not None:
+            budget = None
         best, done, nodes = self._rs.search(duel._d, core_prompt, core_cands, seeds, hint, budget,
-                                            time.monotonic() - t0, self.clock[0] if self.clock else 0.0)
+                                            time.monotonic() - t0, self.clock[0] if self.clock else 0.0,
+                                            self.max_nodes)
         self.nodes += nodes
         self.depths.append(done)
         return best
