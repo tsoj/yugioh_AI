@@ -119,7 +119,7 @@ def _agent_sequence(record, items, seed: int, viewer: int, every: int, timeout: 
         signal.alarm(timeout)
         t0 = time.monotonic()
         try:
-            br, duel = belief.reconstruct(items[:cut])
+            br, duel = belief.reconstruct(items[:cut], timeout)
             if time.monotonic() - t0 > timeout:
                 raise Timeout()
             problem = None

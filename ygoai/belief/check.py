@@ -67,8 +67,8 @@ class CheckResult:
 
 
 def use_rust() -> bool:
-    """Whether the belief replay runs in Rust (YGOAI_REPLAY=rust)."""
-    return os.environ.get("YGOAI_REPLAY", "python") == "rust"
+    """Whether the belief replay runs in Rust (the default; YGOAI_REPLAY=python for this module's)."""
+    return os.environ.get("YGOAI_REPLAY", "rust") == "rust"
 
 
 def rust_completion(comp):

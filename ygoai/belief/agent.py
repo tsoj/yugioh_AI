@@ -36,8 +36,8 @@ _INCREMENTAL = not os.environ.get("YGOAI_NO_INCREMENTAL")
 
 
 class _RustAgentBelief:
-    """AgentBelief on the Rust belief replay (YGOAI_REPLAY=rust): the duels it hands out are copies,
-    the caller's to keep."""
+    """AgentBelief on the Rust belief replay (the default; YGOAI_REPLAY=python for this module's):
+    the duels it hands out are copies, the caller's to keep."""
 
     def __init__(self, viewer: int, init: dict, completion=None):
         import ygoai_rs
@@ -48,11 +48,12 @@ class _RustAgentBelief:
         self._b = ygoai_rs.AgentBelief(viewer, init, rust_completion(completion))
         self._config = DuelConfig(**init["config"]) if init.get("config") else None
 
-    def reconstruct(self, items: list[tuple]):
+    def reconstruct(self, items: list[tuple], timeout: float | None = None):
+        """(`timeout`: seconds, after which it gives up: no duel; signals cannot stop Rust code)"""
         from types import SimpleNamespace
 
         from ..core_rust import Duel
-        info, d = self._b.reconstruct(items)
+        info, d = self._b.reconstruct(items, timeout)
         return SimpleNamespace(**info), (Duel.from_rust(d, self._config) if d is not None else None)
 
     @property
@@ -90,9 +91,10 @@ class AgentBelief:
         self._seen_upto = 0
         self.retries = 0  # (fresh attempts after an inherited one failed or was approximate)
 
-    def reconstruct(self, items: list[tuple]):
+    def reconstruct(self, items: list[tuple], timeout: float | None = None):
         """The duel at the end of `items` (or None if there is none, not even an
-        approximate one) and its BeliefReplay (see its `approximate`)."""
+        approximate one) and its BeliefReplay (see its `approximate`). (`timeout`: for the
+        Rust replay; this one is stopped from outside.)"""
         live, self._live = self._live, None
         if self._last is not None and self._last is not live:
             self._last.close()

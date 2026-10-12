@@ -40,6 +40,8 @@ pub struct AgentBelief {
     seen_upto: usize,
     /// fresh attempts after an inherited one failed or was approximate
     pub retries: usize,
+    /// when the current reconstruction gives up
+    deadline: Option<std::time::Instant>,
 }
 
 /// What a reconstruction was (the parts of its BeliefReplay a caller reads).
@@ -69,18 +71,21 @@ impl AgentBelief {
             seen: HashMap::new(),
             seen_upto: 0,
             retries: 0,
+            deadline: None,
         }
     }
 
     /// The duel at the end of `items` (a copy: the caller may change it), or None if there is
-    /// none, not even an approximate one.
-    pub fn reconstruct(&mut self, items: &[ObsItem]) -> (Reconstruction, Option<RDuel>) {
+    /// none, not even an approximate one (or none within `timeout`).
+    pub fn reconstruct(&mut self, items: &[ObsItem], timeout: Option<std::time::Duration>) -> (Reconstruction, Option<RDuel>) {
+        self.deadline = timeout.map(|t| std::time::Instant::now() + t);
         let mut live = self.live.take();
         if self.reveals(items) && live.is_some() {
             self.revealed += 1;
             live = None;
         }
         if let (Some(mut duel), Some(prev)) = (live, self.prev.as_mut()) {
+            prev.deadline = self.deadline;
             if prev.extend(&mut duel, items.to_vec()).is_ok() {
                 self.extended += 1;
                 let out = duel.clone();
@@ -174,6 +179,7 @@ impl AgentBelief {
         br.check_state = false;
         br.allow_approximate = true; // (an agent needs some state: the closest one, from observations only)
         br.read_guided = false; // (too slow per decision: the approximate pass comes right after the repairs)
+        br.deadline = self.deadline;
         let inherited = prev.is_some_and(|p| br.inherit(p));
         let duel = br.run().ok();
         (br, duel, inherited)

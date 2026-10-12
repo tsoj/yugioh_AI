@@ -286,10 +286,11 @@ impl AgentBelief {
         Ok(AgentBelief { b: ygoai::belief::agent::AgentBelief::new(viewer, de(init)?, completion_of(completion)?) })
     }
 
-    fn reconstruct<'py>(&mut self, py: Python<'py>, items: &Bound<'py, PyAny>) -> PyResult<(Bound<'py, PyAny>, Option<crate::RustDuel>)> {
+    #[pyo3(signature = (items, timeout=None))]
+    fn reconstruct<'py>(&mut self, py: Python<'py>, items: &Bound<'py, PyAny>, timeout: Option<f64>) -> PyResult<(Bound<'py, PyAny>, Option<crate::RustDuel>)> {
         let items = items_of(items)?;
         // (with the GIL: the replay's state is not Send; an agent's process does one thing at a time)
-        let (r, duel) = self.b.reconstruct(&items);
+        let (r, duel) = self.b.reconstruct(&items, timeout.map(std::time::Duration::from_secs_f64));
         let info = json!({
             "approximate": r.approximate, "final_prompt": r.final_prompt, "lenient_skips": r.lenient_skips,
             "restarts": r.restarts,
