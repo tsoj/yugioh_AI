@@ -39,7 +39,9 @@ pub enum Search {
     /// alpha-beta on a copy whose opponent's hidden cards are guessed from the visible ones only
     AlphaBetaNaive { ab: Box<AlphaBeta>, max_nodes: Option<u64> },
     /// alpha-beta on a minimal reconstruction (belief/minimal.rs: the view at the latest command and
-    /// the stream since); the full one is made too (the same time) but not used
+    /// the stream since) where that command is in the viewer's current turn and the result matches
+    /// what the viewer sees (as an approximate one must), the full one elsewhere (made at every
+    /// decision: the same time)
     AlphaBetaMinimal { ab: Box<AlphaBeta>, max_nodes: Option<u64> },
     Mcts { max_sims: Option<u64>, c: Option<f64>, rollout_turns: Option<u32>, cutoff_eval: bool },
 }
@@ -97,6 +99,8 @@ pub struct BeliefSearchAgent {
     // statistics
     pub searches: usize,
     pub failures: usize,
+    /// (alphabeta_minimal) searches on the minimal reconstruction
+    pub minimal_used: usize,
     pub nodes: u64,
 }
 
@@ -125,6 +129,7 @@ impl BeliefSearchAgent {
             belief: None,
             searches: 0,
             failures: 0,
+            minimal_used: 0,
             nodes: 0,
         })
     }
@@ -139,13 +144,18 @@ impl BeliefSearchAgent {
         let t0 = Instant::now();
         let budget = self.budget(clock);
         let (mut r, mut duel) = self.belief.as_mut()?.reconstruct(&self.items, None);
-        if matches!(self.search, Search::AlphaBetaMinimal { .. }) {
-            // (the full reconstruction above only for the time it takes)
+        if matches!(self.search, Search::AlphaBetaMinimal { .. }) && command_this_turn(&self.items, self.player) {
+            // (the full reconstruction above only for the time it takes; the minimal one only from a
+            // command in the viewer's current turn: the opponent's hidden play between would be guesses)
+            // (where it does not match what the viewer sees now, the full one after all)
             let seed = self.rng.getrandbits(32) as u64;
-            (r, duel) = match crate::belief::minimal::minimal_reconstruct(self.init.as_ref()?, &self.items, self.completion, seed) {
-                Some((r, d)) => (r, Some(d)),
-                None => (r, None),
-            };
+            if let Some((mr, mut md)) = crate::belief::minimal::minimal_reconstruct(self.init.as_ref()?, &self.items, self.completion, seed) {
+                let fits = state.is_some_and(|s| count_diffs(&jv(s), &jv(&viewer_view(&mut md.d, self.player))) <= MAX_APPROX_DIFFS);
+                if fits {
+                    (r, duel) = (mr, Some(md));
+                    self.minimal_used += 1;
+                }
+            }
         }
         let Some(mut duel) = duel else {
             self.failures += 1;
@@ -217,6 +227,16 @@ pub fn count_diffs(a: &Value, b: &Value) -> usize {
     }
 }
 
+/// Whether the viewer's latest Idle/Battle command (outside a chain) is in the current turn and
+/// the turn is the viewer's.
+fn command_this_turn(items: &[ObsItem], viewer: u32) -> bool {
+    let Some(k) = items.iter().rposition(|it| matches!(it, ObsItem::Prompt(Msg::SelectIdlecmd { .. } | Msg::SelectBattlecmd { .. }, Some(s)) if s.chain.is_empty())) else {
+        return false;
+    };
+    let ObsItem::Prompt(_, Some(s)) = &items[k] else { return false };
+    s.turn_player == viewer && !items[k..].iter().any(|it| matches!(it, ObsItem::Msg(Msg::NewTurn { .. })))
+}
+
 /// (debugging) The paths where two views differ.
 pub fn diff_paths(a: &Value, b: &Value, path: String, out: &mut Vec<String>) {
     match (a, b) {
@@ -277,7 +297,7 @@ impl Agent for BeliefSearchAgent {
     }
     fn end(&mut self, _result: &serde_json::Map<String, Value>) {
         if std::env::var_os("YGOAI_AGENT_STATS").is_some() {
-            eprintln!("{} stats: searches {} failures {} nodes {}", self.name, self.searches, self.failures, self.nodes);
+            eprintln!("{} stats: searches {} failures {} minimal {} nodes {}", self.name, self.searches, self.failures, self.minimal_used, self.nodes);
         }
     }
 }
