@@ -157,6 +157,19 @@ def _agent_sequence(record, items, seed: int, viewer: int, every: int, timeout: 
 
 
 def run_task(task: tuple) -> list[dict]:
+    """All reconstructions of one game (see _run_task); with YGOAI_ENGINE=tee, a difference
+    between the engines fails the game's cases (and is logged by ygoai/core_tee.py)."""
+    if os.environ.get("YGOAI_ENGINE") != "tee":
+        return _run_task(task)
+    from ygoai.core_tee import TeeMismatch
+    try:
+        return _run_task(task)
+    except TeeMismatch as e:
+        return [{"seed": task[0], "viewer": v, "frac": f, "ok": False, "error": f"engines differ: {e}"}
+                for v, f in task[1]]
+
+
+def _run_task(task: tuple) -> list[dict]:
     """All reconstructions of one game: (seed, [(viewer, cut), ...], ...). The game
     is played once, recording both players' observation streams on the way."""
     seed, cases, mirror_prob, timeout, completion, pairs, decks, book, deck_pair, *opt = task

@@ -43,6 +43,7 @@ def rebuild(entry: dict, upto: int):
             na, nb = na - n, nb - n
             if s != CONTINUE:
                 rust_status = CONTINUE
+            rebuild.ahead = (na, nb, rust_status)
             continue
         if isinstance(args, tuple) and len(args) == 2 and isinstance(args[1], dict):
             args, kwargs = args
@@ -71,7 +72,7 @@ if __name__ == "__main__":
     upto = opt("--upto", entry["call"])
     print(entry["what"][:300])
     a, b = rebuild(entry, upto)
-    print(f"rebuilt up to call {upto} ({entry['calls'][upto][0]} next)")
+    print(f"rebuilt up to call {upto} ({entry['calls'][upto][0]} next); unmatched messages C++/Rust, Rust status: {getattr(rebuild, 'ahead', None)}")
     for name, d in (("C++ ", a), ("Rust", b)):
         print(f"{name}: info {d.info()}, select_chains {d.select_chains()}, pending_triggers {d.pending_triggers()}")
     sa, ma = run_to_question(a)

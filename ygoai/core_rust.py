@@ -51,6 +51,11 @@ class Duel:
         self._d.take_logs()
         self._logs = value
 
+    def set_fine_steps(self, on: bool) -> None:
+        """Whether process() stops inside card functions where the C++ core does (default on:
+        callers such as the belief replay change the duel between process() calls; off is faster)."""
+        self._d.set_fine_steps(on)
+
     def clone(self) -> "Duel":
         """A copy of the duel: both go on independently (cheap; no journal)."""
         new = object.__new__(Duel)

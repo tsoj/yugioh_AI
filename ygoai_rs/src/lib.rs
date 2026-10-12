@@ -62,12 +62,20 @@ impl RustDuel {
         let p = PlayerOptions { starting_lp: start_lp, starting_draw_count: start_hand, draw_count_per_turn: draw_per_turn };
         let mut d = Duel::new(&DuelOptions { seed, flags, team1: p, team2: p }, db.clone(), scripts.clone());
         ygo_cards::load_global_scripts(&mut d);
+        // (stop where the C++ core stops: the belief replay changes the duel between process calls)
+        d.fine_steps = true;
         Ok(RustDuel { d })
     }
 
     /// A copy of the duel (cheap: cards and effects are shared until changed).
     fn clone(&self) -> RustDuel {
         RustDuel { d: self.d.clone() }
+    }
+
+    /// Whether `process` stops inside card functions where the C++ core does (default: on; off is
+    /// faster, for callers that do not change the duel between `process` calls).
+    fn set_fine_steps(&mut self, on: bool) {
+        self.d.fine_steps = on;
     }
 
     /// The log messages since the last call: (type, text); type 0 is a script error.
