@@ -19,6 +19,7 @@ pub mod agents;
 pub mod game;
 pub mod heuristic;
 pub mod matchrun;
+pub mod mcts;
 pub mod messages;
 pub mod observe;
 pub mod paths;

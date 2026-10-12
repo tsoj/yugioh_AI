@@ -2,6 +2,7 @@ from .alphabeta import AlphaBetaAgent
 from .alphabeta_naive import AlphaBetaNaiveAgent
 from .base import Agent
 from .belief_mc import BeliefMCAgent
+from .mcts import MctsAgent
 from .greedy_agent import GreedyAgent
 from .heuristic_agents import HeuristicAgent, SummonAttackAgent
 from .policy_agent import PolicyAgent
@@ -11,7 +12,7 @@ from .simple_agents import MixedAgent, SetterAgent
 
 AGENTS = {"random": RandomAgent, "greedy": GreedyAgent, "setter": SetterAgent, "mixed": MixedAgent,
           "belief_mc": BeliefMCAgent, "summon_attack": SummonAttackAgent, "heuristic": HeuristicAgent,
-          "alphabeta": AlphaBetaAgent, "alphabeta_naive": AlphaBetaNaiveAgent, "policy": PolicyAgent,
+          "alphabeta": AlphaBetaAgent, "alphabeta_naive": AlphaBetaNaiveAgent, "mcts": MctsAgent, "policy": PolicyAgent,
           "puct": PuctAgent}
 
 
