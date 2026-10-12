@@ -2,7 +2,8 @@
 
 A suite or exploration run takes an hour or more and its worker processes are
 recycled, importing the code again: an edit during the run would mix versions.
-`reexec` copies the code (ygoai/, scripts/, core_ext/, the core library) to
+`reexec` copies the code (ygoai/, scripts/, core_ext/, the core library, the Rust
+engine's binding ygoai_rs) to
 build/snapshots/NAME and runs the calling script again from there; the data
 (external/, the decks, tests/, runs/ and the rest of build/, e.g. the game cache)
 are symlinks to the checkout's, so the results land where they always do and the
@@ -23,6 +24,7 @@ SNAPSHOTS = ROOT / "build" / "snapshots"
 _CODE = ("ygoai", "scripts", "core_ext")
 _SHARED = ("external", "download_human_decks", "tests", "runs")
 _NOT_SHARED = ("snapshots", "ocgcore", "ocgcore-src", "ocgcore-exp")
+_RUST = ("crates", "ygoai_rs", "Cargo.toml", "Cargo.lock")  # (the binding's sources besides the rust/ submodule)
 _ENV = "YGOAI_SNAPSHOT"  # (set in the snapshot's process: the checkout it was taken from)
 _KEEP_DAYS = 3
 
@@ -74,4 +76,50 @@ def make(name: str, ref: str | None = None) -> Path:
         for p in (dst / "build").glob("libocgcore*"):
             p.unlink()
         subprocess.run(["bash", str(dst / "scripts" / "build_core.sh")], check=True, capture_output=True)
+    _rust_binding(dst, ref)
     return dst
+
+
+def _installed_binding() -> Path | None:
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec("ygoai_rs")
+    except (ImportError, ValueError):
+        return None
+    if spec is None or not spec.origin or not spec.origin.endswith("__init__.py"):
+        return None
+    return Path(spec.origin).parent
+
+
+def _rust_binding(dst: Path, ref: str | None) -> None:
+    """The Rust engine's binding in the snapshot (python -m from there imports it first): the
+    installed one, or for a commit whose Rust sources differ from the checkout's, its own build."""
+    installed = _installed_binding()
+    if installed is None:
+        return
+    shutil.copytree(installed, dst / "ygoai_rs", ignore=shutil.ignore_patterns("__pycache__"))
+    if ref is None:
+        return
+    sub = lambda r: subprocess.run(["git", "-C", str(ROOT), "rev-parse", f"{r}:rust"], capture_output=True,  # noqa: E731
+                                   text=True).stdout.strip()
+    same = sub(ref) == sub("HEAD") and not subprocess.run(
+        ["git", "-C", str(ROOT), "diff", "--quiet", ref, "--", *_RUST]).returncode
+    if same or not sub(ref):
+        return
+    # (its own: the sources of the commit, the engine at its submodule commit, built in a capped scope)
+    src = SNAPSHOTS / f"{dst.name}-src"
+    if src.exists():
+        shutil.rmtree(src)
+    src.mkdir()
+    archive = subprocess.run(["git", "-C", str(ROOT), "archive", ref, *_RUST], check=True, capture_output=True).stdout
+    subprocess.run(["tar", "-x", "-C", str(src)], input=archive, check=True)
+    (src / "rust").mkdir()
+    archive = subprocess.run(["git", "-C", str(ROOT / "rust"), "archive", sub(ref)], check=True, capture_output=True).stdout
+    subprocess.run(["tar", "-x", "-C", str(src / "rust")], input=archive, check=True)
+    target = ROOT / "build" / "rust-snapshot-target"
+    cargo = ["cargo", "build", "--release", "-q", "-p", "ygoai_rs"]
+    if shutil.which("systemd-run"):
+        cargo = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=20G", "-p", "MemorySwapMax=0", *cargo]
+    subprocess.run(cargo, cwd=src, check=True, env={**os.environ, "CARGO_TARGET_DIR": str(target), "CARGO_BUILD_JOBS": "8"})
+    shutil.copy2(target / "release" / "libygoai_rs.so", dst / "ygoai_rs" / "ygoai_rs.abi3.so")
+    shutil.rmtree(src)

@@ -730,9 +730,10 @@ for _name, _fn in list(vars(Duel).items()):
     if callable(_fn) and not _name.startswith("_") and _name not in _NOT_JOURNALED:
         setattr(Duel, _name, _journaled(_name, _fn))
 
-# YGOAI_ENGINE=rust: the Rust engine (ygoai/core_rust.py) instead of the C++ core, same interface
+# The engine: the Rust engine (ygoai/core_rust.py, the default; same interface), YGOAI_ENGINE=cpp the
+# C++ core, YGOAI_ENGINE=tee both in lockstep. (The C++ core stays available as CppDuel.)
 CppDuel = Duel
-ENGINE = os.environ.get("YGOAI_ENGINE", "cpp")
+ENGINE = os.environ.get("YGOAI_ENGINE", "rust")
 if ENGINE == "rust":
     from .core_rust import Duel as _RustDuel  # noqa: E402
 

@@ -1,10 +1,10 @@
-"""Rules of the patched core (need build/libocgcore.so, see scripts/build_core.sh)."""
+"""Rules of the patched C++ core (need build/libocgcore.so, see scripts/build_core.sh)."""
 
 import unittest
 
 from ygoai import constants as C
 from ygoai.actions import encode
-from ygoai.core import Duel
+from ygoai.core import CppDuel as Duel
 from ygoai.game import run_until_prompt
 
 MYSTICAL_ELF = 15025844  # (a Level 4 Normal Monster)

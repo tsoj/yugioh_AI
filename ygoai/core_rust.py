@@ -1,5 +1,5 @@
 """The Rust duel engine (rust/, ygopro-core-rust, through the ygoai_rs binding) behind the interface
-of ygoai.core.Duel. ygoai.core uses it instead of the C++ core when YGOAI_ENGINE=rust.
+of ygoai.core.Duel. ygoai.core uses it (the default; YGOAI_ENGINE=cpp for the C++ core).
 
 The Rust engine reproduces the patched C++ core message for message (rust/ygo-diff), with the
 ext hooks of core_ext (rust/ygo-core/src/ext.rs). One addition: Duel.clone(), a cheap copy of the
