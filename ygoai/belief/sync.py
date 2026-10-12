@@ -138,8 +138,7 @@ def sync_to_view(duel, viewer: int, obs: dict, got: dict, db) -> int:
         duel.place_card(cid, owner(cid), 0 if is_token(code_of[cid]) else C.LOCATION_DECK, 1, C.POS_FACEDOWN_DEFENSE)
         changes += 1
     for cid, code in recreate.items():
-        duel.lua_messages(f"local c=Duel.GetCardFromCardID({cid}) if c then "
-                          f"c:Recreate({code},nil,nil,nil,nil,nil,nil,nil,nil,nil,nil,nil,nil,true) end")
+        duel.recreate_card(cid, code)
     for (p, loc, i), cid, e in sorted(moves, key=lambda m: m[0]):
         pos = e.get("position", C.POS_FACEDOWN_DEFENSE)
         seq = i if loc & _ZONES else 0

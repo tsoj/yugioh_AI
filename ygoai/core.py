@@ -424,9 +424,9 @@ class Duel:
     def all_cards_raw(self) -> bytes:
         """Every slot of both players in one call, unparsed (see parse_all_cards)."""
         cap = 2048
-        buf = Duel._all_buf
+        buf = type(self)._all_buf
         if buf is None:
-            buf = Duel._all_buf = (ct.c_uint32 * (6 * cap))()
+            buf = type(self)._all_buf = (ct.c_uint32 * (6 * cap))()
         n = lib().OCG_ExtGetAllCards(self.handle, buf, cap)
         if n > cap:
             buf = (ct.c_uint32 * (6 * n))()
@@ -586,6 +586,100 @@ class Duel:
     def forced_errors(self) -> int:
         return lib().OCG_ExtGetErrors(self.handle)
 
+    # -- questions to the scripts' view of cards, as Lua chunks (the Rust engine, which runs no
+    # Lua, answers the same questions natively: ygoai/core_rust.py) ---------------------------------
+    def recreate_card(self, card_id: int, code: int) -> None:
+        """The card becomes `code` (`Card.Recreate`, its effects replaced)."""
+        self.lua_messages(f"local c=Duel.GetCardFromCardID({card_id}) if c then "
+                          f"c:Recreate({code},nil,nil,nil,nil,nil,nil,nil,nil,nil,nil,nil,nil,true) end")
+
+    def reason_effect_is_own(self, con: int, loc: int, seq: int) -> bool:
+        """Whether the card at (con, loc, seq) is there by its own effect."""
+        out = self.lua_messages(
+            f"local c=Duel.GetFieldCard({con},{loc},{seq}) "
+            "local re=c and c:GetReasonEffect() "
+            "Debug.Message((re and re:GetHandler()==c) and 'yes' or 'no')")
+        return out[-1:] == ["yes"]
+
+    def has_extra_release(self, con: int, seq: int) -> bool:
+        """Whether the monster in zone `seq` may be Tributed by the other player for any
+        Tribute Summon (EFFECT_EXTRA_RELEASE(_SUM))."""
+        out = self.lua_messages(
+            f"local c=Duel.GetFieldCard({con},LOCATION_MZONE,{seq}) "
+            "Debug.Message((c and (c:IsHasEffect(EFFECT_EXTRA_RELEASE_SUM) or "
+            "c:IsHasEffect(EFFECT_EXTRA_RELEASE))) and 'yes' or 'no')")
+        return out[-1:] == ["yes"]
+
+    _ELIGIBLE_TESTS = {"tribute": "Duel.GetTributeGroup(c):IsContains(t)",
+                       "attack": "c:GetAttackableTarget():IsContains(t)",
+                       "tribute_of": "Duel.GetTributeGroup(t):IsContains(c)"}
+
+    def eligible_as(self, li: tuple, kind: str, src: tuple, cands: list[tuple]) -> dict:
+        """{code: whether the hidden card t at li = (con, loc, seq) would pass the check if it
+        had the candidate's properties (code, type, Level, attribute, race, ATK, DEF; assumed,
+        then reset)}: kind "tribute" (t is in the Tribute group of the card c at src), "attack"
+        (t is an attack target of c), "tribute_of" (c is in t's Tribute group). Empty if a card
+        is missing or on script errors."""
+        test = self._ELIGIBLE_TESTS[kind]
+        con, loc, seq = li
+        if loc & (C.LOCATION_MZONE | C.LOCATION_SZONE):
+            get = f"local t=Duel.GetFieldCard({con},{loc},{seq})"
+        else:
+            get = (f"local t=Duel.GetFieldGroup({con},{loc},0)"
+                   f":Filter(function(x) return x:GetSequence()=={seq} end,nil):GetFirst()")
+        lines = [f"local c=Duel.GetFieldCard({src[0]},{src[1]},{src[2]})", get, "if not c or not t then return end"]
+        for code, typ, level, attribute, race, atk, df in cands:
+            lines.append(
+                f"t:AssumeProperty(ASSUME_CODE,{code}) t:AssumeProperty(ASSUME_TYPE,{typ}) "
+                f"t:AssumeProperty(ASSUME_LEVEL,{level}) t:AssumeProperty(ASSUME_ATTRIBUTE,{attribute}) "
+                f"t:AssumeProperty(ASSUME_RACE,{race}) t:AssumeProperty(ASSUME_ATTACK,{atk}) "
+                f"t:AssumeProperty(ASSUME_DEFENSE,{df}) "
+                f"Debug.Message('{code} '..tostring({test})) Duel.AssumeReset()")
+        out: dict = {}
+        try:
+            for text in self.lua_messages("\n".join(lines)):
+                code, res = text.split()
+                out[int(code)] = res == "true"
+        except (ValueError, CoreError):
+            return {}
+        return out
+
+    def settable_as(self, li: tuple, sumtype: int, trib_locs: list[tuple], cands: list) -> dict:
+        """{code (None: the card as it is): whether its player may Set the hand card at li =
+        (con, seq) with summon type `sumtype` if it had the candidate's properties (see
+        eligible_as), and with Tributes, whether it can Tribute exactly the monsters at
+        trib_locs = [(con, seq)] and takes Tributes at all}. Empty if the card is missing or on
+        script errors."""
+        con, seq = li
+        lines = [f"local c=Duel.GetFieldCard({con},LOCATION_HAND,{seq})",
+                 "if not c then return end", "local g=Group.CreateGroup()"]
+        for tcon, tseq in trib_locs:
+            lines.append(f"do local t=Duel.GetFieldCard({tcon},LOCATION_MZONE,{tseq}) "
+                         f"if t then g:AddCard(t) end end")
+        check = f"Duel.CanPlayerSetMonster({con},{sumtype},c)"
+        if trib_locs:
+            check += f" and Duel.CheckTribute(c,{len(trib_locs)},{len(trib_locs)},g)" \
+                     " and select(2,c:GetTributeRequirement())>=1"
+        for cand in cands:
+            if cand is None:
+                lines.append(f"Debug.Message('none '..tostring({check}))")
+                continue
+            code, typ, level, attribute, race, atk, df = cand
+            lines.append(
+                f"c:AssumeProperty(ASSUME_CODE,{code}) c:AssumeProperty(ASSUME_TYPE,{typ}) "
+                f"c:AssumeProperty(ASSUME_LEVEL,{level}) c:AssumeProperty(ASSUME_ATTRIBUTE,{attribute}) "
+                f"c:AssumeProperty(ASSUME_RACE,{race}) c:AssumeProperty(ASSUME_ATTACK,{atk}) "
+                f"c:AssumeProperty(ASSUME_DEFENSE,{df}) "
+                f"Debug.Message('{code} '..tostring({check})) Duel.AssumeReset()")
+        out: dict = {}
+        try:
+            for text in self.lua_messages("\n".join(lines)):
+                code, res = text.split()
+                out[None if code == "none" else int(code)] = res == "true"
+        except (ValueError, CoreError):
+            return {}
+        return out
+
 
 # ---------------------------------------------------------------------------
 # Journal: a duel cannot be copied, but the core is deterministic, so the same
@@ -634,6 +728,25 @@ def _journaled(name: str, fn):
 for _name, _fn in list(vars(Duel).items()):
     if callable(_fn) and not _name.startswith("_") and _name not in _NOT_JOURNALED:
         setattr(Duel, _name, _journaled(_name, _fn))
+
+# YGOAI_ENGINE=rust: the Rust engine (ygoai/core_rust.py) instead of the C++ core, same interface
+CppDuel = Duel
+ENGINE = os.environ.get("YGOAI_ENGINE", "cpp")
+if ENGINE == "rust":
+    from .core_rust import Duel as _RustDuel  # noqa: E402
+
+    for _name, _fn in list(vars(_RustDuel).items()):
+        if callable(_fn) and not _name.startswith("_") and _name not in _NOT_JOURNALED | {"clone"}:
+            setattr(_RustDuel, _name, _journaled(_name, _fn))
+    Duel = _RustDuel  # noqa: F811
+elif ENGINE == "tee":
+    # (both engines in lockstep, results compared: ygoai/core_tee.py)
+    from .core_tee import Duel as _TeeDuel  # noqa: E402
+
+    for _name, _fn in list(vars(_TeeDuel).items()):
+        if callable(_fn) and not _name.startswith("_") and _name not in _NOT_JOURNALED | {"clone"}:
+            setattr(_TeeDuel, _name, _journaled(_name, _fn))
+    Duel = _TeeDuel  # noqa: F811
 
 
 def core_version() -> tuple[int, int]:

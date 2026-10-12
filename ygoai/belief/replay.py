@@ -58,6 +58,10 @@ from ..game import setup_duel
 from ..messages import parse
 from ..observe import AUTO_RESPONSE, filter_message, filter_prompt, is_hidden_prompt, to_core_response
 from ..state import LOCATIONS, capture, view, viewer_view
+
+# (constant.lua)
+_SUMMON_TYPE_NORMAL = 0x10000000
+_SUMMON_TYPE_TRIBUTE = 0x11000000
 from . import infer
 from .completion import DeckCompletion, VanillaCompletion, _vanilla
 from . import tracker as tracker_mod
@@ -2998,11 +3002,7 @@ class BeliefReplay:
         the GY whenever it leaves the field, the real Set card that returned to the
         hand stays there): the real card is not this one."""
         f, t = got["from"], got["to"]
-        out = duel.lua_messages(
-            f"local c=Duel.GetFieldCard({t['con']},{t['loc']},{t['seq']}) "
-            "local re=c and c:GetReasonEffect() "
-            "Debug.Message((re and re:GetHandler()==c) and 'yes' or 'no')")
-        if out[-1:] != ["yes"]:
+        if not duel.reason_effect_is_own(t['con'], t['loc'], t['seq']):
             return None
         key = (self.pos, f["con"], f["loc"], (f["seq"],), got["code"])
         return None if key in self.exclusions or key in self.failed_exclusions else ("exclude", *key)
@@ -3663,13 +3663,11 @@ class BeliefReplay:
         if field_missing and duel is not None and exp["type"] == "SELECT_TRIBUTE":
             summoned = self._summoning_card()
             if summoned is not None:
-                check = (f"local c=Duel.GetFieldCard({summoned['con']},{summoned['loc']},{summoned['seq']})",
-                         "Duel.GetTributeGroup(c):IsContains(t)")
+                check = ("tribute", (summoned['con'], summoned['loc'], summoned['seq']))
         elif field_missing and duel is not None and exp["type"] == "SELECT_CARD" and self._select_hint() == 549:
             attacker = self._attacking_card()
             if attacker is not None:
-                check = (f"local c=Duel.GetFieldCard({attacker['con']},{attacker['loc']},{attacker['seq']})",
-                         "c:GetAttackableTarget():IsContains(t)")
+                check = ("attack", (attacker['con'], attacker['loc'], attacker['seq']))
         if check is not None:
             codes = self._eligible_codes(duel, dict(zip(("con", "loc", "seq"), field_missing[0])), codes, check)
         try:
@@ -3728,8 +3726,7 @@ class BeliefReplay:
         levels = tribute_levels_any(tributes)
         li = {"con": summoned["con"], "loc": C.LOCATION_HAND, "seq": summoned["seq"]}
         t = exp["from"]
-        check = (f"local c=Duel.GetFieldCard({t['con']},{t['loc']},{t['seq']})",
-                 "Duel.GetTributeGroup(t):IsContains(c)")
+        check = ("tribute_of", (t['con'], t['loc'], t['seq']))
         codes = self._eligible_codes(duel, li, self._opp_seen_codes(), check,
                                      lambda code: self.db.get(code) is not None and self.db.get(code).level in levels)
         return self._assume_fix(li, codes)
@@ -3769,34 +3766,19 @@ class BeliefReplay:
                 return lst[i] if 0 <= i < len(lst) else None
         return None
 
-    def _eligible_as(self, duel: Duel, li: dict, codes: list, setup: str, test: str) -> dict:
-        """Whether `test` (a Lua expression on `t`, the face-down card at `li`, after
-        `setup`) holds if the card had each candidate's properties (assumed, then
+    def _props(self, code: int) -> tuple | None:
+        """A card's properties for Duel.eligible_as/settable_as (None: not in the database)."""
+        card = self.db.get(code)
+        if card is None:
+            return None
+        return (code, card.type, card.level, card.attribute, card.race, max(card.attack, 0), max(card.defense, 0))
+
+    def _eligible_as(self, duel: Duel, li: dict, codes: list, kind: str, src: tuple) -> dict:
+        """Whether the face-down card at `li` would pass the engine check `kind` against the card
+        at `src` (see Duel.eligible_as) if it had each candidate's properties (assumed, then
         reset)."""
-        out: dict = {}
-        if li["loc"] & (C.LOCATION_MZONE | C.LOCATION_SZONE):
-            get = f"local t=Duel.GetFieldCard({li['con']},{li['loc']},{li['seq']})"
-        else:
-            get = (f"local t=Duel.GetFieldGroup({li['con']},{li['loc']},0)"
-                   f":Filter(function(x) return x:GetSequence()=={li['seq']} end,nil):GetFirst()")
-        lines = [setup, get, "if not c or not t then return end"]
-        for code in dict.fromkeys(codes):
-            card = self.db.get(code)
-            if card is None:
-                continue
-            lines.append(
-                f"t:AssumeProperty(ASSUME_CODE,{code}) t:AssumeProperty(ASSUME_TYPE,{card.type}) "
-                f"t:AssumeProperty(ASSUME_LEVEL,{card.level}) t:AssumeProperty(ASSUME_ATTRIBUTE,{card.attribute}) "
-                f"t:AssumeProperty(ASSUME_RACE,{card.race}) t:AssumeProperty(ASSUME_ATTACK,{max(card.attack, 0)}) "
-                f"t:AssumeProperty(ASSUME_DEFENSE,{max(card.defense, 0)}) "
-                f"Debug.Message('{code} '..tostring({test})) Duel.AssumeReset()")
-        try:
-            for text in duel.lua_messages("\n".join(lines)):
-                code, res = text.split()
-                out[int(code)] = res == "true"
-        except (ValueError, CoreError):
-            return {}
-        return out
+        cands = [p for p in map(self._props, dict.fromkeys(codes)) if p is not None]
+        return duel.eligible_as((li["con"], li["loc"], li["seq"]), kind, src, cands)
 
     def _other_copy_fix(self, cp: int, msgs: list[dict], idx: int, loc: dict) -> tuple | None:
         """Swap the card at `loc` with another copy of it from the same pile."""
@@ -4354,8 +4336,7 @@ class BeliefReplay:
                 if kind == "swap":
                     d.swap_cards(a, b)
                 else:
-                    d.lua_messages(f"local c=Duel.GetCardFromCardID({a}) if c then "
-                                   f"c:Recreate({b},nil,nil,nil,nil,nil,nil,nil,nil,nil,nil,nil,nil,true) end")
+                    d.recreate_card(a, b)
             self.stats.suspect_tests += 1
             outcome = self._probe(duel, prompt, resp, setup=setup, horizon=batch["until"])
             reached = self.last_probe_reached
@@ -4738,41 +4719,18 @@ class BeliefReplay:
         candidate's properties (code, type, Level, attribute, race, ATK/DEF assumed,
         then reset; None: as it is): the restrictions on Setting, e.g. Zombie World
         allows only Zombies to be Tribute Summoned, and whether it can Tribute the
-        monsters at `trib_locs` (e.g. a Doomsday Token only for a DARK monster)."""
-        out: dict = {}
-        sumtype = "SUMMON_TYPE_TRIBUTE" if tributes else "SUMMON_TYPE_NORMAL"
-        lines = [f"local c=Duel.GetFieldCard({li['con']},LOCATION_HAND,{li['seq']})",
-                 "if not c then return end", "local g=Group.CreateGroup()"]
-        for t in trib_locs or ():
-            lines.append(f"do local t=Duel.GetFieldCard({t['con']},LOCATION_MZONE,{t['seq']}) "
-                         f"if t then g:AddCard(t) end end")
-        check = f"Duel.CanPlayerSetMonster({li['con']},{sumtype},c)"
-        if trib_locs:
-            # (and it must take Tributes at all: e.g. a Level lowered in the hand by an
-            # effect can take none, where the real card took some; an effect can also
-            # allow fewer, the Tributes optional then)
-            check += f" and Duel.CheckTribute(c,{len(trib_locs)},{len(trib_locs)},g)" \
-                     " and select(2,c:GetTributeRequirement())>=1"
+        monsters at `trib_locs` (e.g. a Doomsday Token only for a DARK monster).
+        (With Tributes it must also take Tributes at all: e.g. a Level lowered in the
+        hand by an effect can take none, where the real card took some.)"""
+        sumtype = _SUMMON_TYPE_TRIBUTE if tributes else _SUMMON_TYPE_NORMAL
+        cands = []
         for code in dict.fromkeys(codes):
             if code is None:
-                lines.append(f"Debug.Message('none '..tostring({check}))")
-                continue
-            card = self.db.get(code)
-            if card is None:
-                continue
-            lines.append(
-                f"c:AssumeProperty(ASSUME_CODE,{code}) c:AssumeProperty(ASSUME_TYPE,{card.type}) "
-                f"c:AssumeProperty(ASSUME_LEVEL,{card.level}) c:AssumeProperty(ASSUME_ATTRIBUTE,{card.attribute}) "
-                f"c:AssumeProperty(ASSUME_RACE,{card.race}) c:AssumeProperty(ASSUME_ATTACK,{max(card.attack, 0)}) "
-                f"c:AssumeProperty(ASSUME_DEFENSE,{max(card.defense, 0)}) "
-                f"Debug.Message('{code} '..tostring({check})) Duel.AssumeReset()")
-        try:
-            for text in duel.lua_messages("\n".join(lines)):
-                code, res = text.split()
-                out[None if code == "none" else int(code)] = res == "true"
-        except (ValueError, CoreError):
-            return {}
-        return out
+                cands.append(None)
+            elif (p := self._props(code)) is not None:
+                cands.append(p)
+        return duel.settable_as((li["con"], li["seq"]), sumtype,
+                                [(t["con"], t["seq"]) for t in trib_locs or ()], cands)
 
     def _slot_codes(self, li: dict) -> list[int]:
         """The codes a hidden slot is known to be limited to (its claim allows only
@@ -4830,11 +4788,7 @@ class BeliefReplay:
     def _extra_release(self, duel: Duel, li: dict) -> bool:
         """Whether the monster at `li` may be Tributed by the other player for any
         Tribute Summon (EFFECT_EXTRA_RELEASE(_SUM), e.g. The Monarchs Stormforth)."""
-        out = duel.lua_messages(
-            f"local c=Duel.GetFieldCard({li['con']},LOCATION_MZONE,{li['seq']}) "
-            "Debug.Message((c and (c:IsHasEffect(EFFECT_EXTRA_RELEASE_SUM) or "
-            "c:IsHasEffect(EFFECT_EXTRA_RELEASE))) and 'yes' or 'no')")
-        return out[-1:] == ["yes"]
+        return duel.has_extra_release(li["con"], li["seq"])
 
     def _check_summon_condition(self, duel: Duel, prompt: dict, up: list[dict]) -> None:
         """The opponent special summoned a hand card by its own procedure, which
