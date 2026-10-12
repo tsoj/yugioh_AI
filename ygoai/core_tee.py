@@ -83,7 +83,9 @@ class Duel:
             ea, ra = e, None
         try:
             rb = getattr(self.b, name)(*args, **kwargs)
-        except Exception as e:  # noqa: BLE001
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException as e:  # noqa: BLE001 - (also a panic of the Rust engine: PanicException)
             eb, rb = e, None
         if (ea is None) != (eb is None):
             self._mismatch(f"{name}{_short(args)}: C++ {'raised ' + repr(ea) if ea else _short(ra)}, "
@@ -122,7 +124,12 @@ class Duel:
         # the C++ core stops) to its own stop; outside card functions both stop at the same
         # points, inside one the Rust engine can get ahead (it asks without yielding first)
         while self._rust_status == CONTINUE and (s != CONTINUE or len(self._pend_b) < len(self._pend_a)):
-            self._rust_status = self.b.process()
+            try:
+                self._rust_status = self.b.process()
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException as e:  # noqa: BLE001 - (a panic of the Rust engine)
+                self._mismatch(f"process: the Rust engine failed: {e!r:.300}")
             self._pend_b += self.b.get_messages()
         n = min(len(self._pend_a), len(self._pend_b))
         if self._pend_a[:n] != self._pend_b[:n] or (s != CONTINUE and (s != self._rust_status or len(self._pend_a) != len(self._pend_b))):
