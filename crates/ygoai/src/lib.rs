@@ -15,7 +15,9 @@
 pub mod actions;
 pub mod agents;
 pub mod game;
+pub mod matchrun;
 pub mod messages;
 pub mod observe;
+pub mod protocol;
 pub mod pyrandom;
 pub mod state;
