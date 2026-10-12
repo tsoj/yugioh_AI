@@ -18,6 +18,7 @@ fn main() {
     let budget: f64 = args.get(3).map_or(0.5, |s| s.parse().unwrap());
     init(None).unwrap();
     let (mut nodes, mut searches, mut depth_sum, mut secs) = (0u64, 0u32, 0i64, 0.0);
+    let mut tt = (0u64, 0u64);
     for opening in book.iter().take(n) {
         let record = new_record(&opening.decks, opening.seed, &DuelConfig::default());
         let mut duel = record.setup(None).unwrap();
@@ -41,11 +42,14 @@ fn main() {
             if player == 0 && is_searched(&p) && cands.len() > 1 {
                 ab.prepare();
                 let before = ab.nodes;
+                let (bp, bh) = (ab.tt_probes, ab.tt_hits);
                 let t = Instant::now();
                 let params = SearchParams { budget: Some(budget), elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2], max_nodes: None };
                 let (_, done) = ab.search(&duel, &p, &cands, &params);
                 secs += t.elapsed().as_secs_f64();
                 nodes += ab.nodes - before;
+                tt.0 += ab.tt_probes - bp;
+                tt.1 += ab.tt_hits - bh;
                 searches += 1;
                 depth_sum += done as i64;
             }
@@ -55,8 +59,10 @@ fn main() {
         }
     }
     println!(
-        "{searches} searches, {nodes} nodes in {secs:.1} s: {:.0} nodes/s, mean depth {:.2}",
+        "{searches} searches, {nodes} nodes in {secs:.1} s: {:.0} nodes/s, mean depth {:.2}; TT hits {} of {} probes",
         nodes as f64 / secs,
-        depth_sum as f64 / searches.max(1) as f64
+        depth_sum as f64 / searches.max(1) as f64,
+        tt.1,
+        tt.0
     );
 }

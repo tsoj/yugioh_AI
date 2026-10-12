@@ -343,11 +343,14 @@ pub struct AlphaBeta {
     tt_gen: u16,
     hist: Vec<f64>,
     pub nodes: u64,
+    /// transposition table lookups, and those that found the position
+    pub tt_probes: u64,
+    pub tt_hits: u64,
 }
 
 impl Default for AlphaBeta {
     fn default() -> Self {
-        AlphaBeta { tt: vec![TtEntry::default(); 1 << TT_BITS], tt_gen: 0, hist: vec![0.0; 1 << HIST_BITS], nodes: 0 }
+        AlphaBeta { tt: vec![TtEntry::default(); 1 << TT_BITS], tt_gen: 0, hist: vec![0.0; 1 << HIST_BITS], nodes: 0, tt_probes: 0, tt_hits: 0 }
     }
 }
 
@@ -506,7 +509,9 @@ impl Ctx<'_> {
         let slot = (key & ((1 << TT_BITS) - 1)) as usize;
         let e = self.ab.tt[slot];
         let mut tt_move = None;
+        self.ab.tt_probes += 1;
         if e.key == key && e.gen_ == self.ab.tt_gen {
+            self.ab.tt_hits += 1;
             let v = e.value;
             if e.depth as i32 >= depth {
                 if e.flag == EXACT {
