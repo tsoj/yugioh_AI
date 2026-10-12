@@ -4,6 +4,7 @@
 //! * [`script_index`]: what card scripts are about, read statically
 //! * [`tracker`]: card identities through the stream, as vars and pools
 
+pub mod agent;
 pub mod check;
 pub mod completion;
 pub mod flow;

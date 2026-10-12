@@ -35,7 +35,49 @@ from .tracker import TrackerError
 _INCREMENTAL = not os.environ.get("YGOAI_NO_INCREMENTAL")
 
 
+class _RustAgentBelief:
+    """AgentBelief on the Rust belief replay (YGOAI_REPLAY=rust): the duels it hands out are copies,
+    the caller's to keep."""
+
+    def __init__(self, viewer: int, init: dict, completion=None):
+        import ygoai_rs
+
+        from ..core import DuelConfig
+        from .check import rust_completion
+        self.viewer, self.init = viewer, init
+        self._b = ygoai_rs.AgentBelief(viewer, init, rust_completion(completion))
+        self._config = DuelConfig(**init["config"]) if init.get("config") else None
+
+    def reconstruct(self, items: list[tuple]):
+        from types import SimpleNamespace
+
+        from ..core_rust import Duel
+        info, d = self._b.reconstruct(items)
+        return SimpleNamespace(**info), (Duel.from_rust(d, self._config) if d is not None else None)
+
+    @property
+    def retries(self) -> int:
+        return self._b.retries
+
+    @property
+    def extended(self) -> int:
+        return self._b.extended
+
+    @property
+    def revealed(self) -> int:
+        return self._b.revealed
+
+    def close(self) -> None:
+        pass
+
+
 class AgentBelief:
+    def __new__(cls, viewer: int, init: dict, completion=None, incremental: bool = _INCREMENTAL):
+        from .check import use_rust
+        if cls is AgentBelief and use_rust() and incremental == _INCREMENTAL:
+            return _RustAgentBelief(viewer, init, completion)
+        return super().__new__(cls)
+
     def __init__(self, viewer: int, init: dict, completion=None, incremental: bool = _INCREMENTAL):
         self.viewer, self.init, self.completion = viewer, init, completion
         self.incremental = incremental

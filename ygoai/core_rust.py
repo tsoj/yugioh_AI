@@ -56,6 +56,18 @@ class Duel:
         callers such as the belief replay change the duel between process() calls; off is faster)."""
         self._d.set_fine_steps(on)
 
+    @classmethod
+    def from_rust(cls, d, config=None) -> "Duel":
+        """A Duel around a ygoai_rs.RustDuel (e.g. a reconstruction of the Rust belief replay)."""
+        from . import core
+        new = object.__new__(cls)
+        new.config = config or core.DuelConfig()
+        new._d = d
+        new.handle = True
+        new._logs = []
+        new.journal = None
+        return new
+
     def clone(self) -> "Duel":
         """A copy of the duel: both go on independently (cheap; no journal)."""
         new = object.__new__(Duel)

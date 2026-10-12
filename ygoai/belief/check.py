@@ -66,20 +66,30 @@ class CheckResult:
     state_diffs: int = 0  # (agent mode) public facts of its state that differ from the real one
 
 
-def _rust_completion(replay_kwargs: dict) -> str | None:
-    """The Rust replay's name of the completion asked for (None: it has none such)."""
-    comp = replay_kwargs.get("completion")
+def use_rust() -> bool:
+    """Whether the belief replay runs in Rust (YGOAI_REPLAY=rust)."""
+    return os.environ.get("YGOAI_REPLAY", "python") == "rust"
+
+
+def rust_completion(comp):
+    """The completion for the Rust replay: its own vanilla / corpus ones by name, any other (e.g.
+    the neural one) as the Python object, which it calls."""
+    name = type(comp).__name__ if comp is not None else "VanillaCompletion"
+    return {"VanillaCompletion": "vanilla", "CorpusCompletion": "corpus"}.get(name, comp)
+
+
+def _rust_completion(replay_kwargs: dict):
+    """(check_prefix) The Rust replay's completion; None: options it does not take."""
     if set(replay_kwargs) - {"completion"}:
         return None
-    name = type(comp).__name__ if comp is not None else "VanillaCompletion"
-    return {"VanillaCompletion": "vanilla", "CorpusCompletion": "corpus"}.get(name)
+    return rust_completion(replay_kwargs.get("completion"))
 
 
 def check_prefix(record: GameRecord, viewer: int, items: list[tuple], cut: int, timeout: float | None = None,
                  **replay_kwargs) -> CheckResult:
     """`timeout`: seconds for the Rust replay (error "timeout"; the Python one is stopped from outside)."""
     comp = _rust_completion(replay_kwargs)
-    if os.environ.get("YGOAI_REPLAY", "python") == "rust" and comp is not None:
+    if use_rust() and comp is not None:
         import ygoai_rs
         stopped = cut == len(items) and (record.result or {}).get("reason") in ("turn_limit", "decision_limit",
                                                                                  "time_limit")
@@ -164,6 +174,27 @@ def check_agent(record: GameRecord, viewer: int, items: list[tuple], cut: int, *
         res.error = "no decision of the viewer"
         return res
     t0 = time.monotonic()
+    if use_rust() and not set(replay_kwargs) - {"completion"}:
+        # (a fresh AgentBelief's reconstruction is this one)
+        import ygoai_rs
+
+        from ..core_rust import Duel
+        init = init_info(record, viewer)
+        try:
+            info, d = ygoai_rs.AgentBelief(viewer, init, rust_completion(replay_kwargs.get("completion"))) \
+                .reconstruct(items[:cut])
+            if d is None:
+                res.error = "no reconstruction"
+            else:
+                res.state_diffs = _count_diffs(items[cut - 1][2], viewer_view(Duel.from_rust(d), viewer))
+                res.ok, res.approximate, res.stage = not info["approximate"], info["approximate"], "done"
+                if info["approximate"]:
+                    res.error = f"approximate ({info['lenient_skips']} re-aligned, {res.state_diffs} state differences)"
+            res.restarts = info["restarts"]
+        except Exception as e:  # noqa: BLE001
+            res.error = f"{type(e).__name__}: {e}\n{traceback.format_exc(limit=4)}"
+        res.seconds = time.monotonic() - t0
+        return res
     br = BeliefReplay(viewer, init_info(record, viewer), items[:cut], **replay_kwargs)
     br.allow_approximate, br.read_guided, br.check_state = True, False, False
     try:

@@ -49,7 +49,7 @@ fn split_messages(buf: &[u8]) -> Vec<Vec<u8>> {
 }
 
 #[pyclass(module = "ygoai_rs")]
-struct RustDuel {
+pub(crate) struct RustDuel {
     pub(crate) d: Duel,
 }
 
