@@ -61,11 +61,14 @@ const MAX_QPLY: i32 = 6;
 /// (continuation history entries: (previous move, move) pairs)
 const CONT_BITS: u32 = 16;
 
-/// Search features under test, each off unless named in $YGOAI_SEARCH (a comma list): `pvs`,
+/// Search features, each off unless named in $YGOAI_SEARCH (a comma list; unset: DEFAULT_FEATURES): `pvs`,
 /// `rfp` (reverse futility pruning at null-window nodes; with pvs), `rfp_kind` (at depth 1, by
 /// the least a move of each kind keeps), `futility` (depth 1, by the most a move of each kind
 /// gains), `lmr`, `lmr_noresearch`, `conthist` (continuation history), `pv_ext` (the main
 /// line sees the opponent's reply), `qsearch` (battle and chain decisions past the depth).
+/// The features that passed their SPRTs (LMR: +19.1 +/- 14.9, LLR +3.01, 1204 games, 2026-10-13).
+pub const DEFAULT_FEATURES: &str = "lmr";
+
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Features {
     pub pvs: bool,
@@ -99,10 +102,12 @@ impl Features {
         f
     }
 
-    /// The features of $YGOAI_SEARCH (read once).
+    /// The features of $YGOAI_SEARCH, DEFAULT_FEATURES when it is unset (read once).
     pub fn from_env() -> Features {
         static F: std::sync::OnceLock<Features> = std::sync::OnceLock::new();
-        *F.get_or_init(|| Features::parse(&std::env::var("YGOAI_SEARCH").unwrap_or_default()))
+        *F.get_or_init(|| {
+            Features::parse(&std::env::var("YGOAI_SEARCH").unwrap_or_else(|_| DEFAULT_FEATURES.to_string()))
+        })
     }
 }
 
