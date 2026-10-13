@@ -5,7 +5,7 @@ Planned work, roughly in order. SPRTs run at 30+0.3, SPRT [0, 15], with book
 
 ## Running now
 
-- [ ] SPRT `lmr,rfp_kind` vs `lmr`.
+- [ ] SPRT `lmr,unselect` vs `lmr` (first of the decision-feature queue below).
 - [ ] Self-play data for the eval: `ygoai-datagen`, 2000 nodes per search, 9996 games, into
       `runs/data/selfplay_2000n.jsonl`.
 
@@ -45,7 +45,7 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
 - [ ] qsearch, if retried: a TT in quiescence, cheaper chain windows (pass plus the best few
       answers), pruning of hopeless attacks.
 - Retested at the Rust speed and stopped near zero: PVS (H0), qsearch, futility, conthist,
-  PVS+RFP (all on top of LMR).
+  PVS+RFP, RFP by kind (stopped at 2220 games, +4.5, LLR -1.50) (all on top of LMR).
 
 ## Evaluation
 
