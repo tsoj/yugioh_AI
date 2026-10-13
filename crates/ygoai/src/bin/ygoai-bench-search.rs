@@ -9,6 +9,9 @@
 //! widths by prompt (options listed, children after the caps, children searched before a cutoff),
 //! cutoffs by prompt and TT state, LMR re-searches by move index, subtree sizes by depth; and
 //! writes all the counts to the file $YGOAI_STATS as JSON lines.
+//!
+//! $YGOAI_BEST: write each search's chosen move to that file (a line "opening search move").
+//! $YGOAI_SKIP: skip that many book openings first (to split a run).
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -39,7 +42,10 @@ fn main() {
     let mut broken = 0u64;
     let stats_path = std::env::var("YGOAI_STATS").ok();
     let mut stats = NodeStats::default();
-    for opening in book.iter().take(n) {
+    let skip: usize = std::env::var("YGOAI_SKIP").map_or(0, |s| s.parse().unwrap());
+    let mut best_out = std::env::var("YGOAI_BEST").ok().map(|p| std::io::BufWriter::new(std::fs::File::create(p).expect("best file")));
+    for (oi, opening) in book.iter().enumerate().take(n).skip(skip) {
+        let mut si = 0;
         let record = new_record(&opening.decks, opening.seed, &DuelConfig::default());
         let mut duel = record.setup(None).unwrap();
         duel.ocg_start_duel();
@@ -69,6 +75,10 @@ fn main() {
                 let t = Instant::now();
                 let params = SearchParams { budget, elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2], max_nodes };
                 let (best, done) = ab.search(&duel, &p, &cands, &params);
+                if let Some(f) = &mut best_out {
+                    writeln!(f, "{oi} {si} {best}").unwrap();
+                }
+                si += 1;
                 checksum = checksum.wrapping_mul(0x100000001b3) ^ (best as u64) ^ ((done as u64) << 8) ^ ((ab.nodes - before) << 16);
                 secs += t.elapsed().as_secs_f64();
                 nodes += ab.nodes - before;

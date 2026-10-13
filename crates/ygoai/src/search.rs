@@ -80,22 +80,29 @@ const HAZARD_MOVES: usize = 12;
 /// name=value; the defaults otherwise): `growth`, the root budget's factor per iteration (about
 /// the effective branching factor); `root`, the budget of a root move in the first iteration;
 /// `k`, the divisor of the reduction (as in Stockfish's log(depth) * log(move number) / k, the
-/// depth here log(budget) / log(growth)); the confidence of the move ordering by the node's TT
-/// state (`none`: no entry, `nomove`: an entry without a move, `exact`, `lower`, `upper`), a
-/// factor of the reduction: 0 is a uniform split among the moves.
+/// depth here log(budget) / log(growth)); the confidence in the move ordering, a factor of the
+/// reduction (0: a uniform split among the moves): `none` without a TT move (the static
+/// ordering and the history only), `tt` with a TT move from a search at least as large as
+/// this one, and between the two as the budget grows past the TT entry's: none + (tt - none) *
+/// exp(-gap / `gap`), the gap in plies. `spread` (omega): a node may spend its budget times
+/// (the number of moves it expects to search)^omega: 0 is a strict budget, 1 about the depth
+/// search's (each move about the node's budget).
 #[derive(Clone, Copy, Debug)]
 pub struct BudgetParams {
+    pub spread: f64,
     pub growth: f64,
     pub root: f64,
     pub k: f64,
-    pub conf: [f64; 5],
+    pub none: f64,
+    pub tt: f64,
+    pub gap: f64,
 }
 
 impl BudgetParams {
     pub fn from_env() -> BudgetParams {
         static P: std::sync::OnceLock<BudgetParams> = std::sync::OnceLock::new();
         *P.get_or_init(|| {
-            let mut p = BudgetParams { growth: 1.6, root: 2.0, k: 2.0, conf: [0.5, 0.5, 0.5, 1.5, 1.0] };
+            let mut p = BudgetParams { spread: 0.0, growth: 1.6, root: 2.0, k: 2.0, none: 0.5, tt: 1.5, gap: 2.0 };
             for kv in std::env::var("YGOAI_BUDGET").unwrap_or_default().split(',').map(str::trim).filter(|s| !s.is_empty()) {
                 let (name, v) = kv.split_once('=').unwrap_or_else(|| panic!("YGOAI_BUDGET: {kv} is not name=value"));
                 let v: f64 = v.parse().unwrap_or_else(|_| panic!("YGOAI_BUDGET: {kv}"));
@@ -103,11 +110,10 @@ impl BudgetParams {
                     "growth" => p.growth = v,
                     "root" => p.root = v,
                     "k" => p.k = v,
-                    "none" => p.conf[0] = v,
-                    "nomove" => p.conf[1] = v,
-                    "exact" => p.conf[2] = v,
-                    "lower" => p.conf[3] = v,
-                    "upper" => p.conf[4] = v,
+                    "none" => p.none = v,
+                    "tt" => p.tt = v,
+                    "gap" => p.gap = v,
+                    "spread" => p.spread = v,
                     _ => panic!("YGOAI_BUDGET: unknown parameter {name}"),
                 }
             }
@@ -1149,6 +1155,12 @@ impl Ctx<'_> {
         }
     }
 
+    /// (the number of moves the node of an inner decision or card selection searches)
+    fn width(&self, prompt: &Msg) -> usize {
+        let n = candidates(prompt).len();
+        if matches!(prompt, Msg::SelectCard { min: 1, max: 1, .. }) { n.min(CARD_WIDTH) } else { n }
+    }
+
     /// Whether a decision with this depth (or budget) and `n` moves is past the horizon (with
     /// `budget`: the budget does not cover the node and the moves it expects to search, each at
     /// least one node).
@@ -1184,14 +1196,21 @@ impl Ctx<'_> {
     /// The budget search: the budgets of a node's `n` moves (in their order) when the node has
     /// `budget`. The node itself costs one node; the rest is what the moves are expected to use:
     /// move i gets a share s * w_i, w_i = (i + 1)^-a (Stockfish's log(depth) * log(move number)
-    /// / k reduction as a factor on the budget, by the confidence in the ordering given the TT
-    /// state), and s is such that the expected cost, sum over the moves of P(searched) * (s * w_i
+    /// / k reduction as a factor on the budget, by the confidence in the ordering: see
+    /// `BudgetParams`; `tt_move_depth` is the TT entry's depth if it gave the first move), and s is such that the expected cost, sum over the moves of P(searched) * (s * w_i
     /// + P(a reduced move is searched again) * s * w_0), is the budget. P(searched) comes from
     /// the cutoff rates before it (online, by prompt type, TT state and move index).
-    fn allocate(&self, prompt: &Msg, tt_state: u8, budget: i32, n: usize) -> Vec<i32> {
+    fn allocate(&self, prompt: &Msg, tt_state: u8, tt_move_depth: Option<i32>, budget: i32, n: usize) -> Vec<i32> {
         let bp = BudgetParams::from_env();
-        let avail = (budget - BUDGET_UNIT).max(0) as f64;
-        let a = bp.growth.ln() * self.eq_depth(budget).max(1.0).ln() / bp.k * bp.conf[tt_state as usize];
+        let mut avail = (budget - BUDGET_UNIT).max(0) as f64;
+        let conf = match tt_move_depth {
+            None => bp.none,
+            Some(d) => {
+                let gap = ((self.tt_depth(budget) - d) as f64 / 8.0).max(0.0);
+                bp.none + (bp.tt - bp.none) * (-gap / bp.gap).exp()
+            }
+        };
+        let a = bp.growth.ln() * self.eq_depth(budget).max(1.0).ln() / bp.k * conf;
         let t = type_id(prompt) as usize;
         let w: Vec<f64> = (0..n).map(|i| ((i + 1) as f64).powf(-a)).collect();
         // (P(searched), P(searched again) of each move)
@@ -1207,6 +1226,9 @@ impl Ctx<'_> {
             p.push((reach, re));
             let h = self.ab.hazard[hazard_slot(t, tt_state, i)];
             reach *= 1.0 - h[1] / h[0];
+        }
+        if bp.spread != 0.0 {
+            avail *= p.iter().map(|&(reach, _)| reach).sum::<f64>().powf(bp.spread);
         }
         // (a move costs one node at least: the expected cost with the factor s, increasing in s)
         let unit = BUDGET_UNIT as f64;
@@ -1224,7 +1246,9 @@ impl Ctx<'_> {
             let mid = (lo + hi) / 2.0;
             if cost(mid) < avail { lo = mid } else { hi = mid }
         }
-        w.iter().map(|wi| (lo * wi).round().min(1e9) as i32).collect()
+        // (a move gets the node's remaining budget at most: budgets shrink along every line)
+        let cap = (budget - BUDGET_UNIT).max(0) as f64;
+        w.iter().map(|wi| (lo * wi).round().min(cap) as i32).collect()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1240,6 +1264,7 @@ impl Ctx<'_> {
         let e = self.ab.tt[slot];
         let mut tt_move = None;
         let mut tt_state = 0u8;
+        let mut tt_move_depth = None;
         let nodes0 = self.ab.nodes;
         self.ab.tt_probes += 1;
         if e.key == key && e.gen_ == self.ab.tt_gen {
@@ -1261,6 +1286,7 @@ impl Ctx<'_> {
             }
             if e.mv >= 0 && (e.mv as usize) < cands.len() {
                 tt_move = Some(e.mv as usize);
+                tt_move_depth = Some(e.depth as i32);
             }
         }
         let f = self.f;
@@ -1297,7 +1323,7 @@ impl Ctx<'_> {
         let (node_pv, node_ext) = (self.pv, self.pv_extended);
         let (mut best, mut best_i) = (f64::NEG_INFINITY, idx[0]);
         let (mut visited, mut cut_at) = (0, NO_CUT);
-        let alloc = if f.budget { self.allocate(prompt, tt_state, depth, idx.len()) } else { Vec::new() };
+        let alloc = if f.budget { self.allocate(prompt, tt_state, tt_move_depth, depth, idx.len()) } else { Vec::new() };
         for (i, &ci) in idx.iter().enumerate() {
             visited = i + 1;
             let c = &cands[ci];
@@ -1493,7 +1519,7 @@ impl Ctx<'_> {
             let player = prompt.player().unwrap_or(0);
             let resp = if is_hidden_prompt(&prompt) {
                 auto_response()
-            } else if (matches!(prompt, Msg::SelectCard { .. }) || is_inner(&prompt)) && self.horizon(depth, &prompt, candidates(&prompt).len()) {
+            } else if (matches!(prompt, Msg::SelectCard { .. }) || is_inner(&prompt)) && self.horizon(depth, &prompt, self.width(&prompt)) {
                 // (at the horizon a decision inside a move is the rules': the move completes first)
                 self.policies[player as usize].respond_to(&prompt, None).map_err(|_| Stop::Broken)?
             } else if is_searched(&prompt) {

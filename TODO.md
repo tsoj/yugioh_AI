@@ -44,6 +44,8 @@ See `docs/search-decisions.md` for what is and isn't searched.
         terms: shares like (i+1)^-a, with a growing with log of the budget and with confidence).
   - [ ] Retest the decision features (`unselect` etc.) on top of it (`unselect` failed with one
         ply per node: H0, -19.8 Elo, 492 games).
+- [ ] `MAX_DEPTH` is 12: the depth search (`lmr`) stops there whatever its time, and at
+      30+0.3 (about 15-30k nodes a move) it reaches 11-12 plies. SPRT a higher cap.
 - [ ] Try skipping "tactical" decisions at low budget: answer some decisions with the heuristic
       when the budget is small, as the horizon does now for the inner decisions. Which ones count
       as "tactical" is open: e.g. zones, positions, chain responses that do not change the eval,
