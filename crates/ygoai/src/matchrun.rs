@@ -78,8 +78,16 @@ pub struct Opening {
 /// The openings of a book (scripts/make_match_book.py), in order: those whose less winning seat
 /// won at least `book_min` test games.
 pub fn load_book(path: &Path, book_min: i64) -> std::io::Result<Vec<Opening>> {
+    load_book_head(path, book_min, usize::MAX)
+}
+
+/// The first `limit` openings of the book (only their lines are parsed).
+pub fn load_book_head(path: &Path, book_min: i64, limit: usize) -> std::io::Result<Vec<Opening>> {
     let mut out = Vec::new();
     for line in std::fs::read_to_string(path)?.lines().filter(|l| !l.trim().is_empty()) {
+        if out.len() >= limit {
+            break;
+        }
         let d: Value = serde_json::from_str(line)?;
         let wins = d["wins"].as_array().map(|w| w.iter().filter_map(|x| x.as_i64()).min().unwrap_or(0)).unwrap_or(i64::MAX);
         if wins >= book_min {

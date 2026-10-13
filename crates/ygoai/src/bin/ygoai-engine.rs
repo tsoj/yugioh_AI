@@ -6,6 +6,9 @@
 //! alphabeta_naive, mcts (options by environment: YGOAI_SEARCH_NODES, YGOAI_MCTS_*, YGOAI_COMPLETION).
 //! Game n of the process plays with seed SEED + n (without SEED: unseeded).
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let name = args.get(1).cloned().unwrap_or_else(|| "random".into());

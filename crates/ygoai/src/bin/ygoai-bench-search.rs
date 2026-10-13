@@ -1,5 +1,7 @@
 //! Speed of the alpha-beta search (crate::search): plays book openings with the heuristic player
-//! and, at each searched decision of player 0, searches the true duel for `budget` seconds.
+//! and, at each searched decision of player 0, searches the true duel for `budget` seconds, or
+//! `N` nodes with a budget of the form "Nn" (then the run is deterministic: its checksum over the
+//! searches' results and node counts shows that a change kept the engine's behavior).
 //!
 //!   ygoai-bench-search BOOK [OPENINGS] [BUDGET]
 
@@ -7,15 +9,23 @@ use std::time::Instant;
 
 use ygoai::game::{DuelConfig, init, new_record, run_until_prompt};
 use ygoai::heuristic::Heuristic;
-use ygoai::matchrun::load_book;
+use ygoai::matchrun::load_book_head;
 use ygoai::observe::{auto_response, is_hidden_prompt};
 use ygoai::search::{AlphaBeta, SearchParams, candidates, is_searched};
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let book = load_book(args[1].as_ref(), 0).expect("book");
     let n: usize = args.get(2).map_or(2, |s| s.parse().unwrap());
-    let budget: f64 = args.get(3).map_or(0.5, |s| s.parse().unwrap());
+    let book = load_book_head(args[1].as_ref(), 0, n).expect("book");
+    let budget = args.get(3).map_or("0.5", |s| s.as_str());
+    let (budget, max_nodes) = match budget.strip_suffix('n') {
+        Some(k) => (None, Some(k.parse::<u64>().unwrap())),
+        None => (Some(budget.parse::<f64>().unwrap()), None),
+    };
+    let mut checksum = 0u64;
     init(None).unwrap();
     let (mut nodes, mut searches, mut depth_sum, mut secs) = (0u64, 0u32, 0i64, 0.0);
     let mut tt = (0u64, 0u64);
@@ -44,8 +54,9 @@ fn main() {
                 let before = ab.nodes;
                 let (bp, bh) = (ab.tt_probes, ab.tt_hits);
                 let t = Instant::now();
-                let params = SearchParams { budget: Some(budget), elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2], max_nodes: None };
-                let (_, done) = ab.search(&duel, &p, &cands, &params);
+                let params = SearchParams { budget, elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2], max_nodes };
+                let (best, done) = ab.search(&duel, &p, &cands, &params);
+                checksum = checksum.wrapping_mul(0x100000001b3) ^ (best as u64) ^ ((done as u64) << 8) ^ ((ab.nodes - before) << 16);
                 secs += t.elapsed().as_secs_f64();
                 nodes += ab.nodes - before;
                 tt.0 += ab.tt_probes - bp;
@@ -59,7 +70,7 @@ fn main() {
         }
     }
     println!(
-        "{searches} searches, {nodes} nodes in {secs:.1} s: {:.0} nodes/s, mean depth {:.2}; TT hits {} of {} probes",
+        "{searches} searches, {nodes} nodes in {secs:.1} s: {:.0} nodes/s, mean depth {:.2}; TT hits {} of {} probes; checksum {checksum:016x}",
         nodes as f64 / secs,
         depth_sum as f64 / searches.max(1) as f64,
         tt.1,

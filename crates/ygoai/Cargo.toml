@@ -12,8 +12,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 indexmap = "2"
 rustc-hash = "2"
+mimalloc = { version = "0.1", default-features = false }
 deckmodels = { path = "../deckmodels" }
-blake2 = "0.10"
 regex = "1"
 highs = { path = "../highs" }
 zip = { version = "2", default-features = false, features = ["deflate"] }

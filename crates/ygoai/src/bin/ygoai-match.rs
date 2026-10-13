@@ -102,6 +102,9 @@ fn parse_args() -> Args {
     a
 }
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() {
     let args = parse_args();
     if let Err(e) = ygoai::game::init(None) {

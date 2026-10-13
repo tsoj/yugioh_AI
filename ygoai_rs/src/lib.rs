@@ -15,6 +15,9 @@ use ygo_core::duel::{Duel, DuelOptions, PlayerOptions};
 use ygo_core::ext::{ForcedLoc, FORCED_COIN, FORCED_DICE};
 use ygo_core::script::Scripts;
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod belief;
 mod search;
 
