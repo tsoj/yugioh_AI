@@ -397,8 +397,116 @@ pub fn eval_features(d: &mut Duel, me: u32) -> [f64; 6] {
 /// The evaluation's weights, in the order of `eval_features`.
 pub const EVAL_WEIGHTS: [f64; 6] = [W_LP, W_MONSTER, W_DOMINANT, W_HAND, W_BACKROW, W_DECK_OUT];
 
-/// The position's value for `me` (in points of 100 LP) (alphabeta.evaluate).
+/// One player's side for the rich features (scripts/train_eval.py side_features): LP/1000, hand,
+/// deck/10, grave/10, banished/10, extra/10, monsters, face-up ones, face-up attackers, face-down
+/// ones, the attackers' ATK sum/1000, the best face-up battle stat/1000, face-down and face-up
+/// spells/traps, a field spell, deck out (2 cards or fewer).
+fn side_features(d: &mut Duel, p: u32) -> [f64; 16] {
+    let mons: Vec<_> = parse_location_query(&query(d, p, LOCATION_MZONE, MZONE_QUERY)).into_iter().flatten().collect();
+    let (mut up, mut atk_up, mut atk_sum, mut best) = (0, 0, 0i64, 0i32);
+    for c in &mons {
+        let pos = c.position.unwrap_or(0);
+        if pos & POS_FACEUP != 0 {
+            up += 1;
+            let attacking = pos & POS_ATTACK != 0;
+            best = best.max(if attacking { c.attack.unwrap_or(0) } else { c.defense.unwrap_or(0) });
+            if attacking {
+                atk_up += 1;
+                atk_sum += c.attack.unwrap_or(0) as i64;
+            }
+        }
+    }
+    let sz = parse_location_query(&query(d, p, LOCATION_SZONE, QUERY_POSITION));
+    let back = sz.iter().take(5).flatten();
+    let down = back.clone().filter(|c| c.position.unwrap_or(0) & POS_FACEDOWN != 0).count();
+    let n_back = back.count();
+    let field = sz.get(5).is_some_and(|c| c.is_some());
+    let lp = d.ext_get_info()[3 + p as usize] as i32;
+    let n = |d: &mut Duel, loc: u32| d.ocg_query_count(p as u8, loc) as f64;
+    let deck = n(d, LOCATION_DECK);
+    [
+        lp as f64 / 1000.0,
+        n(d, LOCATION_HAND),
+        deck / 10.0,
+        n(d, LOCATION_GRAVE) / 10.0,
+        n(d, LOCATION_REMOVED) / 10.0,
+        n(d, LOCATION_EXTRA) / 10.0,
+        mons.len() as f64,
+        up as f64,
+        atk_up as f64,
+        (mons.len() - up) as f64,
+        atk_sum as f64 / 1000.0,
+        best as f64 / 1000.0,
+        down as f64,
+        (n_back - down) as f64,
+        field as u8 as f64,
+        (deck <= 2.0) as u8 as f64,
+    ]
+}
+
+/// The rich features for `me` (scripts/train_eval.py rich_features): the sides' differences, mine
+/// minus the opponent's, then the evaluation's dominance term.
+pub fn rich_features(d: &mut Duel, me: u32) -> Vec<f64> {
+    let (a, b) = (side_features(d, me), side_features(d, 1 - me));
+    let mut f: Vec<f64> = a.iter().zip(b).map(|(x, y)| x - y).collect();
+    f.push(eval_features(d, me)[2]);
+    f
+}
+
+/// A trained evaluation (scripts/train_eval.py's export): linear on the raw features, or the
+/// antisymmetric MLP v(z) = g(z) - g(-z), g(z) = w2 . relu(w1 z + b1), z the features divided by
+/// `scale`. Its value is in eval points.
+#[derive(serde::Deserialize)]
+pub struct LearnedEval {
+    features: String,
+    model: String,
+    scale: Vec<f64>,
+    #[serde(default)]
+    weights: Vec<f64>,
+    #[serde(default)]
+    w1: Vec<Vec<f64>>,
+    #[serde(default)]
+    b1: Vec<f64>,
+    #[serde(default)]
+    w2: Vec<f64>,
+}
+
+impl LearnedEval {
+    pub fn value(&self, d: &mut Duel, me: u32) -> f64 {
+        let x = if self.features == "rich" { rich_features(d, me) } else { eval_features(d, me).to_vec() };
+        if self.model == "linear" {
+            return x.iter().zip(&self.weights).map(|(a, w)| a * w).sum();
+        }
+        let z: Vec<f64> = x.iter().zip(&self.scale).map(|(a, s)| a / s).collect();
+        let g = |sign: f64| -> f64 {
+            self.w1
+                .iter()
+                .zip(&self.b1)
+                .zip(&self.w2)
+                .map(|((row, b), w2)| w2 * (row.iter().zip(&z).map(|(w, x)| w * sign * x).sum::<f64>() + b).max(0.0))
+                .sum()
+        };
+        g(1.0) - g(-1.0)
+    }
+
+    /// The evaluation of $YGOAI_EVAL (a JSON file), if set (read once).
+    pub fn from_env() -> Option<&'static LearnedEval> {
+        static E: std::sync::OnceLock<Option<LearnedEval>> = std::sync::OnceLock::new();
+        E.get_or_init(|| {
+            let path = std::env::var("YGOAI_EVAL").ok().filter(|p| !p.is_empty())?;
+            let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("YGOAI_EVAL {path}: {e}"));
+            Some(serde_json::from_str(&text).unwrap_or_else(|e| panic!("YGOAI_EVAL {path}: {e}")))
+        })
+        .as_ref()
+    }
+}
+
+/// The position's value for `me` (in points of 100 LP) (alphabeta.evaluate); a trained one
+/// with $YGOAI_EVAL.
 pub fn evaluate(d: &mut Duel, me: u32) -> f64 {
+    if let Some(e) = LearnedEval::from_env() {
+        return e.value(d, me);
+    }
     let info = d.ext_get_info();
     let lp = [info[3] as i32, info[4] as i32];
     let mons: Vec<Vec<(u32, i32, i32)>> = [me, 1 - me]
