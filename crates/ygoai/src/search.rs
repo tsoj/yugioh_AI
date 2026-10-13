@@ -68,6 +68,53 @@ const LMR_MOVES: usize = 2;
 const MAX_QPLY: i32 = 6;
 /// (continuation history entries: (previous move, move) pairs)
 const CONT_BITS: u32 = 16;
+/// (`budget`: the `depth` arguments are node budgets in 1/BUDGET_UNIT nodes; the root's
+/// iterations, each a larger budget)
+const BUDGET_UNIT: i32 = 16;
+const BUDGET_ITERATIONS: i32 = 30;
+/// (`budget`: the cutoff and re-search statistics, by prompt type, TT state and move index)
+const HAZARD_TYPES: usize = 16;
+const HAZARD_MOVES: usize = 12;
+
+/// The parameters of the budget search (`budget`), from $YGOAI_BUDGET (a comma list of
+/// name=value; the defaults otherwise): `growth`, the root budget's factor per iteration (about
+/// the effective branching factor); `root`, the budget of a root move in the first iteration;
+/// `k`, the divisor of the reduction (as in Stockfish's log(depth) * log(move number) / k, the
+/// depth here log(budget) / log(growth)); the confidence of the move ordering by the node's TT
+/// state (`none`: no entry, `nomove`: an entry without a move, `exact`, `lower`, `upper`), a
+/// factor of the reduction: 0 is a uniform split among the moves.
+#[derive(Clone, Copy, Debug)]
+pub struct BudgetParams {
+    pub growth: f64,
+    pub root: f64,
+    pub k: f64,
+    pub conf: [f64; 5],
+}
+
+impl BudgetParams {
+    pub fn from_env() -> BudgetParams {
+        static P: std::sync::OnceLock<BudgetParams> = std::sync::OnceLock::new();
+        *P.get_or_init(|| {
+            let mut p = BudgetParams { growth: 1.6, root: 2.0, k: 2.0, conf: [0.5, 0.5, 0.5, 1.5, 1.0] };
+            for kv in std::env::var("YGOAI_BUDGET").unwrap_or_default().split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                let (name, v) = kv.split_once('=').unwrap_or_else(|| panic!("YGOAI_BUDGET: {kv} is not name=value"));
+                let v: f64 = v.parse().unwrap_or_else(|_| panic!("YGOAI_BUDGET: {kv}"));
+                match name {
+                    "growth" => p.growth = v,
+                    "root" => p.root = v,
+                    "k" => p.k = v,
+                    "none" => p.conf[0] = v,
+                    "nomove" => p.conf[1] = v,
+                    "exact" => p.conf[2] = v,
+                    "lower" => p.conf[3] = v,
+                    "upper" => p.conf[4] = v,
+                    _ => panic!("YGOAI_BUDGET: unknown parameter {name}"),
+                }
+            }
+            p
+        })
+    }
+}
 
 /// Search features, each off unless named in $YGOAI_SEARCH (a comma list; unset: DEFAULT_FEATURES): `pvs`,
 /// `rfp` (reverse futility pruning at null-window nodes; with pvs), `rfp_kind` (at depth 1, by
@@ -78,6 +125,8 @@ const CONT_BITS: u32 = 16;
 /// first few choices): `unselect` (card by card selections, e.g. most materials), `tribute`,
 /// `multicard` (selections of several cards), `sum` (selections by a sum: Synchro and Ritual
 /// materials), `position`, `place` (the zone).
+/// `budget`: a node budget instead of the depth (see `Ctx::allocate`; replaces lmr, pvs, rfp,
+/// futility, pv_ext and qsearch, which it ignores).
 /// The features that passed their SPRTs (LMR: +19.1 +/- 14.9, LLR +3.01, 1204 games, 2026-10-13).
 pub const DEFAULT_FEATURES: &str = "lmr";
 
@@ -98,6 +147,7 @@ pub struct Features {
     pub sum: bool,
     pub position: bool,
     pub place: bool,
+    pub budget: bool,
 }
 
 impl Features {
@@ -120,6 +170,7 @@ impl Features {
                 "sum" => f.sum = true,
                 "position" => f.position = true,
                 "place" => f.place = true,
+                "budget" => f.budget = true,
                 _ => panic!("YGOAI_SEARCH: unknown feature {name}"),
             }
         }
@@ -842,10 +893,29 @@ pub struct NodeStats {
     pub lmr: BTreeMap<(&'static str, u8), [u64; 2]>,
     /// by (prompt, depth): [nodes, nodes in their subtrees (themselves included)]
     pub subtree: BTreeMap<(&'static str, i8), [u64; 2]>,
+    /// (`budget`) by (prompt, TT state, the budget's depth in plies): [nodes, their budgets'
+    /// sum, the nodes their subtrees used]
+    pub calib: BTreeMap<(&'static str, u8, i8), [f64; 3]>,
 }
 
 /// (`NodeStats::cuts`: no cutoff, all the children searched)
 pub const NO_CUT: u8 = 255;
+
+/// The budget search's prior cutoff rates (as 20 pseudo-nodes): at the first move by the TT
+/// state (none, no move, exact, lower, upper; measured with `YGOAI_STATS`), 3% at later moves.
+fn hazard_priors() -> Vec<[f64; 2]> {
+    const FIRST: [f64; 5] = [0.35, 0.35, 0.15, 0.9, 0.02];
+    let mut h = vec![[0.0; 2]; HAZARD_TYPES * 5 * HAZARD_MOVES];
+    for (i, e) in h.iter_mut().enumerate() {
+        let (tt, mv) = ((i / HAZARD_MOVES) % 5, i % HAZARD_MOVES);
+        *e = [20.0, 20.0 * if mv == 0 { FIRST[tt] } else { 0.03 }];
+    }
+    h
+}
+
+fn hazard_slot(t: usize, tt: u8, i: usize) -> usize {
+    (t.min(HAZARD_TYPES - 1) * 5 + tt as usize) * HAZARD_MOVES + i.min(HAZARD_MOVES - 1)
+}
 
 /// The search's tables, kept from one decision to the next (an agent holds one).
 pub struct AlphaBeta {
@@ -862,6 +932,10 @@ pub struct AlphaBeta {
     pub broken: u64,
     /// (if set, statistics of the expanded nodes, see `NodeStats`)
     pub stats: Option<NodeStats>,
+    /// (`budget`, kept across searches: by (prompt type, TT state, move index) [nodes that
+    /// searched the move, cut off by it]; by move index [reduced searches, searched again])
+    hazard: Vec<[f64; 2]>,
+    research: [[f64; 2]; HAZARD_MOVES],
     /// the root value of the last search's last completed iteration (NaN if none completed)
     pub last_value: f64,
 }
@@ -878,6 +952,8 @@ impl Default for AlphaBeta {
             tt_hits: 0,
             broken: 0,
             stats: None,
+            hazard: hazard_priors(),
+            research: [[50.0, 1.0]; HAZARD_MOVES],
             last_value: f64::NAN,
         }
     }
@@ -976,7 +1052,13 @@ impl Ctx<'_> {
     fn deepen(&mut self, duel: &Duel, prompt: &Msg, cands: &[Response], mut order: Vec<usize>, t0: Instant, budget: Option<f64>, fixed_depth: bool) -> (usize, i32) {
         let (mut best, mut done) = (order[0], 0);
         self.ab.last_value = f64::NAN;
-        let max_depth = if fixed_depth { DEPTH_NO_CLOCK } else { MAX_DEPTH };
+        let max_depth = if fixed_depth {
+            DEPTH_NO_CLOCK
+        } else if self.f.budget {
+            BUDGET_ITERATIONS
+        } else {
+            MAX_DEPTH
+        };
         for depth in 1..=max_depth {
             if let Some(b) = budget
                 && depth > 1
@@ -986,17 +1068,24 @@ impl Ctx<'_> {
             }
             let mut values: Vec<Option<f64>> = vec![None; cands.len()];
             let (mut alpha, mut it_best) = (f64::NEG_INFINITY, None);
+            // (each root move's depth, or its budget)
+            let sub = if self.f.budget {
+                let bp = BudgetParams::from_env();
+                (bp.root * bp.growth.powi(depth - 1) * BUDGET_UNIT as f64).min(1e9) as i32
+            } else {
+                depth - 1
+            };
             let mut aborted = false;
             for (j, &k) in order.iter().enumerate() {
                 (self.pv, self.pv_extended) = (j == 0, false);
                 let mut r = if self.f.pvs && j > 0 && alpha.is_finite() {
                     // (PVS: does it beat the best so far? only then its value)
-                    self.child(duel, prompt, &cands[k], depth - 1, alpha, alpha + PVS_EPS, 1)
+                    self.child(duel, prompt, &cands[k], sub, alpha, alpha + PVS_EPS, 1)
                 } else {
-                    self.child(duel, prompt, &cands[k], depth - 1, alpha, f64::INFINITY, 1)
+                    self.child(duel, prompt, &cands[k], sub, alpha, f64::INFINITY, 1)
                 };
                 if self.f.pvs && j > 0 && alpha.is_finite() && matches!(r, Ok(v) if v > alpha) {
-                    r = self.child(duel, prompt, &cands[k], depth - 1, alpha, f64::INFINITY, 1);
+                    r = self.child(duel, prompt, &cands[k], sub, alpha, f64::INFINITY, 1);
                 }
                 match r {
                     Ok(v) => {
@@ -1060,6 +1149,84 @@ impl Ctx<'_> {
         }
     }
 
+    /// Whether a decision with this depth (or budget) and `n` moves is past the horizon (with
+    /// `budget`: the budget does not cover the node and the moves it expects to search, each at
+    /// least one node).
+    fn horizon(&self, depth: i32, prompt: &Msg, n: usize) -> bool {
+        if !self.f.budget {
+            return depth <= 0;
+        }
+        let t = type_id(prompt) as usize;
+        let mut reach = 1.0;
+        let mut need = BUDGET_UNIT as f64;
+        for i in 0..n.min(MAX_CHILDREN) {
+            need += reach * BUDGET_UNIT as f64;
+            let h = self.ab.hazard[hazard_slot(t, 0, i)];
+            reach *= 1.0 - h[1] / h[0];
+        }
+        (depth as f64) < need
+    }
+
+    /// The depth in plies (with `budget`: of a search with the budget, log(budget) / log(growth)).
+    fn eq_depth(&self, depth: i32) -> f64 {
+        if self.f.budget {
+            (depth as f64 / BUDGET_UNIT as f64).max(1.0).ln() / BudgetParams::from_env().growth.ln()
+        } else {
+            depth as f64
+        }
+    }
+
+    /// The depth as the TT keeps it (with `budget`: eighths of `eq_depth`).
+    fn tt_depth(&self, depth: i32) -> i32 {
+        if self.f.budget { (self.eq_depth(depth) * 8.0).round() as i32 } else { depth }
+    }
+
+    /// The budget search: the budgets of a node's `n` moves (in their order) when the node has
+    /// `budget`. The node itself costs one node; the rest is what the moves are expected to use:
+    /// move i gets a share s * w_i, w_i = (i + 1)^-a (Stockfish's log(depth) * log(move number)
+    /// / k reduction as a factor on the budget, by the confidence in the ordering given the TT
+    /// state), and s is such that the expected cost, sum over the moves of P(searched) * (s * w_i
+    /// + P(a reduced move is searched again) * s * w_0), is the budget. P(searched) comes from
+    /// the cutoff rates before it (online, by prompt type, TT state and move index).
+    fn allocate(&self, prompt: &Msg, tt_state: u8, budget: i32, n: usize) -> Vec<i32> {
+        let bp = BudgetParams::from_env();
+        let avail = (budget - BUDGET_UNIT).max(0) as f64;
+        let a = bp.growth.ln() * self.eq_depth(budget).max(1.0).ln() / bp.k * bp.conf[tt_state as usize];
+        let t = type_id(prompt) as usize;
+        let w: Vec<f64> = (0..n).map(|i| ((i + 1) as f64).powf(-a)).collect();
+        // (P(searched), P(searched again) of each move)
+        let mut p = Vec::with_capacity(n);
+        let mut reach = 1.0;
+        for (i, &wi) in w.iter().enumerate() {
+            let re = if i > 0 && wi < 0.75 {
+                let r = self.ab.research[i.min(HAZARD_MOVES - 1)];
+                r[1] / r[0]
+            } else {
+                0.0
+            };
+            p.push((reach, re));
+            let h = self.ab.hazard[hazard_slot(t, tt_state, i)];
+            reach *= 1.0 - h[1] / h[0];
+        }
+        // (a move costs one node at least: the expected cost with the factor s, increasing in s)
+        let unit = BUDGET_UNIT as f64;
+        let cost = |s: f64| -> f64 {
+            w.iter().zip(&p).map(|(&wi, &(reach, re))| reach * ((s * wi).max(unit) + re * s.max(unit))).sum()
+        };
+        let (mut lo, mut hi) = (0.0, avail.max(unit));
+        if cost(hi) < avail {
+            hi = avail * 2.0;
+            while cost(hi) < avail && hi < 1e12 {
+                hi *= 2.0;
+            }
+        }
+        for _ in 0..30 {
+            let mid = (lo + hi) / 2.0;
+            if cost(mid) < avail { lo = mid } else { hi = mid }
+        }
+        w.iter().map(|wi| (lo * wi).round().min(1e9) as i32).collect()
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn node(&mut self, duel: &mut Duel, prompt: &Msg, depth: i32, mut alpha: f64, mut beta: f64, ply: i32) -> Result<f64, Stop> {
         // (moves are indices into the heuristic's order: the TT keeps one, the history reorders them)
@@ -1079,7 +1246,7 @@ impl Ctx<'_> {
             self.ab.tt_hits += 1;
             tt_state = if e.mv >= 0 { 2 + e.flag as u8 } else { 1 };
             let v = e.value;
-            if e.depth as i32 >= depth {
+            if e.depth as i32 >= self.tt_depth(depth) {
                 if e.flag == EXACT {
                     return Ok(v);
                 }
@@ -1098,14 +1265,14 @@ impl Ctx<'_> {
         }
         let f = self.f;
         let mover = prompt.player().unwrap_or(0);
-        if f.rfp && beta - alpha <= PVS_EPS && depth <= RFP_DEPTH && beta.abs() < WIN / 2.0 {
+        if f.rfp && !f.budget && beta - alpha <= PVS_EPS && depth <= RFP_DEPTH && beta.abs() < WIN / 2.0 {
             // (reverse futility pruning: so far ahead that the moves would not bring it below beta)
             let s = evaluate(duel, mover);
             if s - RFP_MARGIN * depth as f64 >= beta {
                 return Ok(s);
             }
         }
-        let static_v = if (f.futility || f.rfp_kind) && depth == 1 { Some(evaluate(duel, mover)) } else { None };
+        let static_v = if (f.futility || f.rfp_kind) && !f.budget && depth == 1 { Some(evaluate(duel, mover)) } else { None };
         if f.rfp_kind
             && let Some(s) = static_v
             && beta.is_finite()
@@ -1130,6 +1297,7 @@ impl Ctx<'_> {
         let (node_pv, node_ext) = (self.pv, self.pv_extended);
         let (mut best, mut best_i) = (f64::NEG_INFINITY, idx[0]);
         let (mut visited, mut cut_at) = (0, NO_CUT);
+        let alloc = if f.budget { self.allocate(prompt, tt_state, depth, idx.len()) } else { Vec::new() };
         for (i, &ci) in idx.iter().enumerate() {
             visited = i + 1;
             let c = &cands[ci];
@@ -1147,7 +1315,24 @@ impl Ctx<'_> {
             (self.pv, self.pv_extended) = (node_pv && i == 0, node_ext);
             let last = i == idx.len() - 1;
             let mut v = None;
-            if (f.lmr || f.lmr_noresearch) && depth >= LMR_DEPTH && i >= LMR_MOVES {
+            if f.budget {
+                let (b, full) = (alloc[i], alloc[0]);
+                v = Some(if i > 0 && (b as i64) * 4 < (full as i64) * 3 {
+                    // (a reduced share; the first move's share after all if it beats alpha)
+                    let r = self.child(duel, prompt, c, b, alpha, beta, ply + 1)?;
+                    let slot = i.min(HAZARD_MOVES - 1);
+                    self.ab.research[slot][0] += 1.0;
+                    self.ab.research[slot][1] += (r > alpha) as u8 as f64;
+                    if let Some(st) = &mut self.ab.stats {
+                        let e = st.lmr.entry((prompt_label(prompt), i.min(15) as u8)).or_default();
+                        e[0] += 1;
+                        e[1] += (r > alpha) as u64;
+                    }
+                    if r <= alpha { r } else { self.search_move(duel, prompt, c, full, alpha, beta, ply + 1, last)? }
+                } else {
+                    self.search_move(duel, prompt, c, b, alpha, beta, ply + 1, last)?
+                });
+            } else if (f.lmr || f.lmr_noresearch) && depth >= LMR_DEPTH && i >= LMR_MOVES {
                 // (a late move, unlikely the best by the move ordering: one ply less; with lmr
                 // the full depth after all if it beats alpha)
                 if f.lmr_noresearch {
@@ -1180,7 +1365,8 @@ impl Ctx<'_> {
             alpha = alpha.max(best);
             if alpha >= beta {
                 // (a cutoff: this move up, the ones tried before it down)
-                let bonus = (depth * depth) as f64;
+                let d = self.eq_depth(depth);
+                let bonus = d * d;
                 self.ab.hist[keys[ci]] += bonus;
                 for &k in &idx[..i] {
                     self.ab.hist[keys[k]] -= bonus / i as f64;
@@ -1195,15 +1381,31 @@ impl Ctx<'_> {
                 break;
             }
         }
+        if f.budget {
+            let t = type_id(prompt) as usize;
+            for j in 0..visited {
+                let e = &mut self.ab.hazard[hazard_slot(t, tt_state, j)];
+                e[0] += 1.0;
+                e[1] += (cut_at as usize == j) as u8 as f64;
+            }
+        }
+        let eq_d = if f.budget { self.eq_depth(depth).round() as i32 } else { depth };
         if let Some(st) = &mut self.ab.stats {
             let label = prompt_label(prompt);
             let e = st.widths.entry((label, listed(prompt, cands.len()) as u16, idx.len() as u16)).or_default();
             e[0] += 1;
             e[1] += visited as u64;
             *st.cuts.entry((label, tt_state, idx.len() as u8, cut_at)).or_default() += 1;
-            let e = st.subtree.entry((label, depth.clamp(-1, 60) as i8)).or_default();
+            let d = eq_d;
+            let e = st.subtree.entry((label, d.clamp(-1, 60) as i8)).or_default();
             e[0] += 1;
             e[1] += self.ab.nodes - nodes0 + 1;
+            if f.budget {
+                let e = st.calib.entry((label, tt_state, d.clamp(-1, 60) as i8)).or_default();
+                e[0] += 1.0;
+                e[1] += depth as f64 / BUDGET_UNIT as f64;
+                e[2] += (self.ab.nodes - nodes0 + 1) as f64;
+            }
         }
         if best.abs() < WIN / 2.0 {
             // (not a win or loss: those depend on the ply)
@@ -1214,7 +1416,7 @@ impl Ctx<'_> {
             } else {
                 EXACT
             };
-            self.ab.tt[slot] = TtEntry { key, value: best, depth: depth as i16, flag, mv: best_i as i8, gen_: self.ab.tt_gen };
+            self.ab.tt[slot] = TtEntry { key, value: best, depth: self.tt_depth(depth) as i16, flag, mv: best_i as i8, gen_: self.ab.tt_gen };
         }
         Ok(best)
     }
@@ -1291,22 +1493,22 @@ impl Ctx<'_> {
             let player = prompt.player().unwrap_or(0);
             let resp = if is_hidden_prompt(&prompt) {
                 auto_response()
-            } else if (matches!(prompt, Msg::SelectCard { .. }) || is_inner(&prompt)) && depth <= 0 {
+            } else if (matches!(prompt, Msg::SelectCard { .. }) || is_inner(&prompt)) && self.horizon(depth, &prompt, candidates(&prompt).len()) {
                 // (at the horizon a decision inside a move is the rules': the move completes first)
                 self.policies[player as usize].respond_to(&prompt, None).map_err(|_| Stop::Broken)?
             } else if is_searched(&prompt) {
                 let cands = candidates(&prompt);
                 if cands.len() > 1 {
-                    if depth <= 0 && self.f.pv_ext && self.pv && !self.pv_extended && player != self.root_player {
+                    if !self.f.budget && depth <= 0 && self.f.pv_ext && self.pv && !self.pv_extended && player != self.root_player {
                         (self.pv_extended, depth) = (true, 1); // (the PV extension: their reply to the main line)
                     }
-                    if depth <= 0 {
+                    if self.horizon(depth, &prompt, cands.len()) {
                         let quiet = match &prompt {
                             Msg::SelectChain { .. } => false,
                             Msg::SelectBattlecmd { .. } => !cands.iter().any(|c| c.kind.as_deref() == Some("attack")),
                             _ => true,
                         };
-                        if self.f.qsearch && depth > -MAX_QPLY && !quiet {
+                        if self.f.qsearch && !self.f.budget && depth > -MAX_QPLY && !quiet {
                             if player == me {
                                 return self.qnode(duel, &prompt, depth, alpha, beta, ply);
                             }
