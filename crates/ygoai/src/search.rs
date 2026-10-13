@@ -48,6 +48,138 @@ pub const W_BACKROW: f64 = 5.1;
 pub const W_DECK_OUT: f64 = 20.0;
 
 const MZONE_QUERY: u32 = QUERY_POSITION | QUERY_ATTACK | QUERY_DEFENSE;
+/// (PVS: the null window's width, 1 LP: the smallest step of a value)
+const PVS_EPS: f64 = 0.01;
+/// (RFP at null-window nodes up to this depth, by this margin per remaining ply)
+const RFP_DEPTH: i32 = 2;
+const RFP_MARGIN: f64 = 12.0;
+/// (late move reductions from this depth on, for the moves after the first LMR_MOVES)
+const LMR_DEPTH: i32 = 2;
+const LMR_MOVES: usize = 2;
+/// (quiescence plies past the nominal depth)
+const MAX_QPLY: i32 = 6;
+/// (continuation history entries: (previous move, move) pairs)
+const CONT_BITS: u32 = 16;
+
+/// Search features under test, each off unless named in $YGOAI_SEARCH (a comma list): `pvs`,
+/// `rfp` (reverse futility pruning at null-window nodes; with pvs), `rfp_kind` (at depth 1, by
+/// the least a move of each kind keeps), `futility` (depth 1, by the most a move of each kind
+/// gains), `lmr`, `lmr_noresearch`, `conthist` (continuation history), `pv_ext` (the main
+/// line sees the opponent's reply), `qsearch` (battle and chain decisions past the depth).
+#[derive(Clone, Copy, Default, Debug)]
+pub struct Features {
+    pub pvs: bool,
+    pub rfp: bool,
+    pub rfp_kind: bool,
+    pub futility: bool,
+    pub lmr: bool,
+    pub lmr_noresearch: bool,
+    pub conthist: bool,
+    pub pv_ext: bool,
+    pub qsearch: bool,
+}
+
+impl Features {
+    pub fn parse(list: &str) -> Features {
+        let mut f = Features::default();
+        for name in list.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+            match name {
+                "pvs" => f.pvs = true,
+                "rfp" => f.rfp = true,
+                "rfp_kind" => f.rfp_kind = true,
+                "futility" => f.futility = true,
+                "lmr" => f.lmr = true,
+                "lmr_noresearch" => f.lmr_noresearch = true,
+                "conthist" => f.conthist = true,
+                "pv_ext" => f.pv_ext = true,
+                "qsearch" => f.qsearch = true,
+                _ => panic!("YGOAI_SEARCH: unknown feature {name}"),
+            }
+        }
+        f
+    }
+
+    /// The features of $YGOAI_SEARCH (read once).
+    pub fn from_env() -> Features {
+        static F: std::sync::OnceLock<Features> = std::sync::OnceLock::new();
+        *F.get_or_init(|| Features::parse(&std::env::var("YGOAI_SEARCH").unwrap_or_default()))
+    }
+}
+
+/// A move's kind for the pruning margins: the prompt and the command kind, a chain's pass or
+/// chain, a yes or no.
+fn move_kind(m: &Msg, c: &Response) -> String {
+    let t = m.name();
+    if let Some(k) = &c.kind {
+        return format!("SELECT_{}:{k}", t.trim_start_matches("SELECT_"));
+    }
+    if matches!(m, Msg::SelectChain { .. }) {
+        return format!("{t}:{}", if c.index.unwrap_or(-1) < 0 { "pass" } else { "chain" });
+    }
+    if let Some(yes) = c.yes {
+        return format!("{t}:{}", if yes { "yes" } else { "no" });
+    }
+    t.to_string()
+}
+
+/// (futility: the 99th percentile of a leaf move's value minus the static value before it, by
+/// kind, over 378k leaves of alphabeta-vs-heuristic games; kinds not listed are never pruned)
+fn futility_margin(kind: &str) -> Option<f64> {
+    Some(match kind {
+        "SELECT_IDLECMD:summon" => 48.0,
+        "SELECT_IDLECMD:spsummon" => 30.9,
+        "SELECT_IDLECMD:mset" => 30.4,
+        "SELECT_IDLECMD:sset" => 0.0,
+        "SELECT_IDLECMD:activate" => 43.8,
+        "SELECT_IDLECMD:repos" => 17.6,
+        "SELECT_IDLECMD:to_bp" | "SELECT_IDLECMD:to_ep" | "SELECT_IDLECMD:shuffle" => 0.0,
+        "SELECT_BATTLECMD:attack" => 47.0,
+        "SELECT_BATTLECMD:activate" => 16.8,
+        "SELECT_BATTLECMD:to_m2" => 0.0,
+        "SELECT_BATTLECMD:to_ep" => 26.1,
+        "SELECT_CHAIN:pass" => 21.9,
+        "SELECT_CHAIN:chain" => 41.5,
+        "SELECT_EFFECTYN:yes" => 40.3,
+        "SELECT_EFFECTYN:no" => 9.1,
+        "SELECT_YESNO:yes" => 43.8,
+        "SELECT_YESNO:no" => 9.1,
+        "SELECT_OPTION" | "SELECT_CARD" => 39.5,
+        _ => return None,
+    })
+}
+
+/// (reverse futility by kind: the 0.1st percentile of a leaf move's value minus the static value
+/// before it, same data)
+fn rfp_low(kind: &str) -> Option<f64> {
+    Some(match kind {
+        "SELECT_IDLECMD:summon" | "SELECT_IDLECMD:mset" => -79.5,
+        "SELECT_IDLECMD:spsummon" => -74.8,
+        "SELECT_IDLECMD:sset" => -30.7,
+        "SELECT_IDLECMD:activate" => -74.7,
+        "SELECT_IDLECMD:repos" => -35.8,
+        "SELECT_IDLECMD:to_bp" | "SELECT_IDLECMD:shuffle" => -9.1,
+        "SELECT_IDLECMD:to_ep" => -57.2,
+        "SELECT_BATTLECMD:attack" => -28.3,
+        "SELECT_BATTLECMD:activate" | "SELECT_CHAIN:chain" => -93.1,
+        "SELECT_BATTLECMD:to_m2" => -17.6,
+        "SELECT_BATTLECMD:to_ep" => -62.3,
+        "SELECT_CHAIN:pass" => -70.4,
+        "SELECT_EFFECTYN:yes" | "SELECT_EFFECTYN:no" => -39.5,
+        "SELECT_YESNO:yes" => -35.5,
+        "SELECT_YESNO:no" => -26.5,
+        "SELECT_OPTION" => -43.8,
+        "SELECT_CARD" => -74.4,
+        _ => return None,
+    })
+}
+
+/// The continuation history slot of a move after the move `prev` (history slots).
+fn cont_key(prev: usize, key: usize) -> usize {
+    let mut h = ((prev as u32).wrapping_mul(0x9E3779B1)) ^ ((key as u32).wrapping_mul(0x85EBCA77));
+    h ^= h >> 15;
+    (h.wrapping_mul(0x2C1B3C6D) >> (32 - CONT_BITS)) as usize
+}
+
 const EXACT: i8 = 0;
 const LOWER: i8 = 1;
 const UPPER: i8 = 2;
@@ -342,6 +474,8 @@ pub struct AlphaBeta {
     tt: Vec<TtEntry>,
     tt_gen: u16,
     hist: Vec<f64>,
+    /// continuation history (with `conthist`)
+    cont: Vec<f64>,
     pub nodes: u64,
     /// transposition table lookups, and those that found the position
     pub tt_probes: u64,
@@ -350,7 +484,15 @@ pub struct AlphaBeta {
 
 impl Default for AlphaBeta {
     fn default() -> Self {
-        AlphaBeta { tt: vec![TtEntry::default(); 1 << TT_BITS], tt_gen: 0, hist: vec![0.0; 1 << HIST_BITS], nodes: 0, tt_probes: 0, tt_hits: 0 }
+        AlphaBeta {
+            tt: vec![TtEntry::default(); 1 << TT_BITS],
+            tt_gen: 0,
+            hist: vec![0.0; 1 << HIST_BITS],
+            cont: vec![0.0; 1 << CONT_BITS],
+            nodes: 0,
+            tt_probes: 0,
+            tt_hits: 0,
+        }
     }
 }
 
@@ -361,6 +503,13 @@ struct Ctx<'a> {
     deadline: Option<Instant>,
     /// (in the count of `ab.nodes`)
     node_limit: Option<u64>,
+    f: Features,
+    root_player: u32,
+    /// the history slot of the move that led to the node being searched (`conthist`)
+    prev_key: usize,
+    /// on the line of first moves, and whether it was extended already (`pv_ext`)
+    pv: bool,
+    pv_extended: bool,
 }
 
 /// What a search is given besides the duel: time (`budget` in seconds for this decision, None
@@ -384,7 +533,7 @@ impl AlphaBeta {
         if self.tt_gen == 0 {
             self.tt_gen = 1;
         }
-        for h in &mut self.hist {
+        for h in self.hist.iter_mut().chain(self.cont.iter_mut()) {
             *h *= HIST_DECAY;
         }
     }
@@ -399,7 +548,8 @@ impl AlphaBeta {
         let turn_player = duel.ext_get_info()[1];
         let deadline = p.budget.map(|b| t0 + std::time::Duration::from_secs_f64(b.max((HARD_FACTOR * b).min(HARD_SHARE * p.clock_remaining))));
         let node_limit = p.max_nodes.map(|n| self.nodes + n);
-        let mut ctx = Ctx { ab: self, policies, deadline, node_limit };
+        let f = Features::from_env();
+        let mut ctx = Ctx { ab: self, policies, deadline, node_limit, f, root_player: player as u32, prev_key: 0, pv: false, pv_extended: false };
         let card_order = ctx.card_order(core_prompt);
         let pref = ordered(core_prompt, turn_player, card_order.as_deref());
         let mut order: Vec<usize> = (0..core_cands.len()).collect();
@@ -441,8 +591,18 @@ impl Ctx<'_> {
             let mut values: Vec<Option<f64>> = vec![None; cands.len()];
             let (mut alpha, mut it_best) = (f64::NEG_INFINITY, None);
             let mut aborted = false;
-            for &k in &order {
-                match self.child(duel, prompt, &cands[k], depth - 1, alpha, f64::INFINITY, 1) {
+            for (j, &k) in order.iter().enumerate() {
+                (self.pv, self.pv_extended) = (j == 0, false);
+                let mut r = if self.f.pvs && j > 0 && alpha.is_finite() {
+                    // (PVS: does it beat the best so far? only then its value)
+                    self.child(duel, prompt, &cands[k], depth - 1, alpha, alpha + PVS_EPS, 1)
+                } else {
+                    self.child(duel, prompt, &cands[k], depth - 1, alpha, f64::INFINITY, 1)
+                };
+                if self.f.pvs && j > 0 && alpha.is_finite() && matches!(r, Ok(v) if v > alpha) {
+                    r = self.child(duel, prompt, &cands[k], depth - 1, alpha, f64::INFINITY, 1);
+                }
+                match r {
                     Ok(v) => {
                         values[k] = Some(v);
                         if v > alpha {
@@ -530,29 +690,76 @@ impl Ctx<'_> {
                 tt_move = Some(e.mv as usize);
             }
         }
+        let f = self.f;
+        let mover = prompt.player().unwrap_or(0);
+        if f.rfp && beta - alpha <= PVS_EPS && depth <= RFP_DEPTH && beta.abs() < WIN / 2.0 {
+            // (reverse futility pruning: so far ahead that the moves would not bring it below beta)
+            let s = evaluate(duel, mover);
+            if s - RFP_MARGIN * depth as f64 >= beta {
+                return Ok(s);
+            }
+        }
+        let static_v = if (f.futility || f.rfp_kind) && depth == 1 { Some(evaluate(duel, mover)) } else { None };
+        if f.rfp_kind
+            && let Some(s) = static_v
+            && beta.is_finite()
+            && let Some(low) = cands.iter().filter_map(|c| rfp_low(&move_kind(prompt, c))).reduce(f64::max)
+            && s + low >= beta
+        {
+            return Ok(s + low); // (reverse futility: a move keeps this much at least)
+        }
         let (alpha0, beta0) = (alpha, beta);
         let keys: Vec<usize> = cands.iter().map(|c| move_key(prompt, c)).collect();
+        let prev = self.prev_key;
+        let ckeys: Vec<usize> = if f.conthist { keys.iter().map(|&k| cont_key(prev, k)).collect() } else { Vec::new() };
+        let score = |ab: &AlphaBeta, k: usize| ab.hist[keys[k]] + if f.conthist { ab.cont[ckeys[k]] } else { 0.0 };
         let mut idx: Vec<usize> = (0..cands.len()).collect();
-        let hist = &self.ab.hist;
         // (the TT move first, then the moves with a better history; the heuristic's order among equals)
         idx.sort_by(|&a, &b| {
-            ((Some(a) != tt_move), -hist[keys[a]])
-                .partial_cmp(&((Some(b) != tt_move), -hist[keys[b]]))
+            ((Some(a) != tt_move), -score(self.ab, a))
+                .partial_cmp(&((Some(b) != tt_move), -score(self.ab, b)))
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         idx.truncate(MAX_CHILDREN);
+        let (node_pv, node_ext) = (self.pv, self.pv_extended);
         let (mut best, mut best_i) = (f64::NEG_INFINITY, idx[0]);
         for (i, &ci) in idx.iter().enumerate() {
             let c = &cands[ci];
-            let v = if i == idx.len() - 1 {
-                // (the last move: nothing needs this position afterwards, no copy)
-                if self.timed_out() {
-                    return Err(Stop::Abort);
+            if let Some(s) = static_v
+                && f.futility
+                && let Some(m) = futility_margin(&move_kind(prompt, c))
+                && s + m <= alpha
+            {
+                // (futile: it cannot raise alpha; its bound counts as its value)
+                if s + m > best {
+                    (best, best_i) = (s + m, ci);
                 }
-                self.ab.nodes += 1;
-                self.expand(duel, prompt.clone(), c, depth - 1, alpha, beta, ply + 1)?
-            } else {
-                self.child(duel, prompt, c, depth - 1, alpha, beta, ply + 1)?
+                continue;
+            }
+            (self.pv, self.pv_extended) = (node_pv && i == 0, node_ext);
+            let last = i == idx.len() - 1;
+            let mut v = None;
+            if (f.lmr || f.lmr_noresearch) && depth >= LMR_DEPTH && i >= LMR_MOVES {
+                // (a late move, unlikely the best by the move ordering: one ply less; with lmr
+                // the full depth after all if it beats alpha)
+                if f.lmr_noresearch {
+                    v = Some(self.search_move(duel, prompt, c, depth - 2, alpha, beta, ply + 1, last)?);
+                } else {
+                    let r = self.child(duel, prompt, c, depth - 2, alpha, beta, ply + 1)?;
+                    if r <= alpha {
+                        v = Some(r);
+                    }
+                }
+            }
+            let v = match v {
+                Some(v) => v,
+                None if f.pvs && i > 0 && beta - alpha > PVS_EPS && alpha.is_finite() => {
+                    // (PVS: a later move only has to show it does not beat alpha; if it does,
+                    // its value with the full window)
+                    let r = self.child(duel, prompt, c, depth - 1, alpha, alpha + PVS_EPS, ply + 1)?;
+                    if alpha < r && r < beta { self.search_move(duel, prompt, c, depth - 1, alpha, beta, ply + 1, last)? } else { r }
+                }
+                None => self.search_move(duel, prompt, c, depth - 1, alpha, beta, ply + 1, last)?,
             };
             if v > best {
                 (best, best_i) = (v, ci);
@@ -564,6 +771,12 @@ impl Ctx<'_> {
                 self.ab.hist[keys[ci]] += bonus;
                 for &k in &idx[..i] {
                     self.ab.hist[keys[k]] -= bonus / i as f64;
+                }
+                if f.conthist {
+                    self.ab.cont[ckeys[ci]] += bonus;
+                    for &k in &idx[..i] {
+                        self.ab.cont[ckeys[k]] -= bonus / i as f64;
+                    }
                 }
                 break;
             }
@@ -582,12 +795,56 @@ impl Ctx<'_> {
         Ok(best)
     }
 
+    /// The value of `cand`: on a copy of the duel, or for the node's last search on the duel
+    /// itself (nothing needs this position afterwards).
+    #[allow(clippy::too_many_arguments)]
+    fn search_move(&mut self, duel: &mut Duel, prompt: &Msg, cand: &Response, depth: i32, alpha: f64, beta: f64, ply: i32, last: bool) -> Result<f64, Stop> {
+        if !last {
+            return self.child(duel, prompt, cand, depth, alpha, beta, ply);
+        }
+        if self.timed_out() {
+            return Err(Stop::Abort);
+        }
+        self.ab.nodes += 1;
+        self.expand(duel, prompt.clone(), cand, depth, alpha, beta, ply)
+    }
+
+    /// Quiescence (`qsearch`): past the nominal depth, battle and chain decisions go on (attacks
+    /// and responses change the position the most, like captures in chess). In a Battle Phase
+    /// the player may stand pat (the static value: it need not attack), else only its attacks
+    /// are searched; in a chain window every answer, passing included.
+    fn qnode(&mut self, duel: &mut Duel, prompt: &Msg, depth: i32, mut alpha: f64, beta: f64, ply: i32) -> Result<f64, Stop> {
+        let mut cands = ordered(prompt, duel.ext_get_info()[1], None);
+        let mut best = f64::NEG_INFINITY;
+        if matches!(prompt, Msg::SelectBattlecmd { .. }) {
+            best = evaluate(duel, prompt.player().unwrap_or(0));
+            if best >= beta {
+                return Ok(best);
+            }
+            alpha = alpha.max(best);
+            cands.retain(|c| c.kind.as_deref() == Some("attack"));
+        }
+        cands.truncate(MAX_CHILDREN);
+        for (i, c) in cands.iter().enumerate() {
+            let v = self.search_move(duel, prompt, c, depth - 1, alpha, beta, ply + 1, i == cands.len() - 1)?;
+            best = best.max(v);
+            alpha = alpha.max(best);
+            if alpha >= beta {
+                break;
+            }
+        }
+        Ok(best)
+    }
+
     /// Plays `cand`, runs to the next ply and values it, for the player who plays it (negamax:
     /// values and the window (alpha, beta) are the mover's; they change sign only where the next
     /// ply is the other player's, which in this game need not be the case).
     #[allow(clippy::too_many_arguments)]
-    fn expand(&mut self, duel: &mut Duel, mut prompt: Msg, cand: &Response, depth: i32, alpha: f64, beta: f64, ply: i32) -> Result<f64, Stop> {
+    fn expand(&mut self, duel: &mut Duel, mut prompt: Msg, cand: &Response, mut depth: i32, alpha: f64, beta: f64, ply: i32) -> Result<f64, Stop> {
         let me = prompt.player().unwrap_or(0);
+        if self.f.conthist {
+            self.prev_key = move_key(&prompt, cand); // (for the continuation history of the next node)
+        }
         duel.ocg_set_response(&encode(&prompt, cand).map_err(|_| Stop::Broken)?);
         for _ in 0..MAX_AUTO_STEPS {
             let step = run_until_prompt(duel, Some(&prompt)).map_err(|_| Stop::Broken)?;
@@ -616,7 +873,21 @@ impl Ctx<'_> {
             } else if is_searched(&prompt) {
                 let cands = candidates(&prompt);
                 if cands.len() > 1 {
+                    if depth <= 0 && self.f.pv_ext && self.pv && !self.pv_extended && player != self.root_player {
+                        (self.pv_extended, depth) = (true, 1); // (the PV extension: their reply to the main line)
+                    }
                     if depth <= 0 {
+                        let quiet = match &prompt {
+                            Msg::SelectChain { .. } => false,
+                            Msg::SelectBattlecmd { .. } => !cands.iter().any(|c| c.kind.as_deref() == Some("attack")),
+                            _ => true,
+                        };
+                        if self.f.qsearch && depth > -MAX_QPLY && !quiet {
+                            if player == me {
+                                return self.qnode(duel, &prompt, depth, alpha, beta, ply);
+                            }
+                            return Ok(-self.qnode(duel, &prompt, depth, -beta, -alpha, ply)?);
+                        }
                         return Ok(evaluate(duel, me));
                     }
                     if player == me {
