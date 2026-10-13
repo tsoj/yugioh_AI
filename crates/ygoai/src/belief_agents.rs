@@ -122,6 +122,14 @@ impl BeliefSearchAgent {
         })
     }
 
+    /// Replaces the response this agent just gave (a replay of a recorded game: the agent's
+    /// history holds what was played).
+    pub fn set_last_response(&mut self, r: Response) {
+        if let Some(ObsItem::Response(last)) = self.items.last_mut() {
+            *last = r;
+        }
+    }
+
     fn budget(&self, clock: Option<(f64, f64)>) -> Option<f64> {
         clock.map(|(remaining, inc)| remaining / MOVES_TO_GO + inc)
     }

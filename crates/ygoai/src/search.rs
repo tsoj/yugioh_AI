@@ -1004,7 +1004,7 @@ impl Ctx<'_> {
         }
         duel.ocg_set_response(&encode(&prompt, cand).map_err(|_| Stop::Broken)?);
         for _ in 0..MAX_AUTO_STEPS {
-            let step = run_until_prompt(duel, Some(&prompt)).map_err(|_| Stop::Broken)?;
+            let step = run_core(duel, &prompt)?;
             for m in &step.messages {
                 match m {
                     Msg::Win { player, .. } => return Ok(if *player == me { WIN - ply as f64 } else { -WIN + ply as f64 }),
@@ -1063,4 +1063,28 @@ impl Ctx<'_> {
         }
         Ok(evaluate(duel, me))
     }
+}
+
+/// Runs the core to the next prompt. A line the core cannot play (an error, or a panic: rules
+/// code that fails on a rare situation, as the C++ core would crash, e.g. Last Turn's forced
+/// attack during an attack, which leaves the outer attack without an attacker) is broken: the
+/// search avoids it, and the duel (a copy, or the last use of a position) is not used again.
+fn run_core(duel: &mut Duel, prompt: &Msg) -> Result<crate::game::Step, Stop> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_until_prompt(duel, Some(prompt)))) {
+        Ok(Ok(step)) => Ok(step),
+        _ => Err(Stop::Broken),
+    }
+}
+
+/// Prints a panic's message only the first time at its place (the search survives the core's
+/// panics on lines it then avoids; one message each is enough).
+pub fn panic_messages_once() {
+    let seen = std::sync::Mutex::new(std::collections::HashSet::new());
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let at = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
+        if seen.lock().map_or(true, |mut s| s.insert(at)) {
+            hook(info);
+        }
+    }));
 }

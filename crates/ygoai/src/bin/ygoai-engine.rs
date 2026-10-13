@@ -10,6 +10,7 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() {
+    ygoai::search::panic_messages_once();
     let args: Vec<String> = std::env::args().collect();
     let name = args.get(1).cloned().unwrap_or_else(|| "random".into());
     let seed: Option<i64> = args.get(2).map(|s| s.parse().expect("SEED: an integer"));

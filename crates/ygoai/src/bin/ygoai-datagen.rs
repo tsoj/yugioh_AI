@@ -125,6 +125,7 @@ fn play(book: &ygoai::matchrun::Opening, game: usize, nodes: u64) -> Vec<Value> 
 }
 
 fn main() {
+    ygoai::search::panic_messages_once();
     let a: Vec<String> = std::env::args().collect();
     if a.len() < 6 {
         eprintln!("usage: ygoai-datagen BOOK FIRST COUNT NODES OUT.jsonl [JOBS]");
