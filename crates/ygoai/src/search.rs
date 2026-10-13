@@ -4,6 +4,7 @@
 //! the same choices at a fixed depth (its transposition table hashes the same bytes the same
 //! way, the rules' players draw the same random numbers).
 
+use std::collections::BTreeMap;
 use std::time::Instant;
 
 use ygo_core::api::QueryInfo;
@@ -829,6 +830,23 @@ enum Stop {
     Broken,
 }
 
+/// Statistics of the expanded nodes (nodes that got to their moves, not cut by the TT).
+#[derive(Default)]
+pub struct NodeStats {
+    /// by (prompt, options listed, children after the caps): [nodes, children searched]
+    pub widths: BTreeMap<(&'static str, u16, u16), [u64; 2]>,
+    /// by (prompt, TT state, children, the move index of the cutoff or `NO_CUT`): nodes. The TT
+    /// state: 0 no entry, 1 an entry without a move, else 2 + its flag (exact, lower, upper).
+    pub cuts: BTreeMap<(&'static str, u8, u8, u8), u64>,
+    /// by (prompt, move index): [reduced searches by LMR, of them searched again]
+    pub lmr: BTreeMap<(&'static str, u8), [u64; 2]>,
+    /// by (prompt, depth): [nodes, nodes in their subtrees (themselves included)]
+    pub subtree: BTreeMap<(&'static str, i8), [u64; 2]>,
+}
+
+/// (`NodeStats::cuts`: no cutoff, all the children searched)
+pub const NO_CUT: u8 = 255;
+
 /// The search's tables, kept from one decision to the next (an agent holds one).
 pub struct AlphaBeta {
     tt: Vec<TtEntry>,
@@ -842,9 +860,8 @@ pub struct AlphaBeta {
     pub tt_hits: u64,
     /// (lines the core could not play: the search avoids them)
     pub broken: u64,
-    /// (if set, the widths of the expanded nodes: by prompt, the options it lists, its children
-    /// after the caps; the count of such nodes and the children they searched before a cutoff)
-    pub widths: Option<std::collections::BTreeMap<(&'static str, u16, u16), [u64; 2]>>,
+    /// (if set, statistics of the expanded nodes, see `NodeStats`)
+    pub stats: Option<NodeStats>,
     /// the root value of the last search's last completed iteration (NaN if none completed)
     pub last_value: f64,
 }
@@ -860,7 +877,7 @@ impl Default for AlphaBeta {
             tt_probes: 0,
             tt_hits: 0,
             broken: 0,
-            widths: None,
+            stats: None,
             last_value: f64::NAN,
         }
     }
@@ -1055,9 +1072,12 @@ impl Ctx<'_> {
         let slot = (key & ((1 << TT_BITS) - 1)) as usize;
         let e = self.ab.tt[slot];
         let mut tt_move = None;
+        let mut tt_state = 0u8;
+        let nodes0 = self.ab.nodes;
         self.ab.tt_probes += 1;
         if e.key == key && e.gen_ == self.ab.tt_gen {
             self.ab.tt_hits += 1;
+            tt_state = if e.mv >= 0 { 2 + e.flag as u8 } else { 1 };
             let v = e.value;
             if e.depth as i32 >= depth {
                 if e.flag == EXACT {
@@ -1109,7 +1129,7 @@ impl Ctx<'_> {
         idx.truncate(MAX_CHILDREN);
         let (node_pv, node_ext) = (self.pv, self.pv_extended);
         let (mut best, mut best_i) = (f64::NEG_INFINITY, idx[0]);
-        let mut visited = 0;
+        let (mut visited, mut cut_at) = (0, NO_CUT);
         for (i, &ci) in idx.iter().enumerate() {
             visited = i + 1;
             let c = &cands[ci];
@@ -1136,6 +1156,11 @@ impl Ctx<'_> {
                     let r = self.child(duel, prompt, c, depth - 2, alpha, beta, ply + 1)?;
                     if r <= alpha {
                         v = Some(r);
+                    }
+                    if let Some(st) = &mut self.ab.stats {
+                        let e = st.lmr.entry((prompt_label(prompt), i.min(15) as u8)).or_default();
+                        e[0] += 1;
+                        e[1] += (r > alpha) as u64;
                     }
                 }
             }
@@ -1166,13 +1191,19 @@ impl Ctx<'_> {
                         self.ab.cont[ckeys[k]] -= bonus / i as f64;
                     }
                 }
+                cut_at = i as u8;
                 break;
             }
         }
-        if let Some(w) = &mut self.ab.widths {
-            let e = w.entry((prompt_label(prompt), listed(prompt, cands.len()) as u16, idx.len() as u16)).or_default();
+        if let Some(st) = &mut self.ab.stats {
+            let label = prompt_label(prompt);
+            let e = st.widths.entry((label, listed(prompt, cands.len()) as u16, idx.len() as u16)).or_default();
             e[0] += 1;
             e[1] += visited as u64;
+            *st.cuts.entry((label, tt_state, idx.len() as u8, cut_at)).or_default() += 1;
+            let e = st.subtree.entry((label, depth.clamp(-1, 60) as i8)).or_default();
+            e[0] += 1;
+            e[1] += self.ab.nodes - nodes0 + 1;
         }
         if best.abs() < WIN / 2.0 {
             // (not a win or loss: those depend on the ply)

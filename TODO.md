@@ -26,13 +26,28 @@ See `docs/search-decisions.md` for what is and isn't searched.
   - [ ] cancel in selections, and unselecting in `SelectUnselectCard`
 - [ ] Widen the capped candidate lists once ordering and reductions can take it:
       `CARD_WIDTH`, `MAX_CHILDREN`, `MULTI_CARDS`, `TRIBUTE_WIDTH`, `SUM_WIDTH`, `UNSELECT_WIDTH`.
-- [ ] Depth by node width / decision type: today every searched prompt costs one ply, so a
-      yes/no or a material pick costs as much as an idle command with 12 options, and the decision
-      features make lines with materials shallower. Charge depth by the node's width or type
-      (fractional plies: e.g. a full ply for idle/battle commands and chains, a fraction for the
-      decisions inside a move), with the costs tuned by SPRT; retest the decision features with it.
-      First measure the width distribution (`YGOAI_WIDTHS` in `ygoai-bench-search`).
-- [ ] LMR by node width or type instead of a fixed "from the 3rd move".
+- [ ] **Next, before adding more decision types: budget search.** Replace depth by a node
+      budget: an approximate number of nodes the subtree may use. A node costs 1 node of it, and
+      it gives each child, before searching, the share it expects that child to need: the
+      expected cost includes the chance of a cutoff before a move (by move number) and of a
+      re-search. These probabilities come from online statistics by node type (prompt, width) and
+      from the TT (an entry, its flag, a TT move). Iterative deepening grows the root budget.
+      Not a hard limit; a soft allocation in expectation.
+  - [x] Measure the widths (done: about 45% of the nodes are 2-way; `YGOAI_STATS` in
+        `ygoai-bench-search`).
+  - [ ] Measure cutoffs by move index, TT state and prompt; LMR re-search rates; subtree sizes
+        by depth (`YGOAI_STATS`).
+  - [ ] Implement the budget search as a feature; SPRT vs `lmr`.
+  - [ ] LMR in budget terms, calibrated to the statistics: skewed shares when the node is
+        confident (a TT move, a cut node by the TT flag), near uniform when only the static
+        ordering is known. Adapt Stockfish's log(depth) * log(move number) reduction (in budget
+        terms: shares like (i+1)^-a, with a growing with log of the budget and with confidence).
+  - [ ] Retest the decision features (`unselect` etc.) on top of it (`unselect` failed with one
+        ply per node: H0, -19.8 Elo, 492 games).
+- [ ] Try skipping "tactical" decisions at low budget: answer some decisions with the heuristic
+      when the budget is small, as the horizon does now for the inner decisions. Which ones count
+      as "tactical" is open: e.g. zones, positions, chain responses that do not change the eval,
+      battle details.
 - [ ] Better move ordering for the new decisions, e.g. history by decision type and card. The
       goal is that LMR and other reductions thin out the unimportant choices.
 

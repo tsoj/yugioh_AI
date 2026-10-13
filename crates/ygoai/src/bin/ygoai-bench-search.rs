@@ -5,9 +5,10 @@
 //!
 //!   ygoai-bench-search BOOK [OPENINGS] [BUDGET]
 //!
-//! With $YGOAI_WIDTHS set, it also prints the widths of the expanded nodes by prompt (options
-//! listed, children after the caps, children searched before a cutoff), and writes every
-//! (prompt, listed, children) count to the file $YGOAI_WIDTHS as JSON lines.
+//! With $YGOAI_STATS set, it also prints statistics of the expanded nodes (search::NodeStats):
+//! widths by prompt (options listed, children after the caps, children searched before a cutoff),
+//! cutoffs by prompt and TT state, LMR re-searches by move index, subtree sizes by depth; and
+//! writes all the counts to the file $YGOAI_STATS as JSON lines.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -17,7 +18,7 @@ use ygoai::game::{DuelConfig, init, new_record, run_until_prompt};
 use ygoai::heuristic::Heuristic;
 use ygoai::matchrun::load_book_head;
 use ygoai::observe::{auto_response, is_hidden_prompt};
-use ygoai::search::{AlphaBeta, SearchParams, candidates, is_searched};
+use ygoai::search::{AlphaBeta, NO_CUT, NodeStats, SearchParams, candidates, is_searched};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -36,16 +37,16 @@ fn main() {
     let (mut nodes, mut searches, mut depth_sum, mut secs) = (0u64, 0u32, 0i64, 0.0);
     let mut tt = (0u64, 0u64);
     let mut broken = 0u64;
-    let widths_path = std::env::var("YGOAI_WIDTHS").ok();
-    let mut widths: BTreeMap<(&'static str, u16, u16), [u64; 2]> = BTreeMap::new();
+    let stats_path = std::env::var("YGOAI_STATS").ok();
+    let mut stats = NodeStats::default();
     for opening in book.iter().take(n) {
         let record = new_record(&opening.decks, opening.seed, &DuelConfig::default());
         let mut duel = record.setup(None).unwrap();
         duel.ocg_start_duel();
         let mut players = [Heuristic::new(1, 0), Heuristic::new(2, 1)];
         let mut ab = AlphaBeta::default();
-        if widths_path.is_some() {
-            ab.widths = Some(Default::default());
+        if stats_path.is_some() {
+            ab.stats = Some(Default::default());
         }
         let mut prompt = None;
         for _ in 0..400 {
@@ -81,14 +82,17 @@ fn main() {
             duel.ocg_set_response(&ygoai::actions::encode(&p, &resp).unwrap());
             prompt = Some(p);
         }
-        for (k, v) in ab.widths.take().unwrap_or_default() {
-            let e = widths.entry(k).or_default();
-            e[0] += v[0];
-            e[1] += v[1];
+        if let Some(st) = ab.stats.take() {
+            merge(&mut stats.widths, st.widths);
+            merge(&mut stats.lmr, st.lmr);
+            merge(&mut stats.subtree, st.subtree);
+            for (k, n) in st.cuts {
+                *stats.cuts.entry(k).or_default() += n;
+            }
         }
     }
-    if let Some(path) = widths_path {
-        print_widths(&widths, &path);
+    if let Some(path) = stats_path {
+        print_stats(&stats, &path);
     }
     println!(
         "{searches} searches, {nodes} nodes in {secs:.1} s: {:.0} nodes/s, mean depth {:.2}; TT hits {} of {} probes; {broken} broken lines; checksum {checksum:016x}",
@@ -99,12 +103,79 @@ fn main() {
     );
 }
 
-/// The width table by prompt, and the counts as JSON lines to `path`.
-fn print_widths(widths: &BTreeMap<(&'static str, u16, u16), [u64; 2]>, path: &str) {
-    let mut f = std::io::BufWriter::new(std::fs::File::create(path).expect("widths file"));
+fn merge<K: Ord>(into: &mut BTreeMap<K, [u64; 2]>, from: BTreeMap<K, [u64; 2]>) {
+    for (k, v) in from {
+        let e = into.entry(k).or_default();
+        e[0] += v[0];
+        e[1] += v[1];
+    }
+}
+
+/// The tables, and the counts as JSON lines to `path`.
+fn print_stats(st: &NodeStats, path: &str) {
+    let mut f = std::io::BufWriter::new(std::fs::File::create(path).expect("stats file"));
+    for (&(label, listed, children), &[n, visited]) in &st.widths {
+        writeln!(f, r#"{{"t": "width", "prompt": "{label}", "listed": {listed}, "children": {children}, "nodes": {n}, "visited": {visited}}}"#).unwrap();
+    }
+    for (&(label, tt, children, cut), &n) in &st.cuts {
+        let cut = if cut == NO_CUT { "null".to_string() } else { cut.to_string() };
+        writeln!(f, r#"{{"t": "cut", "prompt": "{label}", "tt": {tt}, "children": {children}, "cut": {cut}, "nodes": {n}}}"#).unwrap();
+    }
+    for (&(label, i), &[n, re]) in &st.lmr {
+        writeln!(f, r#"{{"t": "lmr", "prompt": "{label}", "move": {i}, "reduced": {n}, "researched": {re}}}"#).unwrap();
+    }
+    for (&(label, depth), &[n, sub]) in &st.subtree {
+        writeln!(f, r#"{{"t": "subtree", "prompt": "{label}", "depth": {depth}, "nodes": {n}, "subtree": {sub}}}"#).unwrap();
+    }
+    print_widths(&st.widths);
+    // cutoffs by prompt and TT state, nodes with 2+ children
+    const TT: [&str; 5] = ["no entry", "no move", "exact", "lower", "upper"];
+    println!("\n{:<10} {:<9} {:>9} {:>6} {:>8} {:>8} {:>8} {:>8}", "prompt", "TT", "nodes", "cut", "at 1st", "at 2nd", "at 3rd+", "children");
+    let mut by: BTreeMap<(&str, u8), [u64; 5]> = BTreeMap::new();
+    for (&(label, tt, children, cut), &n) in &st.cuts {
+        let e = by.entry((label, tt)).or_default();
+        e[0] += n;
+        e[4] += n * children as u64;
+        match cut {
+            NO_CUT => {}
+            0 => e[1] += n,
+            1 => e[2] += n,
+            _ => e[3] += n,
+        }
+    }
+    for (&(label, tt), e) in &by {
+        let pct = |x: u64| x as f64 / e[0] as f64 * 100.0;
+        println!(
+            "{label:<10} {:<9} {:>9} {:>5.0}% {:>7.0}% {:>7.0}% {:>7.0}% {:>8.2}",
+            TT[tt as usize], e[0], pct(e[1] + e[2] + e[3]), pct(e[1]), pct(e[2]), pct(e[3]), e[4] as f64 / e[0] as f64
+        );
+    }
+    println!("\nLMR: re-searched share of the reduced searches, by move index (all prompts)");
+    let mut by_i: BTreeMap<u8, [u64; 2]> = BTreeMap::new();
+    for (&(_, i), v) in &st.lmr {
+        let e = by_i.entry(i).or_default();
+        e[0] += v[0];
+        e[1] += v[1];
+    }
+    for (i, [n, re]) in by_i {
+        println!("  move {:>2}: {:>9} reduced, {:>5.1}% re-searched", i + 1, n, re as f64 / n as f64 * 100.0);
+    }
+    println!("\nmean subtree size (nodes) by depth (all prompts)");
+    let mut by_d: BTreeMap<i8, [u64; 2]> = BTreeMap::new();
+    for (&(_, d), v) in &st.subtree {
+        let e = by_d.entry(d).or_default();
+        e[0] += v[0];
+        e[1] += v[1];
+    }
+    for (d, [n, sub]) in by_d {
+        println!("  depth {d:>2}: {n:>9} nodes, mean subtree {:>9.1}", sub as f64 / n as f64);
+    }
+}
+
+/// The width table by prompt.
+fn print_widths(widths: &BTreeMap<(&'static str, u16, u16), [u64; 2]>) {
     let mut by: BTreeMap<&str, Vec<(u16, u16, u64, u64)>> = BTreeMap::new();
     for (&(label, listed, children), &[n, visited]) in widths {
-        writeln!(f, r#"{{"prompt": "{label}", "listed": {listed}, "children": {children}, "nodes": {n}, "visited": {visited}}}"#).unwrap();
         by.entry(label).or_default().push((listed, children, n, visited));
     }
     let total: u64 = widths.values().map(|v| v[0]).sum();
