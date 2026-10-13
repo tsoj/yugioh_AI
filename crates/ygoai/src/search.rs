@@ -358,6 +358,45 @@ fn query(d: &mut Duel, p: u32, loc: u32, flags: u32) -> Vec<u8> {
     d.ocg_query_location(&QueryInfo { flags, con: p as u8, loc, seq: 0, overlay_seq: 0 })
 }
 
+/// The evaluation's terms for `me` (the differences, me minus the opponent): LP, monsters,
+/// dominant monsters, hand, face-down backrow, and the deck-out flag (2 cards or fewer left to
+/// draw; the opponent's minus mine). `evaluate` is their sum with the W_ weights (in its own
+/// order of additions).
+pub fn eval_features(d: &mut Duel, me: u32) -> [f64; 6] {
+    let info = d.ext_get_info();
+    let lp = [info[3] as i32, info[4] as i32];
+    let mons: Vec<Vec<(u32, i32, i32)>> = [me, 1 - me]
+        .iter()
+        .map(|&p| {
+            parse_location_query(&query(d, p, LOCATION_MZONE, MZONE_QUERY))
+                .into_iter()
+                .flatten()
+                .map(|c| (c.position.unwrap_or(0), c.attack.unwrap_or(0), c.defense.unwrap_or(0)))
+                .collect()
+        })
+        .collect();
+    let mut f = [(lp[me as usize] - lp[1 - me as usize]) as f64, mons[0].len() as f64 - mons[1].len() as f64, 0.0, 0.0, 0.0, 0.0];
+    for (s, p) in [(0usize, me), (1, 1 - me)] {
+        let sign = if s == 0 { 1.0 } else { -1.0 };
+        let best_other = mons[1 - s].iter().map(|&(pos, a, df)| battle_stat(pos, a, df)).max().unwrap_or(-1);
+        f[2] += sign * mons[s].iter().filter(|&&(pos, a, _)| pos & POS_FACEUP_ATTACK != 0 && a > best_other).count() as f64;
+        f[3] += sign * d.ocg_query_count(p as u8, LOCATION_HAND) as f64;
+        let backrow = parse_location_query(&query(d, p, LOCATION_SZONE, QUERY_POSITION))
+            .into_iter()
+            .flatten()
+            .filter(|c| c.position.unwrap_or(0) & POS_FACEDOWN != 0)
+            .count();
+        f[4] += sign * backrow as f64;
+        if d.ocg_query_count(p as u8, LOCATION_DECK) <= 2 {
+            f[5] -= sign;
+        }
+    }
+    f
+}
+
+/// The evaluation's weights, in the order of `eval_features`.
+pub const EVAL_WEIGHTS: [f64; 6] = [W_LP, W_MONSTER, W_DOMINANT, W_HAND, W_BACKROW, W_DECK_OUT];
+
 /// The position's value for `me` (in points of 100 LP) (alphabeta.evaluate).
 pub fn evaluate(d: &mut Duel, me: u32) -> f64 {
     let info = d.ext_get_info();
@@ -480,6 +519,8 @@ pub struct AlphaBeta {
     /// transposition table lookups, and those that found the position
     pub tt_probes: u64,
     pub tt_hits: u64,
+    /// the root value of the last search's last completed iteration (NaN if none completed)
+    pub last_value: f64,
 }
 
 impl Default for AlphaBeta {
@@ -492,6 +533,7 @@ impl Default for AlphaBeta {
             nodes: 0,
             tt_probes: 0,
             tt_hits: 0,
+            last_value: f64::NAN,
         }
     }
 }
@@ -580,6 +622,7 @@ impl Ctx<'_> {
     #[allow(clippy::too_many_arguments)]
     fn deepen(&mut self, duel: &Duel, prompt: &Msg, cands: &[Response], mut order: Vec<usize>, t0: Instant, budget: Option<f64>, fixed_depth: bool) -> (usize, i32) {
         let (mut best, mut done) = (order[0], 0);
+        self.ab.last_value = f64::NAN;
         let max_depth = if fixed_depth { DEPTH_NO_CLOCK } else { MAX_DEPTH };
         for depth in 1..=max_depth {
             if let Some(b) = budget
@@ -627,6 +670,7 @@ impl Ctx<'_> {
             }
             let Some(b) = it_best else { break };
             (best, done) = (b, depth);
+            self.ab.last_value = values[b].unwrap();
             // (the next iteration: the best first; cut-off moves keep their bound's order)
             order.sort_by(|&a, &b| values[b].unwrap().partial_cmp(&values[a].unwrap()).unwrap_or(std::cmp::Ordering::Equal));
             if values[best].unwrap().abs() >= WIN / 2.0 {
