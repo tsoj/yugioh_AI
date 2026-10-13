@@ -22,7 +22,7 @@ use crate::messages::Msg;
 use crate::observe::to_core_response;
 use crate::pyrandom::PyRandom;
 use crate::rduel::RDuel;
-use crate::search::{AlphaBeta, SearchParams, candidates, is_searched};
+use crate::search::{AlphaBeta, SearchParams, candidates_in, is_searched};
 use crate::state::{LOCATIONS, Snapshot, viewer_view};
 
 /// public facts an approximate reconstruction may get wrong to be searched on
@@ -225,7 +225,12 @@ impl Agent for BeliefSearchAgent {
     }
     fn respond(&mut self, prompt: &Msg, state: Option<&Snapshot>, clock: Option<(f64, f64)>) -> Result<Response, AgentError> {
         self.items.push(ObsItem::Prompt(prompt.clone(), state.cloned()));
-        let mut cands = if is_searched(prompt) { candidates(prompt) } else { vec![] };
+        // (a card selection's candidates by the rules' order of its cards: the search keeps the first)
+        let order = match prompt {
+            Msg::SelectCard { cards, .. } | Msg::SelectUnselectCard { select_cards: cards, .. } => Some(self.fallback.card_order(cards)),
+            _ => None,
+        };
+        let mut cands = if is_searched(prompt) { candidates_in(prompt, order.as_deref()) } else { vec![] };
         cands.truncate(MAX_CANDIDATES);
         let mut resp = None;
         if cands.len() > 1 && clock.is_none_or(|(remaining, inc)| remaining > MIN_SEARCH_TIME.max(3.0 * inc)) {

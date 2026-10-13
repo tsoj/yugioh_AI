@@ -11,9 +11,9 @@ use ygo_core::constants::*;
 use ygo_core::duel::Duel;
 use ygo_core::types::CardId;
 
-use crate::actions::{Response, battle_options, encode, idle_options};
+use crate::actions::{Response, available_places, battle_options, check_sum, encode, idle_options};
 use crate::game::run_until_prompt;
-use crate::heuristic::{Heuristic, db_attack};
+use crate::heuristic::{Heuristic, card, card_value, db_attack};
 use crate::messages::Msg;
 use crate::observe::{auto_response, is_hidden_prompt};
 use crate::state::parse_location_query;
@@ -27,6 +27,13 @@ pub const MAX_CHILDREN: usize = 12;
 /// (a one-card selection: the rules' first choices only, below the root and at the root)
 pub const CARD_WIDTH: usize = 3;
 pub const ROOT_CARD_WIDTH: usize = 3;
+/// (the searched decisions inside a move, each a feature: how many of the rules' first choices)
+const UNSELECT_WIDTH: usize = 3;
+const TRIBUTE_WIDTH: usize = 4;
+const MULTI_CARDS: usize = 4;
+const MULTI_WIDTH: usize = 6;
+const SUM_WIDTH: usize = 4;
+const SUM_STEPS: usize = 5000;
 pub const NEXT_ITERATION_SHARE: f64 = 0.5;
 pub const HARD_FACTOR: f64 = 3.0;
 pub const HARD_SHARE: f64 = 0.25;
@@ -66,6 +73,10 @@ const CONT_BITS: u32 = 16;
 /// the least a move of each kind keeps), `futility` (depth 1, by the most a move of each kind
 /// gains), `lmr`, `lmr_noresearch`, `conthist` (continuation history), `pv_ext` (the main
 /// line sees the opponent's reply), `qsearch` (battle and chain decisions past the depth).
+/// Decisions inside a move that the search can make instead of the rules' player (each the rules'
+/// first few choices): `unselect` (card by card selections, e.g. most materials), `tribute`,
+/// `multicard` (selections of several cards), `sum` (selections by a sum: Synchro and Ritual
+/// materials), `position`, `place` (the zone).
 /// The features that passed their SPRTs (LMR: +19.1 +/- 14.9, LLR +3.01, 1204 games, 2026-10-13).
 pub const DEFAULT_FEATURES: &str = "lmr";
 
@@ -80,6 +91,12 @@ pub struct Features {
     pub conthist: bool,
     pub pv_ext: bool,
     pub qsearch: bool,
+    pub unselect: bool,
+    pub tribute: bool,
+    pub multicard: bool,
+    pub sum: bool,
+    pub position: bool,
+    pub place: bool,
 }
 
 impl Features {
@@ -96,6 +113,12 @@ impl Features {
                 "conthist" => f.conthist = true,
                 "pv_ext" => f.pv_ext = true,
                 "qsearch" => f.qsearch = true,
+                "unselect" => f.unselect = true,
+                "tribute" => f.tribute = true,
+                "multicard" => f.multicard = true,
+                "sum" => f.sum = true,
+                "position" => f.position = true,
+                "place" => f.place = true,
                 _ => panic!("YGOAI_SEARCH: unknown feature {name}"),
             }
         }
@@ -200,7 +223,20 @@ pub fn is_searched(m: &Msg) -> bool {
             | Msg::SelectYesno { .. }
             | Msg::SelectOption { .. }
             | Msg::SelectCard { .. }
-    )
+    ) || is_inner(m)
+}
+
+/// A decision inside a move that a feature has the search make (see `Features`).
+fn is_inner(m: &Msg) -> bool {
+    let f = Features::from_env();
+    match m {
+        Msg::SelectUnselectCard { .. } => f.unselect,
+        Msg::SelectTribute { .. } => f.tribute,
+        Msg::SelectSum { .. } => f.sum,
+        Msg::SelectPosition { .. } => f.position,
+        Msg::SelectPlace { count: 1, .. } => f.place,
+        _ => false,
+    }
 }
 
 fn idx(i: usize) -> Response {
@@ -209,6 +245,19 @@ fn idx(i: usize) -> Response {
 
 /// The candidates of a searched prompt (belief_mc.candidates).
 pub fn candidates(m: &Msg) -> Vec<Response> {
+    candidates_in(m, None)
+}
+
+/// The candidates, for a card selection with the cards in `order` (the rules' order by the select
+/// hint; None: as listed): a decision inside a move has the rules' first few choices, best first.
+pub fn candidates_in(m: &Msg, order: Option<&[usize]>) -> Vec<Response> {
+    let f = Features::from_env();
+    let listed = |n: usize| -> Vec<usize> { order.map_or_else(|| (0..n).collect(), |o| o.iter().copied().filter(|&i| i < n).collect()) };
+    let pick = |idx: Vec<usize>| {
+        let mut idx: Vec<i64> = idx.into_iter().map(|i| i as i64).collect();
+        idx.sort();
+        Response { indices: Some(idx), ..Response::default() }
+    };
     match m {
         Msg::SelectIdlecmd { .. } => idle_options(m),
         Msg::SelectBattlecmd { .. } => battle_options(m),
@@ -223,8 +272,111 @@ pub fn candidates(m: &Msg) -> Vec<Response> {
         Msg::SelectCard { min: 1, max: 1, cards, .. } => {
             (0..cards.len()).map(|i| Response { indices: Some(vec![i as i64]), ..Response::default() }).collect()
         }
+        Msg::SelectCard { min, max, cards, .. } if f.multicard && *max >= 1 && !cards.is_empty() => {
+            // (the rules' count of the first cards, then other counts and other cards among the first few)
+            let top: Vec<usize> = listed(cards.len()).into_iter().take(MULTI_CARDS).collect();
+            let lo = (*min).max(1).min(*max).min(cards.len() as u32) as usize;
+            let hi = (*max as usize).min(top.len()).max(lo.min(top.len()));
+            let mut out = Vec::new();
+            for k in std::iter::once(lo).chain((lo + 1..=hi).rev()) {
+                if k <= top.len() {
+                    for c in combinations(top.len(), k) {
+                        out.push(c.into_iter().map(|j| top[j]).collect::<Vec<_>>());
+                    }
+                }
+            }
+            if lo > top.len() {
+                out.push(listed(cards.len())[..lo].to_vec());
+            }
+            out.into_iter().take(MULTI_WIDTH).map(pick).collect()
+        }
+        Msg::SelectUnselectCard { finishable, cancelable, select_cards, .. } if f.unselect => {
+            let mut out: Vec<Response> = listed(select_cards.len()).into_iter().take(UNSELECT_WIDTH).map(idx).collect();
+            if *finishable != 0 || (*cancelable != 0 && select_cards.is_empty()) {
+                out.push(Response { finish: Some(true), ..Response::default() });
+            }
+            out
+        }
+        Msg::SelectTribute { min, max, cards, .. } if f.tribute && !cards.is_empty() => {
+            // (the least valuable sets that release enough, without a card to spare)
+            let n = cards.len().min(10);
+            let rel = |i: usize| cards[i].release_param.unwrap_or(0);
+            let mut sets: Vec<(f64, Vec<usize>)> = Vec::new();
+            for mask in 1u32..(1 << n) {
+                let set: Vec<usize> = (0..n).filter(|&i| mask & (1 << i) != 0).collect();
+                let total: u32 = set.iter().map(|&i| rel(i)).sum();
+                if set.len() > (*max).max(1) as usize || total < *min || set.iter().any(|&i| total - rel(i) >= *min) {
+                    continue;
+                }
+                sets.push((set.iter().map(|&i| card_value(&cards[i], card(cards[i].code))).sum(), set));
+            }
+            sets.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            sets.into_iter().take(TRIBUTE_WIDTH).map(|(_, s)| pick(s)).collect()
+        }
+        Msg::SelectSum { cards, .. } if f.sum && !cards.is_empty() => {
+            // (valid selections, the least valuable cards tried first)
+            let mut by_value: Vec<usize> = (0..cards.len()).collect();
+            let v = |i: usize| card_value(&cards[i], card(cards[i].code));
+            by_value.sort_by(|&a, &b| v(a).partial_cmp(&v(b)).unwrap_or(std::cmp::Ordering::Equal));
+            sum_selections(m, &by_value).into_iter().map(pick).collect()
+        }
+        Msg::SelectPosition { code, positions, .. } if f.position => {
+            let order = if card(*code).is_some_and(|c| c.attack <= 0) {
+                [POS_FACEUP_DEFENSE, POS_FACEDOWN_DEFENSE, POS_FACEUP_ATTACK, POS_FACEDOWN_ATTACK]
+            } else {
+                [POS_FACEUP_ATTACK, POS_FACEUP_DEFENSE, POS_FACEDOWN_DEFENSE, POS_FACEDOWN_ATTACK]
+            };
+            order.into_iter().filter(|p| positions & p != 0).map(|p| Response { position: Some(p as i64), ..Response::default() }).collect()
+        }
+        Msg::SelectPlace { player, count: 1, flag } if f.place => {
+            available_places(*player, *flag).into_iter().map(|pl| Response { places: Some(vec![pl]), ..Response::default() }).collect()
+        }
         _ => vec![],
     }
+}
+
+/// The k-element subsets of 0..n, in lexicographic order (the first elements first).
+fn combinations(n: usize, k: usize) -> Vec<Vec<usize>> {
+    let mut out = Vec::new();
+    let mut c: Vec<usize> = (0..k).collect();
+    if k > n {
+        return out;
+    }
+    loop {
+        out.push(c.clone());
+        let Some(i) = (0..k).rev().find(|&i| c[i] != i + n - k) else { return out };
+        c[i] += 1;
+        for j in i + 1..k {
+            c[j] = c[j - 1] + 1;
+        }
+    }
+}
+
+/// Up to SUM_WIDTH valid selections of a sum prompt, by a depth-first search over the cards in
+/// `order` (the first cards first; a bounded number of steps).
+fn sum_selections(m: &Msg, order: &[usize]) -> Vec<Vec<usize>> {
+    let Msg::SelectSum { max, .. } = m else { return vec![] };
+    fn dfs(m: &Msg, order: &[usize], start: usize, max: usize, chosen: &mut Vec<usize>, out: &mut Vec<Vec<usize>>, steps: &mut usize) {
+        *steps += 1;
+        if out.len() >= SUM_WIDTH || *steps > SUM_STEPS {
+            return;
+        }
+        if !chosen.is_empty() && check_sum(m, chosen) {
+            out.push(chosen.clone());
+            return; // (a valid selection: not one with more cards on top)
+        }
+        if chosen.len() >= max {
+            return;
+        }
+        for k in start..order.len() {
+            chosen.push(order[k]);
+            dfs(m, order, k + 1, max, chosen, out, steps);
+            chosen.pop();
+        }
+    }
+    let (mut out, mut steps) = (Vec::new(), 0);
+    dfs(m, order, 0, (*max as usize).max(1), &mut Vec::new(), &mut out, &mut steps);
+    out
 }
 
 fn idle_order(kind: &str) -> i32 {
@@ -258,9 +410,10 @@ pub fn ordered(m: &Msg, turn_player: u32, card_order: Option<&[usize]>) -> Vec<R
     let mut cands = candidates(m);
     let k = |c: &Response| c.index.unwrap_or(0) as usize;
     match m {
-        Msg::SelectCard { .. } if card_order.is_some() => {
+        Msg::SelectCard { min: 1, max: 1, .. } if card_order.is_some() => {
             return card_order.unwrap().iter().filter(|&&i| i < cands.len()).map(|&i| cands[i].clone()).collect();
         }
+        Msg::SelectCard { .. } | Msg::SelectUnselectCard { .. } => return candidates_in(m, card_order),
         Msg::SelectIdlecmd { summonable, .. } => cands.sort_by_key(|c| {
             let kind = c.kind.as_deref().unwrap_or("");
             (idle_order(kind), if kind == "summon" { -db_attack(summonable[k(c)].code) } else { 0 })
@@ -286,6 +439,12 @@ fn type_id(m: &Msg) -> u128 {
         Msg::SelectEffectyn { .. } => 4,
         Msg::SelectYesno { .. } => 5,
         Msg::SelectOption { .. } => 6,
+        Msg::SelectCard { .. } => 7,
+        Msg::SelectUnselectCard { .. } => 8,
+        Msg::SelectTribute { .. } => 9,
+        Msg::SelectSum { .. } => 10,
+        Msg::SelectPosition { .. } => 11,
+        Msg::SelectPlace { .. } => 12,
         _ => 0,
     }
 }
@@ -342,9 +501,27 @@ pub fn move_key(m: &Msg, c: &Response) -> usize {
         }
     } else if let Some(ind) = &c.indices {
         kind = 1;
-        if let Msg::SelectCard { cards, .. } = m {
-            code = cards.get(ind[0] as usize).map_or(0, |e| e.code as u128);
+        let cards = match m {
+            Msg::SelectCard { cards, .. } | Msg::SelectTribute { cards, .. } | Msg::SelectSum { cards, .. } => Some(cards),
+            _ => None,
+        };
+        if let Some(cards) = cards {
+            if ind.len() == 1 {
+                code = cards.get(ind[0] as usize).map_or(0, |e| e.code as u128);
+            } else {
+                // (several cards: the codes in any order)
+                code = ind.iter().filter_map(|&i| cards.get(i as usize)).fold(0u128, |a, e| a.wrapping_add((e.code as u128).wrapping_mul(0x9E37_79B9)));
+                kind = 1 + ind.len() as u128;
+            }
         }
+    } else if let (Msg::SelectUnselectCard { select_cards, .. }, Some(i)) = (m, c.index) {
+        (kind, code) = (1, select_cards.get(i as usize).map_or(0, |e| e.code as u128));
+    } else if c.finish == Some(true) {
+        kind = 2;
+    } else if let Some(p) = c.position {
+        kind = p as u128;
+    } else if let Some(pl) = c.places.as_ref().and_then(|p| p.first()) {
+        kind = (pl[1] * 16 + pl[2]) as u128;
     } else if let Some(i) = c.index {
         kind = (1 + i) as u128;
     }
@@ -632,6 +809,8 @@ pub struct AlphaBeta {
     /// transposition table lookups, and those that found the position
     pub tt_probes: u64,
     pub tt_hits: u64,
+    /// (lines the core could not play: the search avoids them)
+    pub broken: u64,
     /// the root value of the last search's last completed iteration (NaN if none completed)
     pub last_value: f64,
 }
@@ -646,6 +825,7 @@ impl Default for AlphaBeta {
             nodes: 0,
             tt_probes: 0,
             tt_hits: 0,
+            broken: 0,
             last_value: f64::NAN,
         }
     }
@@ -709,8 +889,12 @@ impl AlphaBeta {
         let pref = ordered(core_prompt, turn_player, card_order.as_deref());
         let mut order: Vec<usize> = (0..core_cands.len()).collect();
         order.sort_by_key(|&k| pref.iter().position(|c| *c == core_cands[k]).unwrap_or(pref.len()));
-        if matches!(core_prompt, Msg::SelectCard { .. }) {
+        if matches!(core_prompt, Msg::SelectCard { min: 1, max: 1, .. }) {
             order.truncate(ROOT_CARD_WIDTH);
+        } else if is_inner(core_prompt) || matches!(core_prompt, Msg::SelectCard { .. }) {
+            // (a decision inside a move: the rules' first choices only, as below the root)
+            let known = core_cands.iter().filter(|c| pref.contains(c)).count().max(1);
+            order.truncate(known);
         }
         let unbounded = p.budget.is_none() && p.max_nodes.is_none();
         ctx.deepen(duel, core_prompt, core_cands, order, t0, p.budget, unbounded)
@@ -725,7 +909,11 @@ impl Ctx<'_> {
     /// For a card selection: the rules' order of its cards (by the select hint the player got,
     /// which belongs to this selection only).
     fn card_order(&mut self, m: &Msg) -> Option<Vec<usize>> {
-        let Msg::SelectCard { cards, player, .. } = m else { return None };
+        let (cards, player) = match m {
+            Msg::SelectCard { cards, player, .. } => (cards, player),
+            Msg::SelectUnselectCard { select_cards, player, .. } if is_inner(m) => (select_cards, player),
+            _ => return None,
+        };
         let policy = &mut self.policies[*player as usize];
         let order = policy.card_order(cards);
         policy.hint = None;
@@ -808,7 +996,13 @@ impl Ctx<'_> {
             (p.activations, p.hint) = (act, hint);
         }
         match r {
-            Err(Stop::Broken) if !self.timed_out() => Ok(-WIN), // (the player to move avoids the line)
+            Err(Stop::Broken) if !self.timed_out() => {
+                self.ab.broken += 1;
+                if std::env::var_os("YGOAI_DEBUG_BROKEN").is_some() {
+                    eprintln!("broken: {} {cand:?}", prompt.name());
+                }
+                Ok(-WIN) // (the player to move avoids the line)
+            }
             Err(_) => Err(Stop::Abort),
             Ok(v) => Ok(v),
         }
@@ -819,7 +1013,7 @@ impl Ctx<'_> {
         // (moves are indices into the heuristic's order: the TT keeps one, the history reorders them)
         let card_order = self.card_order(prompt);
         let mut cands = ordered(prompt, duel.ext_get_info()[1], card_order.as_deref());
-        if card_order.is_some() {
+        if matches!(prompt, Msg::SelectCard { min: 1, max: 1, .. }) {
             cands.truncate(CARD_WIDTH);
         }
         let key = tt_key(duel, prompt);
@@ -1024,8 +1218,8 @@ impl Ctx<'_> {
             let player = prompt.player().unwrap_or(0);
             let resp = if is_hidden_prompt(&prompt) {
                 auto_response()
-            } else if matches!(prompt, Msg::SelectCard { .. }) && depth <= 0 {
-                // (at the horizon a card selection is the rules': the effect resolves first)
+            } else if (matches!(prompt, Msg::SelectCard { .. }) || is_inner(&prompt)) && depth <= 0 {
+                // (at the horizon a decision inside a move is the rules': the move completes first)
                 self.policies[player as usize].respond_to(&prompt, None).map_err(|_| Stop::Broken)?
             } else if is_searched(&prompt) {
                 let cands = candidates(&prompt);

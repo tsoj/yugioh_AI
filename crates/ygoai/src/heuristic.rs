@@ -58,7 +58,7 @@ const RULED: [u64; 26] = [
     EQUIP, REMOVEXYZ, CONTROL, TOFIELD, POSCHANGE, TRIBUTE, DEATTACHFROM, LMATERIAL, ATTACKTARGET, TARGET, NEGATE,
 ];
 
-fn card(code: u32) -> Option<&'static CardData> {
+pub fn card(code: u32) -> Option<&'static CardData> {
     if code == 0 {
         return None;
     }
@@ -72,7 +72,7 @@ pub fn db_attack(code: u32) -> i32 {
 
 /// How much a card is worth (in ATK points): a monster its ATK (DEF if higher), a Spell/Trap a
 /// fixed amount, a face-down or unknown card UNKNOWN_VALUE.
-fn card_value(entry: &Card, c: Option<&CardData>) -> f64 {
+pub fn card_value(entry: &Card, c: Option<&CardData>) -> f64 {
     let Some(c) = c.filter(|_| entry.code != 0) else { return UNKNOWN_VALUE };
     if c.type_ & TYPE_MONSTER != 0 {
         return c.attack.max(c.defense).max(0) as f64;
