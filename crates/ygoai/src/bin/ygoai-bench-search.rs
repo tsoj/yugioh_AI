@@ -4,7 +4,13 @@
 //! searches' results and node counts shows that a change kept the engine's behavior).
 //!
 //!   ygoai-bench-search BOOK [OPENINGS] [BUDGET]
+//!
+//! With $YGOAI_WIDTHS set, it also prints the widths of the expanded nodes by prompt (options
+//! listed, children after the caps, children searched before a cutoff), and writes every
+//! (prompt, listed, children) count to the file $YGOAI_WIDTHS as JSON lines.
 
+use std::collections::BTreeMap;
+use std::io::Write;
 use std::time::Instant;
 
 use ygoai::game::{DuelConfig, init, new_record, run_until_prompt};
@@ -30,12 +36,17 @@ fn main() {
     let (mut nodes, mut searches, mut depth_sum, mut secs) = (0u64, 0u32, 0i64, 0.0);
     let mut tt = (0u64, 0u64);
     let mut broken = 0u64;
+    let widths_path = std::env::var("YGOAI_WIDTHS").ok();
+    let mut widths: BTreeMap<(&'static str, u16, u16), [u64; 2]> = BTreeMap::new();
     for opening in book.iter().take(n) {
         let record = new_record(&opening.decks, opening.seed, &DuelConfig::default());
         let mut duel = record.setup(None).unwrap();
         duel.ocg_start_duel();
         let mut players = [Heuristic::new(1, 0), Heuristic::new(2, 1)];
         let mut ab = AlphaBeta::default();
+        if widths_path.is_some() {
+            ab.widths = Some(Default::default());
+        }
         let mut prompt = None;
         for _ in 0..400 {
             let step = run_until_prompt(&mut duel, prompt.as_ref()).unwrap();
@@ -70,6 +81,14 @@ fn main() {
             duel.ocg_set_response(&ygoai::actions::encode(&p, &resp).unwrap());
             prompt = Some(p);
         }
+        for (k, v) in ab.widths.take().unwrap_or_default() {
+            let e = widths.entry(k).or_default();
+            e[0] += v[0];
+            e[1] += v[1];
+        }
+    }
+    if let Some(path) = widths_path {
+        print_widths(&widths, &path);
     }
     println!(
         "{searches} searches, {nodes} nodes in {secs:.1} s: {:.0} nodes/s, mean depth {:.2}; TT hits {} of {} probes; {broken} broken lines; checksum {checksum:016x}",
@@ -78,4 +97,29 @@ fn main() {
         tt.1,
         tt.0
     );
+}
+
+/// The width table by prompt, and the counts as JSON lines to `path`.
+fn print_widths(widths: &BTreeMap<(&'static str, u16, u16), [u64; 2]>, path: &str) {
+    let mut f = std::io::BufWriter::new(std::fs::File::create(path).expect("widths file"));
+    let mut by: BTreeMap<&str, Vec<(u16, u16, u64, u64)>> = BTreeMap::new();
+    for (&(label, listed, children), &[n, visited]) in widths {
+        writeln!(f, r#"{{"prompt": "{label}", "listed": {listed}, "children": {children}, "nodes": {n}, "visited": {visited}}}"#).unwrap();
+        by.entry(label).or_default().push((listed, children, n, visited));
+    }
+    let total: u64 = widths.values().map(|v| v[0]).sum();
+    println!("{:<10} {:>9} {:>6} {:>7} {:>8} {:>8}  children: share of the nodes with 1, 2, 3, 4-6, 7-11, 12", "prompt", "nodes", "share", "listed", "children", "searched");
+    for (label, rows) in &by {
+        let n: u64 = rows.iter().map(|r| r.2).sum();
+        let mean = |f: &dyn Fn(&(u16, u16, u64, u64)) -> f64| rows.iter().map(|r| f(r) * r.2 as f64).sum::<f64>() / n as f64;
+        let share = |lo: u16, hi: u16| rows.iter().filter(|r| (lo..=hi).contains(&r.1)).map(|r| r.2).sum::<u64>() as f64 / n as f64 * 100.0;
+        println!(
+            "{label:<10} {n:>9} {:>5.1}% {:>7.2} {:>8.2} {:>8.2}  {:>4.0}% {:>4.0}% {:>4.0}% {:>4.0}% {:>4.0}% {:>4.0}%",
+            n as f64 / total as f64 * 100.0,
+            mean(&|r| r.0 as f64),
+            mean(&|r| r.1 as f64),
+            rows.iter().map(|r| r.3).sum::<u64>() as f64 / n as f64,
+            share(1, 1), share(2, 2), share(3, 3), share(4, 6), share(7, 11), share(12, u16::MAX),
+        );
+    }
 }

@@ -26,6 +26,13 @@ See `docs/search-decisions.md` for what is and isn't searched.
   - [ ] cancel in selections, and unselecting in `SelectUnselectCard`
 - [ ] Widen the capped candidate lists once ordering and reductions can take it:
       `CARD_WIDTH`, `MAX_CHILDREN`, `MULTI_CARDS`, `TRIBUTE_WIDTH`, `SUM_WIDTH`, `UNSELECT_WIDTH`.
+- [ ] Depth by node width / decision type: today every searched prompt costs one ply, so a
+      yes/no or a material pick costs as much as an idle command with 12 options, and the decision
+      features make lines with materials shallower. Charge depth by the node's width or type
+      (fractional plies: e.g. a full ply for idle/battle commands and chains, a fraction for the
+      decisions inside a move), with the costs tuned by SPRT; retest the decision features with it.
+      First measure the width distribution (`YGOAI_WIDTHS` in `ygoai-bench-search`).
+- [ ] LMR by node width or type instead of a fixed "from the 3rd move".
 - [ ] Better move ordering for the new decisions, e.g. history by decision type and card. The
       goal is that LMR and other reductions thin out the unimportant choices.
 

@@ -449,6 +449,37 @@ fn type_id(m: &Msg) -> u128 {
     }
 }
 
+/// The prompt's name in the width statistics (`AlphaBeta::widths`).
+pub fn prompt_label(m: &Msg) -> &'static str {
+    match m {
+        Msg::SelectIdlecmd { .. } => "idlecmd",
+        Msg::SelectBattlecmd { .. } => "battlecmd",
+        Msg::SelectChain { .. } => "chain",
+        Msg::SelectEffectyn { .. } => "effectyn",
+        Msg::SelectYesno { .. } => "yesno",
+        Msg::SelectOption { .. } => "option",
+        Msg::SelectCard { min: 1, max: 1, .. } => "card1",
+        Msg::SelectCard { .. } => "cards",
+        Msg::SelectUnselectCard { .. } => "unselect",
+        Msg::SelectTribute { .. } => "tribute",
+        Msg::SelectSum { .. } => "sum",
+        Msg::SelectPosition { .. } => "position",
+        Msg::SelectPlace { .. } => "place",
+        _ => "other",
+    }
+}
+
+/// The options a prompt lists before the search's caps: the cards of a selection, else the
+/// candidates.
+fn listed(m: &Msg, cands: usize) -> usize {
+    match m {
+        Msg::SelectCard { cards, .. } | Msg::SelectTribute { cards, .. } => cards.len(),
+        Msg::SelectSum { cards, must_cards, .. } => cards.len() + must_cards.len(),
+        Msg::SelectUnselectCard { select_cards, .. } => select_cards.len() + 1,
+        _ => cands,
+    }
+}
+
 fn kind_id(kind: &str) -> u128 {
     match kind {
         "summon" => 1,
@@ -811,6 +842,9 @@ pub struct AlphaBeta {
     pub tt_hits: u64,
     /// (lines the core could not play: the search avoids them)
     pub broken: u64,
+    /// (if set, the widths of the expanded nodes: by prompt, the options it lists, its children
+    /// after the caps; the count of such nodes and the children they searched before a cutoff)
+    pub widths: Option<std::collections::BTreeMap<(&'static str, u16, u16), [u64; 2]>>,
     /// the root value of the last search's last completed iteration (NaN if none completed)
     pub last_value: f64,
 }
@@ -826,6 +860,7 @@ impl Default for AlphaBeta {
             tt_probes: 0,
             tt_hits: 0,
             broken: 0,
+            widths: None,
             last_value: f64::NAN,
         }
     }
@@ -1074,7 +1109,9 @@ impl Ctx<'_> {
         idx.truncate(MAX_CHILDREN);
         let (node_pv, node_ext) = (self.pv, self.pv_extended);
         let (mut best, mut best_i) = (f64::NEG_INFINITY, idx[0]);
+        let mut visited = 0;
         for (i, &ci) in idx.iter().enumerate() {
+            visited = i + 1;
             let c = &cands[ci];
             if let Some(s) = static_v
                 && f.futility
@@ -1131,6 +1168,11 @@ impl Ctx<'_> {
                 }
                 break;
             }
+        }
+        if let Some(w) = &mut self.ab.widths {
+            let e = w.entry((prompt_label(prompt), listed(prompt, cands.len()) as u16, idx.len() as u16)).or_default();
+            e[0] += 1;
+            e[1] += visited as u64;
         }
         if best.abs() < WIN / 2.0 {
             // (not a win or loss: those depend on the ply)
