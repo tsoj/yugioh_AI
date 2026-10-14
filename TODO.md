@@ -5,9 +5,9 @@ Planned work, roughly in order. SPRTs run at 30+0.3, SPRT [0, 15], with book
 
 ## Running now
 
-- [ ] SPRT `lmr,unselect` vs `lmr` (first of the decision-feature queue below).
-- [ ] Self-play data for the eval: `ygoai-datagen`, 2000 nodes per search, 9996 games, into
-      `runs/data/selfplay_2000n.jsonl`.
+- [ ] SPRT: `MAX_DEPTH` 100 vs 12 (both `lmr`).
+- [x] Self-play data for the eval: `ygoai-datagen`, 2000 nodes per search, 9996 games, in
+      `runs/data/selfplay_2000n.jsonl` (1.42M rows).
 
 ## Search: represent every decision
 
@@ -44,8 +44,8 @@ See `docs/search-decisions.md` for what is and isn't searched.
         terms: shares like (i+1)^-a, with a growing with log of the budget and with confidence).
   - [ ] Retest the decision features (`unselect` etc.) on top of it (`unselect` failed with one
         ply per node: H0, -19.8 Elo, 492 games).
-- [ ] `MAX_DEPTH` is 12: the depth search (`lmr`) stops there whatever its time, and at
-      30+0.3 (about 15-30k nodes a move) it reaches 11-12 plies. SPRT a higher cap.
+- [ ] `MAX_DEPTH` was 12: the depth search (`lmr`) stopped there whatever its time (mean depth
+      10.8 already at 3000 nodes). Now 100, a safety bound only; SPRT vs the cap of 12.
 - [ ] Try skipping "tactical" decisions at low budget: answer some decisions with the heuristic
       when the budget is small, as the horizon does now for the inner decisions. Which ones count
       as "tactical" is open: e.g. zones, positions, chain responses that do not change the eval,

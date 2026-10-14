@@ -20,7 +20,8 @@ use crate::observe::{auto_response, is_hidden_prompt};
 use crate::state::parse_location_query;
 
 pub const WIN: f64 = 100000.0;
-pub const MAX_DEPTH: i32 = 12;
+/// (a safety bound only: the clock ends the iterations)
+pub const MAX_DEPTH: i32 = 100;
 /// (without a time control: a fixed depth)
 pub const DEPTH_NO_CLOCK: i32 = 2;
 /// (per node, after ordering)
