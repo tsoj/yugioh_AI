@@ -37,6 +37,11 @@ const MULTI_WIDTH: usize = 6;
 const SUM_WIDTH: usize = 4;
 const SUM_STEPS: usize = 5000;
 pub const NEXT_ITERATION_SHARE: f64 = 0.5;
+/// (`predict`: the prior of each depth's node growth from the previous iteration, its weight in
+/// iterations, and the most weight the observed growths keep, so that the table follows the game)
+const GROWTH_PRIOR: f64 = 1.6;
+const GROWTH_PRIOR_WEIGHT: f64 = 4.0;
+const GROWTH_MAX_WEIGHT: f64 = 200.0;
 pub const HARD_FACTOR: f64 = 3.0;
 pub const HARD_SHARE: f64 = 0.25;
 /// (prompts answered by the rules between two plies)
@@ -152,6 +157,9 @@ impl BudgetParams {
 /// first few choices): `unselect` (card by card selections, e.g. most materials), `tribute`,
 /// `multicard` (selections of several cards), `sum` (selections by a sum: Synchro and Ritual
 /// materials), `position`, `place` (the zone).
+/// `predict`: with a clock, the next iteration starts only if it is expected to end within the
+/// time budget (by this iteration's time and the depth's node growth, learned across searches)
+/// instead of while less than half the budget is used.
 /// `budget`: a node budget instead of the depth (see `Ctx::allocate`; replaces lmr, pvs, rfp,
 /// futility, pv_ext and qsearch, which it ignores).
 /// The features that passed their SPRTs (LMR: +19.1 +/- 14.9, LLR +3.01, 1204 games, 2026-10-13).
@@ -175,6 +183,7 @@ pub struct Features {
     pub position: bool,
     pub place: bool,
     pub budget: bool,
+    pub predict: bool,
 }
 
 impl Features {
@@ -198,6 +207,7 @@ impl Features {
                 "position" => f.position = true,
                 "place" => f.place = true,
                 "budget" => f.budget = true,
+                "predict" => f.predict = true,
                 _ => panic!("YGOAI_SEARCH: unknown feature {name}"),
             }
         }
@@ -973,9 +983,29 @@ pub struct AlphaBeta {
     best_at: Vec<f64>,
     /// the root value of the last search's last completed iteration (NaN if none completed)
     pub last_value: f64,
+    /// by depth: [sum of ln(nodes of the iteration / nodes of the one before), weight], kept
+    /// across searches (`predict`)
+    growth: Vec<[f64; 2]>,
 }
 
 impl AlphaBeta {
+    /// The expected node growth of the iteration at `depth` over the one before.
+    pub fn expected_growth(&self, depth: i32) -> f64 {
+        let [s, w] = self.growth[(depth as usize).min(self.growth.len() - 1)];
+        (s / w).exp()
+    }
+
+    fn observe_growth(&mut self, depth: i32, nodes: u64, prev_nodes: u64) {
+        let last = self.growth.len() - 1;
+        let g = &mut self.growth[(depth as usize).min(last)];
+        g[0] += (nodes.max(1) as f64 / prev_nodes.max(1) as f64).ln();
+        g[1] += 1.0;
+        if g[1] > GROWTH_MAX_WEIGHT {
+            let k = GROWTH_MAX_WEIGHT / g[1];
+            (g[0], g[1]) = (g[0] * k, g[1] * k);
+        }
+    }
+
     /// (`learned`: the best move's index counts, rows of HAZARD_MOVES by (prompt type, TT move
     /// class, budget class))
     pub fn best_at(&self) -> &[f64] {
@@ -999,6 +1029,7 @@ impl Default for AlphaBeta {
             research: [[50.0, 1.0]; HAZARD_MOVES],
             best_at: vec![0.0; HAZARD_TYPES * 9 * HAZARD_MOVES],
             last_value: f64::NAN,
+            growth: vec![[GROWTH_PRIOR.ln() * GROWTH_PRIOR_WEIGHT, GROWTH_PRIOR_WEIGHT]; MAX_DEPTH as usize + 2],
         }
     }
 }
@@ -1096,6 +1127,8 @@ impl Ctx<'_> {
     fn deepen(&mut self, duel: &Duel, prompt: &Msg, cands: &[Response], mut order: Vec<usize>, t0: Instant, budget: Option<f64>, fixed_depth: bool) -> (usize, i32) {
         let (mut best, mut done) = (order[0], 0);
         self.ab.last_value = f64::NAN;
+        // (the last completed iteration's nodes and seconds)
+        let (mut last_nodes, mut last_secs) = (0u64, 0.0);
         let max_depth = if fixed_depth {
             DEPTH_NO_CLOCK
         } else if self.f.budget {
@@ -1106,10 +1139,14 @@ impl Ctx<'_> {
         for depth in 1..=max_depth {
             if let Some(b) = budget
                 && depth > 1
-                && t0.elapsed().as_secs_f64() > NEXT_ITERATION_SHARE * b
             {
-                break;
+                let t = t0.elapsed().as_secs_f64();
+                let late = if self.f.predict { t + last_secs * self.ab.expected_growth(depth) > b } else { t > NEXT_ITERATION_SHARE * b };
+                if late {
+                    break;
+                }
             }
+            let (it_nodes, it_t) = (self.ab.nodes, t0.elapsed().as_secs_f64());
             let mut values: Vec<Option<f64>> = vec![None; cands.len()];
             let (mut alpha, mut it_best) = (f64::NEG_INFINITY, None);
             // (each root move's depth, or its budget)
@@ -1155,6 +1192,14 @@ impl Ctx<'_> {
                 break;
             }
             let Some(b) = it_best else { break };
+            let it_secs = t0.elapsed().as_secs_f64() - it_t;
+            if depth > 1 {
+                self.ab.observe_growth(depth, self.ab.nodes - it_nodes, last_nodes);
+            }
+            if std::env::var_os("YGOAI_DEBUG_ITERS").is_some() {
+                eprintln!("iter {depth} {} {it_secs:.6} {:.6} {} {:.3}", self.ab.nodes - it_nodes, t0.elapsed().as_secs_f64(), budget.unwrap_or(0.0), self.ab.expected_growth(depth + 1));
+            }
+            (last_nodes, last_secs) = (self.ab.nodes - it_nodes, it_secs);
             (best, done) = (b, depth);
             self.ab.last_value = values[b].unwrap();
             // (the next iteration: the best first; cut-off moves keep their bound's order)

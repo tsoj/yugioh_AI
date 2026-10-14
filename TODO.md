@@ -5,7 +5,8 @@ Planned work, roughly in order. SPRTs run at 30+0.3, SPRT [0, 15], with book
 
 ## Running now
 
-- [ ] SPRT: `MAX_DEPTH` 100 vs 12 (both `lmr`).
+- [ ] SPRT `lmr,predict` vs `lmr`: predictive stopping (the next iteration only if it is
+      expected to end within the time budget, by the learned node growth per depth).
 - [x] Self-play data for the eval: `ygoai-datagen`, 2000 nodes per search, 9996 games, in
       `runs/data/selfplay_2000n.jsonl` (1.42M rows).
 
@@ -44,8 +45,9 @@ See `docs/search-decisions.md` for what is and isn't searched.
         terms: shares like (i+1)^-a, with a growing with log of the budget and with confidence).
   - [ ] Retest the decision features (`unselect` etc.) on top of it (`unselect` failed with one
         ply per node: H0, -19.8 Elo, 492 games).
-- [ ] `MAX_DEPTH` was 12: the depth search (`lmr`) stopped there whatever its time (mean depth
-      10.8 already at 3000 nodes). Now 100, a safety bound only; SPRT vs the cap of 12.
+- [x] `MAX_DEPTH` was 12: the depth search (`lmr`) stopped there whatever its time (mean depth
+      10.8 already at 3000 nodes). Now 100, a safety bound only (SPRT vs 12 stopped at 1420 games:
+      +2.9 +/- 13.0, LLR -0.47).
 - [ ] Try skipping "tactical" decisions at low budget: answer some decisions with the heuristic
       when the budget is small, as the horizon does now for the inner decisions. Which ones count
       as "tactical" is open: e.g. zones, positions, chain responses that do not change the eval,
@@ -65,7 +67,8 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       pruning, killer moves, late move pruning, internal iterative reduction, improving
       heuristic, SEE-like pruning, singular extensions / multicut, double/negative extensions,
       static eval correction history.
-- [ ] Time management: node-based scaling of the soft bound, best-move stability, eval stability.
+- [ ] Time management: node-based scaling of the soft bound, best-move stability, eval stability;
+      the split between early and late moves (`MOVES_TO_GO` = 20).
 - [ ] qsearch, if retried: a TT in quiescence, cheaper chain windows (pass plus the best few
       answers), pruning of hopeless attacks.
 - Retested at the Rust speed and stopped near zero: PVS (H0), qsearch, futility, conthist,
