@@ -162,8 +162,10 @@ impl BudgetParams {
 /// instead of while less than half the budget is used.
 /// `budget`: a node budget instead of the depth (see `Ctx::allocate`; replaces lmr, pvs, rfp,
 /// futility, pv_ext and qsearch, which it ignores).
-/// The features that passed their SPRTs (LMR: +19.1 +/- 14.9, LLR +3.01, 1204 games, 2026-10-13).
-pub const DEFAULT_FEATURES: &str = "lmr";
+/// The features that passed their SPRTs (LMR: +19.1 +/- 14.9, LLR +3.01, 1204 games, 2026-10-13),
+/// and `predict`, taken without a pass (+3.8 +/- 11.7, LLR -0.35 at 1760 games, 2026-10-14) for
+/// the room it leaves the time management.
+pub const DEFAULT_FEATURES: &str = "lmr,predict";
 
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Features {

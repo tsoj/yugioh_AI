@@ -12,7 +12,7 @@ Two lists say what is searched:
 
 Prompts with only one candidate are answered without a node.
 
-State as of commit 3886146 (2026-10-13). The default features are `DEFAULT_FEATURES = "lmr"`.
+State as of commit 3886146 (2026-10-13). The default features are `DEFAULT_FEATURES = "lmr,predict"`.
 The decisions inside a move (`unselect`, `tribute`, `multicard`, `sum`, `position`, `place`)
 are off by default and under SPRT; see the second column.
 

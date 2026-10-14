@@ -5,8 +5,8 @@ Planned work, roughly in order. SPRTs run at 30+0.3, SPRT [0, 15], with book
 
 ## Running now
 
-- [ ] SPRT `lmr,predict` vs `lmr`: predictive stopping (the next iteration only if it is
-      expected to end within the time budget, by the learned node growth per depth).
+- [ ] Self-play data with repeated deck pairs (500 pairs x 20 games, both seat orders):
+      `runs/books/pairs500x20.jsonl` into `runs/data/selfplay_pairs_2000n*.jsonl`.
 - [x] Self-play data for the eval: `ygoai-datagen`, 2000 nodes per search, 9996 games, in
       `runs/data/selfplay_2000n.jsonl` (1.42M rows).
 
@@ -67,6 +67,9 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       pruning, killer moves, late move pruning, internal iterative reduction, improving
       heuristic, SEE-like pruning, singular extensions / multicut, double/negative extensions,
       static eval correction history.
+- [x] Predictive stopping (`predict`, default since 2026-10-14 without a pass: +3.8 +/- 11.7,
+      LLR -0.35 at 1760 games): the next iteration only if it is expected to end within the
+      budget. It uses about 25% more of the budget than the old rule (start while under half).
 - [ ] Time management: node-based scaling of the soft bound, best-move stability, eval stability;
       the split between early and late moves (`MOVES_TO_GO` = 20).
 - [ ] qsearch, if retried: a TT in quiescence, cheaper chain windows (pass plus the best few
@@ -88,6 +91,9 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
 - [ ] Later: the learned policy/value nets and effect-text embeddings (see memory).
 
 ## Engine and core correctness
+
+- [ ] A datagen game that never finishes: opening 14478 of `match1.jsonl` (`selfplay_2000n`)
+      kept several threads busy for hours; find where it loops.
 
 - [ ] The 4 mismatching games against the C++ core (found 2026-10-13, older than the recent
       changes): pair17349 game 1 decision 947, pair19366 game 2 decision 1880, pair8112 game 0
