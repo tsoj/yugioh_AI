@@ -86,9 +86,13 @@ const HAZARD_MOVES: usize = 12;
 /// this one, and between the two as the budget grows past the TT entry's: none + (tt - none) *
 /// exp(-gap / `gap`), the gap in plies. `spread` (omega): a node may spend its budget times
 /// (the number of moves it expects to search)^omega: 0 is a strict budget, 1 about the depth
-/// search's (each move about the node's budget).
+/// search's (each move about the node's budget). `learned` (tau, 0: off): the shares are
+/// (q_i / q_0)^tau instead, q_i the online frequency of the best move being at index i (at nodes
+/// that did not fail low), by prompt type, TT move (none, from a smaller search, from one at
+/// least `gap` plies close) and budget size, with the power law as a prior.
 #[derive(Clone, Copy, Debug)]
 pub struct BudgetParams {
+    pub learned: f64,
     pub spread: f64,
     pub growth: f64,
     pub root: f64,
@@ -102,7 +106,7 @@ impl BudgetParams {
     pub fn from_env() -> BudgetParams {
         static P: std::sync::OnceLock<BudgetParams> = std::sync::OnceLock::new();
         *P.get_or_init(|| {
-            let mut p = BudgetParams { spread: 0.0, growth: 1.6, root: 2.0, k: 2.0, none: 0.5, tt: 1.5, gap: 2.0 };
+            let mut p = BudgetParams { learned: 0.0, spread: 0.0, growth: 1.6, root: 2.0, k: 2.0, none: 0.5, tt: 1.5, gap: 2.0 };
             for kv in std::env::var("YGOAI_BUDGET").unwrap_or_default().split(',').map(str::trim).filter(|s| !s.is_empty()) {
                 let (name, v) = kv.split_once('=').unwrap_or_else(|| panic!("YGOAI_BUDGET: {kv} is not name=value"));
                 let v: f64 = v.parse().unwrap_or_else(|_| panic!("YGOAI_BUDGET: {kv}"));
@@ -114,6 +118,7 @@ impl BudgetParams {
                     "tt" => p.tt = v,
                     "gap" => p.gap = v,
                     "spread" => p.spread = v,
+                    "learned" => p.learned = v,
                     _ => panic!("YGOAI_BUDGET: unknown parameter {name}"),
                 }
             }
@@ -919,6 +924,11 @@ fn hazard_priors() -> Vec<[f64; 2]> {
     h
 }
 
+/// (`best_at`'s row: prompt type, TT move class 0-2, budget class 0-2)
+fn best_row(t: usize, tt_class: usize, budget_class: usize) -> usize {
+    ((t.min(HAZARD_TYPES - 1) * 3 + tt_class) * 3 + budget_class) * HAZARD_MOVES
+}
+
 fn hazard_slot(t: usize, tt: u8, i: usize) -> usize {
     (t.min(HAZARD_TYPES - 1) * 5 + tt as usize) * HAZARD_MOVES + i.min(HAZARD_MOVES - 1)
 }
@@ -942,8 +952,19 @@ pub struct AlphaBeta {
     /// searched the move, cut off by it]; by move index [reduced searches, searched again])
     hazard: Vec<[f64; 2]>,
     research: [[f64; 2]; HAZARD_MOVES],
+    /// (`budget` with `learned`: by (prompt type, TT move class, budget class) the counts of the
+    /// best move's index)
+    best_at: Vec<f64>,
     /// the root value of the last search's last completed iteration (NaN if none completed)
     pub last_value: f64,
+}
+
+impl AlphaBeta {
+    /// (`learned`: the best move's index counts, rows of HAZARD_MOVES by (prompt type, TT move
+    /// class, budget class))
+    pub fn best_at(&self) -> &[f64] {
+        &self.best_at
+    }
 }
 
 impl Default for AlphaBeta {
@@ -960,6 +981,7 @@ impl Default for AlphaBeta {
             stats: None,
             hazard: hazard_priors(),
             research: [[50.0, 1.0]; HAZARD_MOVES],
+            best_at: vec![0.0; HAZARD_TYPES * 9 * HAZARD_MOVES],
             last_value: f64::NAN,
         }
     }
@@ -1212,7 +1234,14 @@ impl Ctx<'_> {
         };
         let a = bp.growth.ln() * self.eq_depth(budget).max(1.0).ln() / bp.k * conf;
         let t = type_id(prompt) as usize;
-        let w: Vec<f64> = (0..n).map(|i| ((i + 1) as f64).powf(-a)).collect();
+        let mut w: Vec<f64> = (0..n).map(|i| ((i + 1) as f64).powf(-a)).collect();
+        if bp.learned > 0.0 {
+            // (the power law as 10 nodes' prior)
+            let row = &self.ab.best_at[best_row(t, self.tt_class(tt_move_depth, budget), self.budget_class(budget))..][..HAZARD_MOVES];
+            let total: f64 = w.iter().sum();
+            let q: Vec<f64> = (0..n).map(|i| row[i.min(HAZARD_MOVES - 1)] + 10.0 * w[i] / total).collect();
+            w = q.iter().map(|qi| (qi / q[0]).powf(bp.learned)).collect();
+        }
         // (P(searched), P(searched again) of each move)
         let mut p = Vec::with_capacity(n);
         let mut reach = 1.0;
@@ -1249,6 +1278,21 @@ impl Ctx<'_> {
         // (a move gets the node's remaining budget at most: budgets shrink along every line)
         let cap = (budget - BUDGET_UNIT).max(0) as f64;
         w.iter().map(|wi| (lo * wi).round().min(cap) as i32).collect()
+    }
+
+    /// (`learned`: the TT move's class: none, from a search more than `gap` plies smaller, close)
+    fn tt_class(&self, tt_move_depth: Option<i32>, budget: i32) -> usize {
+        match tt_move_depth {
+            None => 0,
+            Some(d) if ((self.tt_depth(budget) - d) as f64 / 8.0) > BudgetParams::from_env().gap => 1,
+            Some(_) => 2,
+        }
+    }
+
+    /// (`learned`: the budget's class by its depth in plies: below 4, below 8, more)
+    fn budget_class(&self, budget: i32) -> usize {
+        let d = self.eq_depth(budget);
+        if d < 4.0 { 0 } else if d < 8.0 { 1 } else { 2 }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1342,8 +1386,8 @@ impl Ctx<'_> {
             let last = i == idx.len() - 1;
             let mut v = None;
             if f.budget {
-                let (b, full) = (alloc[i], alloc[0]);
-                v = Some(if i > 0 && (b as i64) * 4 < (full as i64) * 3 {
+                let (b, full) = (alloc[i], alloc.iter().copied().max().unwrap_or(0));
+                v = Some(if (b as i64) * 4 < (full as i64) * 3 {
                     // (a reduced share; the first move's share after all if it beats alpha)
                     let r = self.child(duel, prompt, c, b, alpha, beta, ply + 1)?;
                     let slot = i.min(HAZARD_MOVES - 1);
@@ -1409,6 +1453,12 @@ impl Ctx<'_> {
         }
         if f.budget {
             let t = type_id(prompt) as usize;
+            if best > alpha0
+                && let Some(pos) = idx.iter().position(|&k| k == best_i)
+            {
+                let row = best_row(t, self.tt_class(tt_move_depth, depth), self.budget_class(depth));
+                self.ab.best_at[row + pos.min(HAZARD_MOVES - 1)] += 1.0;
+            }
             for j in 0..visited {
                 let e = &mut self.ab.hazard[hazard_slot(t, tt_state, j)];
                 e[0] += 1.0;

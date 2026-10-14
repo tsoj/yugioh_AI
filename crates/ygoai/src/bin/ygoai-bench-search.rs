@@ -92,6 +92,16 @@ fn main() {
             duel.ocg_set_response(&ygoai::actions::encode(&p, &resp).unwrap());
             prompt = Some(p);
         }
+        if std::env::var_os("YGOAI_DUMP_BEST").is_some() {
+            let b = ab.best_at();
+            for (r, row) in b.chunks(12).enumerate() {
+                let tot: f64 = row.iter().sum();
+                if tot >= 50.0 {
+                    let q: Vec<String> = row.iter().take(6).map(|x| format!("{:.2}", x / tot)).collect();
+                    println!("type {} tt {} budget {}: {tot:>6} {}", r / 9, (r / 3) % 3, r % 3, q.join(" "));
+                }
+            }
+        }
         if let Some(st) = ab.stats.take() {
             merge(&mut stats.widths, st.widths);
             merge(&mut stats.lmr, st.lmr);
