@@ -95,9 +95,12 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
 - [ ] A datagen game that never finishes: opening 14478 of `match1.jsonl` (`selfplay_2000n`)
       kept several threads busy for hours; find where it loops.
 
-- [ ] The 4 mismatching games against the C++ core (found 2026-10-13, older than the recent
+- [x] The 4 mismatching games against the C++ core (found 2026-10-13, older than the recent
       changes): pair17349 game 1 decision 947, pair19366 game 2 decision 1880, pair8112 game 0
-      decision 89, pair9854 game 1 decision 467 (`build/regress_pairs/`).
+      decision 89, pair9854 game 1 decision 467 (`build/regress_pairs/`). Fixed (rust 745abcb);
+      script bugs are now fixed in `lua_fixes/` instead of emulated (rust 0e3b15d, 46 cards).
+- [ ] Collect the Lua errors the C++ core really raises over the recorded deck pairs
+      (`YGO_DIFF_LOG=1`): identical games hide script bugs the port copies (e.g. Spell Gear).
 - [ ] Last Turn activated during an attack: its forced battle leaves the outer attack without an
       attacker, and the core panics (C++ dereferences null). This is an upstream bug. The search now
       avoids such lines (9c3af1d); decide whether to guard it in the core too.
