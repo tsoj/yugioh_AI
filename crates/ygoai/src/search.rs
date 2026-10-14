@@ -92,6 +92,8 @@ const HAZARD_MOVES: usize = 12;
 /// least `gap` plies close) and budget size, with the power law as a prior.
 #[derive(Clone, Copy, Debug)]
 pub struct BudgetParams {
+    /// (the first `full` moves get the full share, w = 1; the later ones (i + 2 - full)^-a)
+    pub full: f64,
     pub learned: f64,
     pub spread: f64,
     pub growth: f64,
@@ -106,7 +108,7 @@ impl BudgetParams {
     pub fn from_env() -> BudgetParams {
         static P: std::sync::OnceLock<BudgetParams> = std::sync::OnceLock::new();
         *P.get_or_init(|| {
-            let mut p = BudgetParams { learned: 0.0, spread: 0.0, growth: 1.6, root: 2.0, k: 2.0, none: 0.5, tt: 1.5, gap: 2.0 };
+            let mut p = BudgetParams { full: 1.0, learned: 0.0, spread: 0.0, growth: 1.6, root: 2.0, k: 2.0, none: 0.5, tt: 1.5, gap: 2.0 };
             for kv in std::env::var("YGOAI_BUDGET").unwrap_or_default().split(',').map(str::trim).filter(|s| !s.is_empty()) {
                 let (name, v) = kv.split_once('=').unwrap_or_else(|| panic!("YGOAI_BUDGET: {kv} is not name=value"));
                 let v: f64 = v.parse().unwrap_or_else(|_| panic!("YGOAI_BUDGET: {kv}"));
@@ -119,6 +121,7 @@ impl BudgetParams {
                     "gap" => p.gap = v,
                     "spread" => p.spread = v,
                     "learned" => p.learned = v,
+                    "full" => p.full = v,
                     _ => panic!("YGOAI_BUDGET: unknown parameter {name}"),
                 }
             }
@@ -1234,7 +1237,8 @@ impl Ctx<'_> {
         };
         let a = bp.growth.ln() * self.eq_depth(budget).max(1.0).ln() / bp.k * conf;
         let t = type_id(prompt) as usize;
-        let mut w: Vec<f64> = (0..n).map(|i| ((i + 1) as f64).powf(-a)).collect();
+        let full = bp.full as usize;
+        let mut w: Vec<f64> = (0..n).map(|i| if i < full { 1.0 } else { ((i + 2 - full) as f64).powf(-a) }).collect();
         if bp.learned > 0.0 {
             // (the power law as 10 nodes' prior)
             let row = &self.ab.best_at[best_row(t, self.tt_class(tt_move_depth, budget), self.budget_class(budget))..][..HAZARD_MOVES];
