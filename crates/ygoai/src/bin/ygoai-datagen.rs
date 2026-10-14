@@ -22,7 +22,7 @@ use ygoai::heuristic::Heuristic;
 use ygoai::matchrun::load_book_head;
 use ygoai::messages::Msg;
 use ygoai::observe::{auto_response, is_hidden_prompt};
-use ygoai::search::{AlphaBeta, EVAL_WEIGHTS, LearnedEval, SearchParams, candidates, eval_features, evaluate, is_searched, rich_features};
+use ygoai::search::{AlphaBeta, EVAL_WEIGHTS, LearnedEval, SearchParams, candidates, eval_features, evaluate_at, is_searched, mover_features, rich_features};
 use ygoai::state::parse_location_query;
 
 #[global_allocator]
@@ -93,7 +93,7 @@ fn play(book: &ygoai::matchrun::Opening, game: usize, nodes: u64) -> Vec<Value> 
             let (best, done) = ab.search(&duel, &p, &cands, &params);
             if ab.last_value.is_finite() {
                 let info = duel.ext_get_info();
-                let (f, stat) = (eval_features(&mut duel, player), evaluate(&mut duel, player));
+                let (f, stat) = (eval_features(&mut duel, player), evaluate_at(&mut duel, player, Some(&p)));
                 let dot: f64 = f.iter().zip(EVAL_WEIGHTS).map(|(x, w)| x * w).sum();
                 if LearnedEval::from_env().is_none() {
                     assert!((dot - stat).abs() < 1e-6, "eval_features disagrees with evaluate: {dot} vs {stat}");
@@ -102,6 +102,7 @@ fn play(book: &ygoai::matchrun::Opening, game: usize, nodes: u64) -> Vec<Value> 
                     "game": game, "player": player, "turn": info[0], "turn_player": info[1], "phase": info[2],
                     "prompt": p.name(), "value": ab.last_value, "depth": done,
                     "static": stat, "eval": f.to_vec(), "rich": rich_features(&mut duel, player),
+                    "mover_x": mover_features(&mut duel, player, Some(&p)),
                     "state": [side(&mut duel, player), side(&mut duel, 1 - player)],
                 }));
             }

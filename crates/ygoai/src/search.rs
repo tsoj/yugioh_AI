@@ -757,6 +757,46 @@ pub fn rich_features(d: &mut Duel, me: u32) -> Vec<f64> {
     f
 }
 
+/// (`mover_features`: the phases by group, and the prompts by type)
+const MOVER_PHASES: [&[u32]; 6] = [&[PHASE_DRAW], &[PHASE_STANDBY], &[PHASE_MAIN1], &[PHASE_BATTLE_START, PHASE_BATTLE_STEP, PHASE_DAMAGE, PHASE_DAMAGE_CAL, PHASE_BATTLE], &[PHASE_MAIN2], &[PHASE_END]];
+const MOVER_PROMPTS: [&str; 7] = ["SELECT_IDLECMD", "SELECT_CHAIN", "SELECT_CARD", "SELECT_BATTLECMD", "SELECT_EFFECTYN", "SELECT_YESNO", "SELECT_OPTION"];
+
+/// The face-up Attack Position monsters of `mine` with more ATK than every monster of `theirs`
+/// can stand against (each (position, ATK, DEF)).
+fn dominant(mine: &[(u32, i32, i32)], theirs: &[(u32, i32, i32)]) -> usize {
+    let best = theirs.iter().map(|&(pos, a, df)| battle_stat(pos, a, df)).max().unwrap_or(-1);
+    mine.iter().filter(|&&(pos, a, _)| pos & POS_FACEUP_ATTACK != 0 && a > best).count()
+}
+
+/// The features of the mover's view (the player whose decision is pending; scripts/train_eval.py
+/// mover features): the mover's side (`side_features`, then its dominant monsters), the
+/// opponent's the same way, whether the mover is the turn player, the phase group, the prompt
+/// type (none without a prompt) and the turn / 10 (at most 3).
+pub fn mover_features(d: &mut Duel, mover: u32, prompt: Option<&Msg>) -> Vec<f64> {
+    let mons: Vec<Vec<(u32, i32, i32)>> = [mover, 1 - mover]
+        .iter()
+        .map(|&p| {
+            parse_location_query(&query(d, p, LOCATION_MZONE, MZONE_QUERY))
+                .into_iter()
+                .flatten()
+                .map(|c| (c.position.unwrap_or(0), c.attack.unwrap_or(0), c.defense.unwrap_or(0)))
+                .collect()
+        })
+        .collect();
+    let mut f = Vec::with_capacity(49);
+    f.extend(side_features(d, mover));
+    f.push(dominant(&mons[0], &mons[1]) as f64);
+    f.extend(side_features(d, 1 - mover));
+    f.push(dominant(&mons[1], &mons[0]) as f64);
+    let info = d.ext_get_info();
+    f.push((info[1] == mover) as u8 as f64);
+    f.extend(MOVER_PHASES.iter().map(|g| g.contains(&info[2]) as u8 as f64));
+    let name = prompt.map(|m| m.name());
+    f.extend(MOVER_PROMPTS.iter().map(|p| (name == Some(*p)) as u8 as f64));
+    f.push(info[0].min(30) as f64 / 10.0);
+    f
+}
+
 /// A trained evaluation (scripts/train_eval.py's export): linear on the raw features, or the
 /// antisymmetric MLP v(z) = g(z) - g(-z), g(z) = w2 . relu(w1 z + b1), z the features divided by
 /// `scale`. Its value is in eval points.
@@ -773,10 +813,24 @@ pub struct LearnedEval {
     b1: Vec<f64>,
     #[serde(default)]
     w2: Vec<f64>,
+    /// (`mover`: the features' mean, subtracted before `scale` divides; the output's bias)
+    #[serde(default)]
+    mu: Vec<f64>,
+    #[serde(default)]
+    b2: f64,
 }
 
 impl LearnedEval {
-    pub fn value(&self, d: &mut Duel, me: u32) -> f64 {
+    pub fn value(&self, d: &mut Duel, me: u32, prompt: Option<&Msg>) -> f64 {
+        if self.features == "mover" {
+            // (the mover's value, an unconstrained MLP: plus for me, minus for the opponent)
+            let mover = prompt.and_then(|m| m.player()).unwrap_or(me);
+            let x = mover_features(d, mover, prompt);
+            let z: Vec<f64> = x.iter().zip(&self.mu).zip(&self.scale).map(|((a, m), s)| (a - m) / s).collect();
+            let v = self.b2
+                + self.w1.iter().zip(&self.b1).zip(&self.w2).map(|((row, b), w2)| w2 * (row.iter().zip(&z).map(|(w, x)| w * x).sum::<f64>() + b).max(0.0)).sum::<f64>();
+            return if mover == me { v } else { -v };
+        }
         let x = if self.features == "rich" { rich_features(d, me) } else { eval_features(d, me).to_vec() };
         if self.model == "linear" {
             return x.iter().zip(&self.weights).map(|(a, w)| a * w).sum();
@@ -808,8 +862,14 @@ impl LearnedEval {
 /// The position's value for `me` (in points of 100 LP) (alphabeta.evaluate); a trained one
 /// with $YGOAI_EVAL.
 pub fn evaluate(d: &mut Duel, me: u32) -> f64 {
+    evaluate_at(d, me, None)
+}
+
+/// `evaluate` with the pending prompt, if any (a trained evaluation of the mover's view values
+/// the position for the player who decides it).
+pub fn evaluate_at(d: &mut Duel, me: u32, prompt: Option<&Msg>) -> f64 {
     if let Some(e) = LearnedEval::from_env() {
-        return e.value(d, me);
+        return e.value(d, me, prompt);
     }
     let info = d.ext_get_info();
     let lp = [info[3] as i32, info[4] as i32];
@@ -1411,12 +1471,12 @@ impl Ctx<'_> {
         let mover = prompt.player().unwrap_or(0);
         if f.rfp && !f.budget && beta - alpha <= PVS_EPS && depth <= RFP_DEPTH && beta.abs() < WIN / 2.0 {
             // (reverse futility pruning: so far ahead that the moves would not bring it below beta)
-            let s = evaluate(duel, mover);
+            let s = evaluate_at(duel, mover, Some(prompt));
             if s - RFP_MARGIN * depth as f64 >= beta {
                 return Ok(s);
             }
         }
-        let static_v = if (f.futility || f.rfp_kind) && !f.budget && depth == 1 { Some(evaluate(duel, mover)) } else { None };
+        let static_v = if (f.futility || f.rfp_kind) && !f.budget && depth == 1 { Some(evaluate_at(duel, mover, Some(prompt))) } else { None };
         if f.rfp_kind
             && let Some(s) = static_v
             && beta.is_finite()
@@ -1593,7 +1653,7 @@ impl Ctx<'_> {
         let mut cands = ordered(prompt, duel.ext_get_info()[1], None);
         let mut best = f64::NEG_INFINITY;
         if matches!(prompt, Msg::SelectBattlecmd { .. }) {
-            best = evaluate(duel, prompt.player().unwrap_or(0));
+            best = evaluate_at(duel, prompt.player().unwrap_or(0), Some(prompt));
             if best >= beta {
                 return Ok(best);
             }
@@ -1664,7 +1724,7 @@ impl Ctx<'_> {
                             }
                             return Ok(-self.qnode(duel, &prompt, depth, -beta, -alpha, ply)?);
                         }
-                        return Ok(evaluate(duel, me));
+                        return Ok(evaluate_at(duel, me, Some(&prompt)));
                     }
                     if player == me {
                         return self.node(duel, &prompt, depth, alpha, beta, ply);
@@ -1680,7 +1740,7 @@ impl Ctx<'_> {
             };
             duel.ocg_set_response(&encode(&prompt, &resp).map_err(|_| Stop::Broken)?);
         }
-        Ok(evaluate(duel, me))
+        Ok(evaluate_at(duel, me, Some(&prompt)))
     }
 }
 
