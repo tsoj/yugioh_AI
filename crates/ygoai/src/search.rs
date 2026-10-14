@@ -92,6 +92,14 @@ const HAZARD_MOVES: usize = 12;
 /// least `gap` plies close) and budget size, with the power law as a prior.
 #[derive(Clone, Copy, Debug)]
 pub struct BudgetParams {
+    /// `depth=1`: the depth search in budgets (budget growth^d for depth d): a move gets the
+    /// node's budget / growth, a late move (LMR's) / growth^2, times (n / `n0`)^-`theta` for a
+    /// node of n moves (theta 0: as lmr; more: wide nodes cost more depth); the horizon at depth 0.
+    pub depth: f64,
+    /// (the root's iterations at most)
+    pub iters: f64,
+    pub theta: f64,
+    pub n0: f64,
     /// (the first `full` moves get the full share, w = 1; the later ones (i + 2 - full)^-a)
     pub full: f64,
     pub learned: f64,
@@ -108,7 +116,7 @@ impl BudgetParams {
     pub fn from_env() -> BudgetParams {
         static P: std::sync::OnceLock<BudgetParams> = std::sync::OnceLock::new();
         *P.get_or_init(|| {
-            let mut p = BudgetParams { full: 1.0, learned: 0.0, spread: 0.0, growth: 1.6, root: 2.0, k: 2.0, none: 0.5, tt: 1.5, gap: 2.0 };
+            let mut p = BudgetParams { depth: 0.0, iters: BUDGET_ITERATIONS as f64, theta: 0.0, n0: 3.0, full: 1.0, learned: 0.0, spread: 0.0, growth: 1.6, root: 2.0, k: 2.0, none: 0.5, tt: 1.5, gap: 2.0 };
             for kv in std::env::var("YGOAI_BUDGET").unwrap_or_default().split(',').map(str::trim).filter(|s| !s.is_empty()) {
                 let (name, v) = kv.split_once('=').unwrap_or_else(|| panic!("YGOAI_BUDGET: {kv} is not name=value"));
                 let v: f64 = v.parse().unwrap_or_else(|_| panic!("YGOAI_BUDGET: {kv}"));
@@ -122,6 +130,10 @@ impl BudgetParams {
                     "spread" => p.spread = v,
                     "learned" => p.learned = v,
                     "full" => p.full = v,
+                    "depth" => p.depth = v,
+                    "theta" => p.theta = v,
+                    "iters" => p.iters = v,
+                    "n0" => p.n0 = v,
                     _ => panic!("YGOAI_BUDGET: unknown parameter {name}"),
                 }
             }
@@ -1086,7 +1098,7 @@ impl Ctx<'_> {
         let max_depth = if fixed_depth {
             DEPTH_NO_CLOCK
         } else if self.f.budget {
-            BUDGET_ITERATIONS
+            BudgetParams::from_env().iters as i32
         } else {
             MAX_DEPTH
         };
@@ -1193,6 +1205,10 @@ impl Ctx<'_> {
         if !self.f.budget {
             return depth <= 0;
         }
+        let bp = BudgetParams::from_env();
+        if bp.depth != 0.0 {
+            return (depth as f64) < bp.growth.sqrt() * BUDGET_UNIT as f64; // (depth 0, rounded)
+        }
         let t = type_id(prompt) as usize;
         let mut reach = 1.0;
         let mut need = BUDGET_UNIT as f64;
@@ -1227,6 +1243,12 @@ impl Ctx<'_> {
     /// the cutoff rates before it (online, by prompt type, TT state and move index).
     fn allocate(&self, prompt: &Msg, tt_state: u8, tt_move_depth: Option<i32>, budget: i32, n: usize) -> Vec<i32> {
         let bp = BudgetParams::from_env();
+        if bp.depth != 0.0 {
+            let g = bp.growth;
+            let b = budget as f64 / g * (n as f64 / bp.n0).powf(-bp.theta);
+            let lmr = budget as f64 >= g.powf(1.5) * BUDGET_UNIT as f64; // (depth 2 or more, rounded)
+            return (0..n).map(|i| (if lmr && i >= LMR_MOVES { b / g } else { b }).round().min(1e9) as i32).collect();
+        }
         let mut avail = (budget - BUDGET_UNIT).max(0) as f64;
         let conf = match tt_move_depth {
             None => bp.none,
