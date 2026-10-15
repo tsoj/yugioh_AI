@@ -140,12 +140,14 @@ if args.save_v:
     np.savez(args.save_v, v=all_v())
 if args.output:
     import json
-    assert args.model == "mlp" and args.layers == 1, "the Rust eval takes one hidden layer"
+    assert args.model == "mlp"
     st = {kk: vv.detach().cpu().numpy().astype(float) for kk, vv in net.state_dict().items()}
     if args.drop:  # (dropped inputs were 0 in training but not at inference: their weights out)
         st["0.weight"][:, [int(i) for i in args.drop.split(",")]] = 0
         sd[[int(i) for i in args.drop.split(",")]] = 1
     json.dump({"features": "mover2" if n == 87 else "mover", "model": "mover_mlp", "mu": mu.astype(float).tolist(), "scale": sd.astype(float).tolist(),
-               "w1": st["0.weight"].tolist(), "b1": st["0.bias"].tolist(), "w2": (st["2.weight"][0] * K).tolist(),
-               "b2": float(st["2.bias"][0] * K), "k": float(K), "lam": args.lam, "hidden": args.hidden}, open(args.output, "w"))
+               "w1": st["0.weight"].tolist(), "b1": st["0.bias"].tolist(),
+               "layers": [{"w": st[f"{2 * i}.weight"].tolist(), "b": st[f"{2 * i}.bias"].tolist()} for i in range(1, args.layers)],
+               "w2": (st[f"{2 * args.layers}.weight"][0] * K).tolist(), "b2": float(st[f"{2 * args.layers}.bias"][0] * K),
+               "k": float(K), "lam": args.lam, "hidden": args.hidden, "n_layers": args.layers}, open(args.output, "w"))
     print("saved", args.output)

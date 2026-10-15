@@ -955,6 +955,20 @@ pub struct LearnedEval {
     mu: Vec<f64>,
     #[serde(default)]
     b2: f64,
+    /// (`mover`: hidden layers after the first, each relu(w h + b); `w2` reads the last)
+    #[serde(default)]
+    layers: Vec<Layer>,
+}
+
+#[derive(serde::Deserialize)]
+struct Layer {
+    w: Vec<Vec<f64>>,
+    b: Vec<f64>,
+}
+
+/// relu(w x + b)
+fn dense_relu(w: &[Vec<f64>], b: &[f64], x: &[f64]) -> Vec<f64> {
+    w.iter().zip(b).map(|(row, b)| (row.iter().zip(x).map(|(w, x)| w * x).sum::<f64>() + b).max(0.0)).collect()
 }
 
 impl LearnedEval {
@@ -964,8 +978,11 @@ impl LearnedEval {
             let mover = prompt.and_then(|m| m.player()).unwrap_or(me);
             let x = if self.features == "mover" { mover_features(d, mover, prompt) } else { mover_features2(d, mover, prompt) };
             let z: Vec<f64> = x.iter().zip(&self.mu).zip(&self.scale).map(|((a, m), s)| (a - m) / s).collect();
-            let v = self.b2
-                + self.w1.iter().zip(&self.b1).zip(&self.w2).map(|((row, b), w2)| w2 * (row.iter().zip(&z).map(|(w, x)| w * x).sum::<f64>() + b).max(0.0)).sum::<f64>();
+            let mut h = dense_relu(&self.w1, &self.b1, &z);
+            for l in &self.layers {
+                h = dense_relu(&l.w, &l.b, &h);
+            }
+            let v = self.b2 + self.w2.iter().zip(&h).map(|(w, x)| w * x).sum::<f64>();
             return if mover == me { v } else { -v };
         }
         let x = if self.features == "rich" { rich_features(d, me) } else { eval_features(d, me).to_vec() };
@@ -985,7 +1002,7 @@ impl LearnedEval {
     }
 
     /// The trained evaluation in use (read once): $YGOAI_EVAL's JSON file if set, the built-in
-    /// models/eval_mover_mlp16.json otherwise; none with YGOAI_EVAL=hand (the hand-written eval).
+    /// models/eval_mover2_mlp16.json otherwise; none with YGOAI_EVAL=hand (the hand-written eval).
     pub fn from_env() -> Option<&'static LearnedEval> {
         static E: std::sync::OnceLock<Option<LearnedEval>> = std::sync::OnceLock::new();
         E.get_or_init(|| match std::env::var("YGOAI_EVAL").ok().filter(|p| !p.is_empty()) {
@@ -994,15 +1011,16 @@ impl LearnedEval {
                 let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("YGOAI_EVAL {path}: {e}"));
                 Some(serde_json::from_str(&text).unwrap_or_else(|e| panic!("YGOAI_EVAL {path}: {e}")))
             }
-            None => Some(serde_json::from_str(DEFAULT_EVAL).expect("models/eval_mover_mlp16.json")),
+            None => Some(serde_json::from_str(DEFAULT_EVAL).expect("models/eval_mover2_mlp16.json")),
         })
         .as_ref()
     }
 }
 
-/// The default evaluation (scripts/train_eval_mover.py: MLP16 on the 49 mover features, trained on
-/// runs/data/pairs500x20_2000n.jsonl; SPRT +28.5 +/- 17.6 vs the hand-written eval).
-const DEFAULT_EVAL: &str = include_str!("../models/eval_mover_mlp16.json");
+/// The default evaluation (scripts/train_eval_mover.py: MLP16 on the 87 mover2 features, trained on
+/// runs/data/pairs500x20b_2000n.jsonl; SPRT +31.9 +/- 18.7 vs the 49-feature MLP16 (on
+/// runs/data/pairs500x20_2000n.jsonl), which had +28.5 +/- 17.6 vs the hand-written eval).
+const DEFAULT_EVAL: &str = include_str!("../models/eval_mover2_mlp16.json");
 
 /// The position's value for `me` (in points of 100 LP): the trained evaluation (see
 /// `LearnedEval::from_env`), or the hand-written one (alphabeta.evaluate) with YGOAI_EVAL=hand.

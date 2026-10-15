@@ -79,16 +79,22 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
 
 ## Evaluation
 
-- [x] Learned eval, default since 2026-10-15: the mover-view MLP16 (`features: "mover"`, 49
-      features; scripts/train_eval_mover.py with a deck-pair term in training) on
-      runs/data/pairs500x20_2000n.jsonl, built in from crates/ygoai/models/eval_mover_mlp16.json.
-      SPRT vs the hand-written eval: H1, +28.5 +/- 17.6 at 952 games. `YGOAI_EVAL=model.json`
-      loads another model, `YGOAI_EVAL=hand` the hand-written eval. Bench checksum now
-      8e06890beed3e7fd (3352f7a7796dd607 with `hand`).
+- [x] Learned eval, 2026-10-15: the mover-view MLP16 (`features: "mover"`, 49 features;
+      scripts/train_eval_mover.py with a deck-pair term in training) on
+      runs/data/pairs500x20_2000n.jsonl: SPRT vs the hand-written eval H1, +28.5 +/- 17.6 at 952
+      games. `YGOAI_EVAL=model.json` loads another model, `YGOAI_EVAL=hand` the hand-written eval.
   - Earlier baselines on runs/data/selfplay_2000n.jsonl (each game its own deck pair, so deck
     strength and position quality mix): scripts/train_eval.py, linear/MLP on eval and rich features.
-- [ ] Datagen round 2 with the learned eval and the mover2 features (runs/books/pairs500x20_b.jsonl),
-      train mover2, ablate feature groups (within-pair ranking, paired bootstrap), SPRT the best.
+- [x] Round 2 (default since 2026-10-15): datagen with the learned eval on
+      runs/books/pairs500x20_b.jsonl (runs/data/pairs500x20b_2000n.jsonl, 6.1 h on 28 threads), MLP16
+      on the 87 mover2 features (crates/ygoai/models/eval_mover2_mlp16.json): SPRT vs the 49-feature
+      model H1, +31.9 +/- 18.7 at 896 games. Bench checksum 12ea7bf38d028206 (3352f7a7796dd607 with
+      `hand`, 8e06890beed3e7fd with runs/nn/eval_mover_mlp16.json).
+  - The within-pair ranking did not predict it (mover2 -0.005 +/- 0.004 vs 49 features; it moves
+    by as much between epochs); the held-out losses did (value BCE 0.5107 vs 0.5129, result
+    log-loss 0.4798 vs 0.4850). Feature-group ablations were all within noise.
+- [ ] Deeper MLPs (`--layers`, the Rust eval takes any number): 2x64 ranks +0.007 +/- 0.004 over
+      1x16 but overfits after a few epochs (10k games); SPRT 2x64 vs the default. More data rounds.
 - [ ] More features: normal summon used, LP thresholds, ...
 - [ ] Later: the learned policy/value nets and effect-text embeddings (see memory).
 
