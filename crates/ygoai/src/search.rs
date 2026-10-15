@@ -980,20 +980,28 @@ impl LearnedEval {
         g(1.0) - g(-1.0)
     }
 
-    /// The evaluation of $YGOAI_EVAL (a JSON file), if set (read once).
+    /// The trained evaluation in use (read once): $YGOAI_EVAL's JSON file if set, the built-in
+    /// models/eval_mover_mlp16.json otherwise; none with YGOAI_EVAL=hand (the hand-written eval).
     pub fn from_env() -> Option<&'static LearnedEval> {
         static E: std::sync::OnceLock<Option<LearnedEval>> = std::sync::OnceLock::new();
-        E.get_or_init(|| {
-            let path = std::env::var("YGOAI_EVAL").ok().filter(|p| !p.is_empty())?;
-            let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("YGOAI_EVAL {path}: {e}"));
-            Some(serde_json::from_str(&text).unwrap_or_else(|e| panic!("YGOAI_EVAL {path}: {e}")))
+        E.get_or_init(|| match std::env::var("YGOAI_EVAL").ok().filter(|p| !p.is_empty()) {
+            Some(p) if p == "hand" => None,
+            Some(path) => {
+                let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("YGOAI_EVAL {path}: {e}"));
+                Some(serde_json::from_str(&text).unwrap_or_else(|e| panic!("YGOAI_EVAL {path}: {e}")))
+            }
+            None => Some(serde_json::from_str(DEFAULT_EVAL).expect("models/eval_mover_mlp16.json")),
         })
         .as_ref()
     }
 }
 
-/// The position's value for `me` (in points of 100 LP) (alphabeta.evaluate); a trained one
-/// with $YGOAI_EVAL.
+/// The default evaluation (scripts/train_eval_mover.py: MLP16 on the 49 mover features, trained on
+/// runs/data/pairs500x20_2000n.jsonl; SPRT +28.5 +/- 17.6 vs the hand-written eval).
+const DEFAULT_EVAL: &str = include_str!("../models/eval_mover_mlp16.json");
+
+/// The position's value for `me` (in points of 100 LP): the trained evaluation (see
+/// `LearnedEval::from_env`), or the hand-written one (alphabeta.evaluate) with YGOAI_EVAL=hand.
 pub fn evaluate(d: &mut Duel, me: u32) -> f64 {
     evaluate_at(d, me, None)
 }

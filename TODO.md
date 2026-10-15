@@ -79,15 +79,17 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
 
 ## Evaluation
 
-- [ ] Train on the self-play data with `scripts/train_eval.py`:
-  - [ ] linear on the current eval terms (retuned weights)
-  - [ ] 1 hidden layer, 16 neurons, the same eval terms
-  - [ ] linear and MLP on the richer features (`--features rich`)
-- [ ] Compare on validation, then SPRT the best against the current eval (`YGOAI_EVAL=model.json`,
-      engine built at 8bc727b or later).
-- [ ] Optionally add the SPRT games' records as extra data (result only, no search values).
-- [ ] More data if needed: more self-play, or a faster fixed-node setting.
-- [ ] A bigger eval with more of the state as features.
+- [x] Learned eval, default since 2026-10-15: the mover-view MLP16 (`features: "mover"`, 49
+      features; scripts/train_eval_mover.py with a deck-pair term in training) on
+      runs/data/pairs500x20_2000n.jsonl, built in from crates/ygoai/models/eval_mover_mlp16.json.
+      SPRT vs the hand-written eval: H1, +28.5 +/- 17.6 at 952 games. `YGOAI_EVAL=model.json`
+      loads another model, `YGOAI_EVAL=hand` the hand-written eval. Bench checksum now
+      8e06890beed3e7fd (3352f7a7796dd607 with `hand`).
+  - Earlier baselines on runs/data/selfplay_2000n.jsonl (each game its own deck pair, so deck
+    strength and position quality mix): scripts/train_eval.py, linear/MLP on eval and rich features.
+- [ ] Datagen round 2 with the learned eval and the mover2 features (runs/books/pairs500x20_b.jsonl),
+      train mover2, ablate feature groups (within-pair ranking, paired bootstrap), SPRT the best.
+- [ ] More features: normal summon used, LP thresholds, ...
 - [ ] Later: the learned policy/value nets and effect-text embeddings (see memory).
 
 ## Engine and core correctness
