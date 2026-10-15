@@ -3,11 +3,13 @@
 //! decision a line of JSON: the game, the mover, turn and phase, the search's root value and
 //! depth (for the mover), the static evaluation and its terms (`eval_features`, for the mover), a fuller state
 //! (`state`, the mover first) and the game's result for the mover (1 win, 0 draw or unfinished,
-//! -1 loss).
+//! -1 loss), and `decision`, the index of its response in the game.
 //!
 //!   ygoai-datagen BOOK FIRST COUNT NODES OUT.jsonl [JOBS]
 //!
 //! (openings FIRST..FIRST+COUNT of the book, every line; games in parallel on JOBS threads)
+//! OUT.jsonl.games gets a line per game: its responses (hex) and the decisions with a row, so
+//! ygoai-refeature can compute new features for the rows by replaying, without searching.
 
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -60,13 +62,14 @@ fn side(d: &mut Duel, p: u32) -> Value {
     })
 }
 
-fn play(book: &ygoai::matchrun::Opening, game: usize, nodes: u64) -> Vec<Value> {
+fn play(book: &ygoai::matchrun::Opening, game: usize, nodes: u64) -> (Vec<Value>, Value) {
     let record = new_record(&book.decks, book.seed, &DuelConfig::default());
     let mut duel = record.setup(None).unwrap();
     duel.ocg_start_duel();
     let mut players = [Heuristic::new(1, 0), Heuristic::new(2, 1)];
     let mut abs = [AlphaBeta::default(), AlphaBeta::default()];
     let (mut rows, mut prompt, mut winner): (Vec<Value>, Option<Msg>, Option<u32>) = (Vec::new(), None, None);
+    let mut responses: Vec<String> = Vec::new();
     for _ in 0..MAX_DECISIONS {
         let Ok(step) = run_until_prompt(&mut duel, prompt.as_ref()) else { break };
         if let Some(w) = step.messages.iter().find_map(|m| if let Msg::Win { player, .. } = m { Some(*player) } else { None }) {
@@ -99,7 +102,7 @@ fn play(book: &ygoai::matchrun::Opening, game: usize, nodes: u64) -> Vec<Value> 
                     assert!((dot - stat).abs() < 1e-6, "eval_features disagrees with evaluate: {dot} vs {stat}");
                 }
                 rows.push(json!({
-                    "game": game, "player": player, "turn": info[0], "turn_player": info[1], "phase": info[2],
+                    "game": game, "decision": responses.len(), "player": player, "turn": info[0], "turn_player": info[1], "phase": info[2],
                     "prompt": p.name(), "value": ab.last_value, "depth": done,
                     "static": stat, "eval": f.to_vec(), "rich": rich_features(&mut duel, player),
                     "mover_x": mover_features2(&mut duel, player, Some(&p)),
@@ -112,8 +115,11 @@ fn play(book: &ygoai::matchrun::Opening, game: usize, nodes: u64) -> Vec<Value> 
         };
         let Ok(r) = ygoai::actions::encode(&p, &resp) else { break };
         duel.ocg_set_response(&r);
+        responses.push(r.iter().map(|b| format!("{b:02x}")).collect());
         prompt = Some(p);
     }
+    let decisions: Vec<&Value> = rows.iter().map(|r| &r["decision"]).collect();
+    let log = json!({"game": game, "seed": book.seed, "responses": responses, "rows": decisions, "winner": winner});
     for r in &mut rows {
         let me = r["player"].as_u64().unwrap() as u32;
         r["result"] = json!(match winner {
@@ -122,7 +128,7 @@ fn play(book: &ygoai::matchrun::Opening, game: usize, nodes: u64) -> Vec<Value> 
             _ => 0,
         });
     }
-    rows
+    (rows, log)
 }
 
 fn main() {
@@ -136,24 +142,31 @@ fn main() {
     let jobs: usize = a.get(6).map_or(8, |s| s.parse().unwrap());
     let book = Arc::new(load_book_head(a[1].as_ref(), 0, first + count).expect("book").split_off(first));
     init(None).unwrap();
-    let out = Arc::new(Mutex::new(std::io::BufWriter::new(std::fs::File::create(&a[5]).expect("output"))));
+    let create = |path: String| Arc::new(Mutex::new(std::io::BufWriter::new(std::fs::File::create(path).expect("output"))));
+    let (out, games_out) = (create(a[5].clone()), create(format!("{}.games", a[5])));
     let (next, done) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
     let t0 = std::time::Instant::now();
     let threads: Vec<_> = (0..jobs)
         .map(|_| {
-            let (book, out, next, done) = (book.clone(), out.clone(), next.clone(), done.clone());
+            let (book, out, games_out, next, done) = (book.clone(), out.clone(), games_out.clone(), next.clone(), done.clone());
             std::thread::spawn(move || {
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     if i >= book.len() {
                         break;
                     }
-                    let rows = std::panic::catch_unwind(|| play(&book[i], first + i, nodes)).unwrap_or_default();
+                    let (rows, log) = std::panic::catch_unwind(|| play(&book[i], first + i, nodes)).unwrap_or_default();
                     let mut w = out.lock().unwrap();
                     for r in rows {
                         writeln!(w, "{r}").unwrap();
                     }
                     w.flush().unwrap();
+                    drop(w);
+                    if !log.is_null() {
+                        let mut g = games_out.lock().unwrap();
+                        writeln!(g, "{log}").unwrap();
+                        g.flush().unwrap();
+                    }
                     let k = done.fetch_add(1, Ordering::Relaxed) + 1;
                     if k % 50 == 0 {
                         eprintln!("[{:.0}s] {k}/{} games", t0.elapsed().as_secs_f64(), book.len());
