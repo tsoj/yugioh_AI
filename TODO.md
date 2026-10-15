@@ -96,6 +96,10 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
 - [ ] Deeper MLPs (`--layers`, the Rust eval takes any number): 2x64 ranks +0.007 +/- 0.004 over
       1x16 but overfits after a few epochs (10k games); SPRT 2x64 vs the default stopped at 380
       games (-7.3 +/- 24.9, LLR -0.77). Retry once more data rounds exist.
+- [x] Data are games (45ab3d4): ygoai-datagen writes OUT.games.jsonl (GameRecord + search value and
+      depth per searched decision); `ygoai-refeature GAMES OUT --features ...` computes rows for any
+      feature set (`ygoai::datarow`) by replay, in seconds. Rounds 1 and 2 predate it (no moves
+      recorded; their features change only with a 6 h search rerun).
 - [ ] More features: normal summon used, LP thresholds, ...
 - [ ] Later: the learned policy/value nets and effect-text embeddings (see memory).
 
