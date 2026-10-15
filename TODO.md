@@ -66,10 +66,17 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       eval: the 99th percentile of the gap over the moves that raised alpha, 49/52/55/72 at depth
       1-4). Mean depth at 3000 nodes 9.60 -> 9.91 (up to depth 1: 9.74, 2: 9.83, 4: 10.02). SPRT
       vs `lmr,predict` running.
+- [ ] Extend the first child when it is the TT move and the node has only 1 or 2 children: by 1 ply,
+      or by a fraction of a ply (e.g. 0.5; needs fractional depth).
 - [ ] qsearch, if retried: a TT in quiescence, cheaper chain windows (pass plus the best few
       answers), pruning of hopeless attacks.
 - Retested at the Rust speed and stopped near zero: PVS (H0), qsearch, futility, conthist,
   PVS+RFP, RFP by kind (stopped at 2220 games, +4.5, LLR -1.50) (all on top of LMR).
+
+## Hidden information
+
+- [ ] Different card guesses and deck fillers in each iteration of the iterative deepening (the
+      opponent's hidden cards re-sampled per depth), instead of one guess for the whole search.
 
 ## Evaluation
 
