@@ -346,9 +346,10 @@ impl SearchState<'_> {
                 return Ok(static_eval);
             }
         }
-        let static_eval = if (f.futility && depth <= FUTILITY_MAX_DEPTH) || (self.tables.stats.is_some() && depth <= 4) { Some(evaluate_at(duel, us, Some(prompt))) } else { None };
+        let (futility_margin, futility_per_ply, futility_max_depth) = futility_params();
+        let static_eval = if (f.futility && depth <= futility_max_depth) || (self.tables.stats.is_some() && depth <= 4) { Some(evaluate_at(duel, us, Some(prompt))) } else { None };
         // (futility pruning: the moves after the first whose static eval plus the margin cannot raise alpha)
-        let futility_value = static_eval.filter(|_| f.futility && depth <= FUTILITY_MAX_DEPTH).map(|s| s + FUTILITY_MARGIN + FUTILITY_MARGIN_PER_PLY * depth as f64);
+        let futility_value = static_eval.filter(|_| f.futility && depth <= futility_max_depth).map(|s| s + futility_margin + futility_per_ply * depth as f64);
 
         // move ordering: the TT move first, then by history (the rules' order among equals)
         let history_keys: Vec<HistoryKey> = moves

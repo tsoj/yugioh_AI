@@ -53,6 +53,18 @@ pub const LMR_MIN_MOVE_COUNTER: usize = 2;
 pub const FUTILITY_MAX_DEPTH: i32 = 3;
 pub const FUTILITY_MARGIN: f64 = 45.0;
 pub const FUTILITY_MARGIN_PER_PLY: f64 = 4.0;
+/// The futility parameters (FUTILITY_MARGIN, FUTILITY_MARGIN_PER_PLY, FUTILITY_MAX_DEPTH), or
+/// $YGOAI_FUTILITY as "margin,per_ply,max_depth" (read once).
+pub fn futility_params() -> (f64, f64, i32) {
+    static P: std::sync::OnceLock<(f64, f64, i32)> = std::sync::OnceLock::new();
+    *P.get_or_init(|| match std::env::var("YGOAI_FUTILITY") {
+        Ok(s) => {
+            let v: Vec<&str> = s.split(',').collect();
+            (v[0].parse().unwrap(), v[1].parse().unwrap(), v[2].parse().unwrap())
+        }
+        Err(_) => (FUTILITY_MARGIN, FUTILITY_MARGIN_PER_PLY, FUTILITY_MAX_DEPTH),
+    })
+}
 /// (quiescence plies past the nominal depth)
 pub const MAX_QUIESCE_PLY: i32 = 6;
 
