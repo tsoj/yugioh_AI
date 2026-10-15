@@ -94,7 +94,8 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
     by as much between epochs); the held-out losses did (value BCE 0.5107 vs 0.5129, result
     log-loss 0.4798 vs 0.4850). Feature-group ablations were all within noise.
 - [ ] Deeper MLPs (`--layers`, the Rust eval takes any number): 2x64 ranks +0.007 +/- 0.004 over
-      1x16 but overfits after a few epochs (10k games); SPRT 2x64 vs the default. More data rounds.
+      1x16 but overfits after a few epochs (10k games); SPRT 2x64 vs the default stopped at 380
+      games (-7.3 +/- 24.9, LLR -0.77). Retry once more data rounds exist.
 - [ ] More features: normal summon used, LP thresholds, ...
 - [ ] Later: the learned policy/value nets and effect-text embeddings (see memory).
 
