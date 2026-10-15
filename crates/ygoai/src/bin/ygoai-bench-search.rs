@@ -109,6 +109,7 @@ fn main() {
             merge(&mut stats.widths, st.widths);
             merge(&mut stats.lmr, st.lmr);
             merge(&mut stats.subtree, st.subtree);
+            stats.gaps.extend(st.gaps);
             for (k, n) in st.cuts {
                 *stats.cuts.entry(k).or_default() += n;
             }
@@ -152,6 +153,9 @@ fn print_stats(st: &NodeStats, path: &str) {
     }
     for (&(label, depth), &[n, sub]) in &st.subtree {
         writeln!(f, r#"{{"t": "subtree", "prompt": "{label}", "depth": {depth}, "nodes": {n}, "subtree": {sub}}}"#).unwrap();
+    }
+    for (kind, depth, gap, raised) in &st.gaps {
+        writeln!(f, r#"{{"t": "gap", "kind": "{kind}", "depth": {depth}, "gap": {gap}, "raised": {raised}}}"#).unwrap();
     }
     print_widths(&st.widths);
     // cutoffs by prompt and TT state, nodes with 2+ children

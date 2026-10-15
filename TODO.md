@@ -61,6 +61,11 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       budget. It uses about 25% more of the budget than the old rule (start while under half).
 - [ ] Time management: node-based scaling of the soft bound, best-move stability, eval stability;
       the split between early and late moves (`MOVES_TO_GO` = 20).
+- [ ] Futility pruning again (Stockfish's parent-node form): the moves after the first at depth
+      <= 3 whose static eval + 45 + 4 * depth cannot raise alpha (margins measured with the mover2
+      eval: the 99th percentile of the gap over the moves that raised alpha, 49/52/55/72 at depth
+      1-4). Mean depth at 3000 nodes 9.60 -> 9.91 (up to depth 1: 9.74, 2: 9.83, 4: 10.02). SPRT
+      vs `lmr,predict` running.
 - [ ] qsearch, if retried: a TT in quiescence, cheaper chain windows (pass plus the best few
       answers), pruning of hopeless attacks.
 - Retested at the Rust speed and stopped near zero: PVS (H0), qsearch, futility, conthist,

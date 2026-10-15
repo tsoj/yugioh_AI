@@ -47,12 +47,18 @@ pub const RFP_MARGIN_MULTIPLIER: f64 = 12.0;
 /// (late move reductions from this depth on, for the moves after the first LMR_MIN_MOVE_COUNTER)
 pub const LMR_MIN_DEPTH: i32 = 2;
 pub const LMR_MIN_MOVE_COUNTER: usize = 2;
+/// (futility pruning up to this depth, margin FUTILITY_MARGIN + FUTILITY_MARGIN_PER_PLY * depth: about
+/// the 99th percentile of alpha minus the static eval over the later moves that raised alpha, at
+/// depth 1 to 3 (49, 52, 55; 4M moves of 40 bench openings at 3000 nodes, mover2 eval, lmr))
+pub const FUTILITY_MAX_DEPTH: i32 = 3;
+pub const FUTILITY_MARGIN: f64 = 45.0;
+pub const FUTILITY_MARGIN_PER_PLY: f64 = 4.0;
 /// (quiescence plies past the nominal depth)
 pub const MAX_QUIESCE_PLY: i32 = 6;
 
 /// Search features, each off unless named in $YGOAI_SEARCH (a comma list; unset: DEFAULT_FEATURES):
-/// `pvs`, `rfp` (reverse futility pruning at null-window nodes; with pvs), `futility` (depth 1,
-/// by the most a move of each kind gains), `lmr`, `conthist` (continuation history), `qsearch`
+/// `pvs`, `rfp` (reverse futility pruning at null-window nodes; with pvs), `futility` (futility
+/// pruning up to FUTILITY_MAX_DEPTH), `lmr`, `conthist` (continuation history), `qsearch`
 /// (battle and chain decisions past the depth).
 /// Decisions inside a move that the search can make instead of the rules' player (each the rules'
 /// first few choices): `unselect` (card by card selections, e.g. most materials), `tribute`,
@@ -113,31 +119,4 @@ impl Features {
         static F: std::sync::OnceLock<Features> = std::sync::OnceLock::new();
         *F.get_or_init(|| Features::parse(&std::env::var("YGOAI_SEARCH").unwrap_or_else(|_| DEFAULT_FEATURES.to_string())))
     }
-}
-
-/// (futility: the 99th percentile of a leaf move's value minus the static value before it, by
-/// kind (`movepick::move_kind`), over 378k leaves of alphabeta-vs-heuristic games; kinds not
-/// listed are never pruned)
-pub fn futility_margin(kind: &str) -> Option<f64> {
-    Some(match kind {
-        "SELECT_IDLECMD:summon" => 48.0,
-        "SELECT_IDLECMD:spsummon" => 30.9,
-        "SELECT_IDLECMD:mset" => 30.4,
-        "SELECT_IDLECMD:sset" => 0.0,
-        "SELECT_IDLECMD:activate" => 43.8,
-        "SELECT_IDLECMD:repos" => 17.6,
-        "SELECT_IDLECMD:to_bp" | "SELECT_IDLECMD:to_ep" | "SELECT_IDLECMD:shuffle" => 0.0,
-        "SELECT_BATTLECMD:attack" => 47.0,
-        "SELECT_BATTLECMD:activate" => 16.8,
-        "SELECT_BATTLECMD:to_m2" => 0.0,
-        "SELECT_BATTLECMD:to_ep" => 26.1,
-        "SELECT_CHAIN:pass" => 21.9,
-        "SELECT_CHAIN:chain" => 41.5,
-        "SELECT_EFFECTYN:yes" => 40.3,
-        "SELECT_EFFECTYN:no" => 9.1,
-        "SELECT_YESNO:yes" => 43.8,
-        "SELECT_YESNO:no" => 9.1,
-        "SELECT_OPTION" | "SELECT_CARD" => 39.5,
-        _ => return None,
-    })
 }

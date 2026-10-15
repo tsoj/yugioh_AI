@@ -48,6 +48,9 @@ pub struct NodeStats {
     pub lmr: BTreeMap<(&'static str, u8), [u64; 2]>,
     /// by (prompt, depth): [nodes, nodes in their subtrees (themselves included)]
     pub subtree: BTreeMap<(&'static str, i8), [u64; 2]>,
+    /// (futility margins) the moves after the first at depths 1..=4 with a finite alpha: (move
+    /// kind, depth, alpha minus the node's static eval, whether the move raised alpha)
+    pub gaps: Vec<(String, i8, f32, bool)>,
 }
 
 /// (`NodeStats::cuts`: no cutoff, all the children searched)
@@ -343,7 +346,9 @@ impl SearchState<'_> {
                 return Ok(static_eval);
             }
         }
-        let static_eval = if f.futility && depth == 1 { Some(evaluate_at(duel, us, Some(prompt))) } else { None };
+        let static_eval = if (f.futility && depth <= FUTILITY_MAX_DEPTH) || (self.tables.stats.is_some() && depth <= 4) { Some(evaluate_at(duel, us, Some(prompt))) } else { None };
+        // (futility pruning: the moves after the first whose static eval plus the margin cannot raise alpha)
+        let futility_value = static_eval.filter(|_| f.futility && depth <= FUTILITY_MAX_DEPTH).map(|s| s + FUTILITY_MARGIN + FUTILITY_MARGIN_PER_PLY * depth as f64);
 
         // move ordering: the TT move first, then by history (the rules' order among equals)
         let history_keys: Vec<HistoryKey> = moves
@@ -369,13 +374,15 @@ impl SearchState<'_> {
             move_counter = i + 1;
             let mv = &moves[m];
 
-            // futility pruning: the move cannot raise alpha; its bound counts as its value
-            if let Some(s) = static_eval
-                && let Some(margin) = futility_margin(&move_kind(prompt, mv))
-                && s + margin <= alpha
+            // futility pruning: a later move that cannot raise alpha by the static eval and the
+            // margin; that bound counts as its value
+            if let Some(v) = futility_value
+                && i > 0
+                && v <= alpha
+                && alpha.abs() < WIN / 2.0
             {
-                if s + margin > best_value {
-                    (best_value, best_move) = (s + margin, m);
+                if v > best_value {
+                    (best_value, best_move) = (v, m);
                 }
                 continue;
             }
@@ -410,6 +417,14 @@ impl SearchState<'_> {
                 None => self.search_move(duel, prompt, mv, alpha, beta, new_depth, height + 1, last)?,
             };
 
+            if let Some(s) = static_eval
+                && self.tables.stats.is_some()
+                && i > 0
+                && alpha.is_finite()
+                && let Some(st) = &mut self.tables.stats
+            {
+                st.gaps.push((move_kind(prompt, mv), depth as i8, (alpha - s) as f32, value > alpha));
+            }
             if value > best_value {
                 (best_value, best_move) = (value, m);
             }
