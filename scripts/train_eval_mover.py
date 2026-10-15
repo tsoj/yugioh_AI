@@ -21,6 +21,7 @@ ap.add_argument("--lr", type=float, default=2e-3)
 ap.add_argument("--wd", type=float, default=0.0)
 ap.add_argument("--sigma", type=float, default=1.0, help="prior sd of the pair term (logits)")
 ap.add_argument("--nopair", action="store_true")
+ap.add_argument("--held", type=int, default=50, help="deck pairs held out for validation")
 ap.add_argument("--drop", default="", help="feature indices to zero, comma list")
 ap.add_argument("-o", "--output")
 ap.add_argument("--save-v", help="npz of the final v on all rows (for paired comparisons)")
@@ -50,7 +51,7 @@ def fit_k(v, r):
 K = fit_k(value, result)
 
 rng = np.random.default_rng(0)
-held_pairs = set(rng.choice(np.unique(pair), 50, replace=False).tolist())
+held_pairs = set(rng.choice(np.unique(pair), args.held, replace=False).tolist())
 is_hp = np.isin(pair, list(held_pairs))
 is_vin = ~is_hp & (k >= 18)
 is_tr = ~is_hp & ~is_vin
@@ -138,6 +139,9 @@ if args.output:
     import json
     assert args.model == "mlp"
     st = {kk: vv.detach().cpu().numpy().astype(float) for kk, vv in net.state_dict().items()}
+    if args.drop:  # (dropped inputs were 0 in training but not at inference: their weights out)
+        st["0.weight"][:, [int(i) for i in args.drop.split(",")]] = 0
+        sd[[int(i) for i in args.drop.split(",")]] = 1
     json.dump({"features": "mover2" if n == 87 else "mover", "model": "mover_mlp", "mu": mu.astype(float).tolist(), "scale": sd.astype(float).tolist(),
                "w1": st["0.weight"].tolist(), "b1": st["0.bias"].tolist(), "w2": (st["2.weight"][0] * K).tolist(),
                "b2": float(st["2.bias"][0] * K), "k": float(K), "lam": args.lam, "hidden": args.hidden}, open(args.output, "w"))
