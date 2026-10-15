@@ -904,7 +904,11 @@ fn mover_view(d: &mut Duel, mover: u32, prompt: Option<&Msg>, more: bool) -> Vec
     f.push(info[0].min(30) as f64 / 10.0);
     if more {
         f.extend(a.more);
-        f.extend(b.more);
+        // (the opponent's hand by kind stays out, its count only: 0 here, the feature kept so the
+        // datagen rows' layout holds; training drops it with --drop 67,68,69)
+        let mut opp = b.more;
+        opp[4..7].fill(0.0);
+        f.extend(opp);
         let mut m = [0usize; 9];
         match prompt {
             Some(Msg::SelectIdlecmd { summonable, spsummonable, repositionable, msetable, ssetable, activatable, .. }) => {

@@ -23,6 +23,7 @@ ap.add_argument("--sigma", type=float, default=1.0, help="prior sd of the pair t
 ap.add_argument("--nopair", action="store_true")
 ap.add_argument("--drop", default="", help="feature indices to zero, comma list")
 ap.add_argument("-o", "--output")
+ap.add_argument("--save-v", help="npz of the final v on all rows (for paired comparisons)")
 args = ap.parse_args()
 torch.manual_seed(0)
 dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -131,11 +132,13 @@ for ep in range(args.epochs):
     if ep % 3 == 2 or ep == args.epochs - 1:
         report(f"epoch {ep + 1}")
 print("pair term: sd", a.detach().std().item())
+if args.save_v:
+    np.savez(args.save_v, v=all_v())
 if args.output:
     import json
     assert args.model == "mlp"
     st = {kk: vv.detach().cpu().numpy().astype(float) for kk, vv in net.state_dict().items()}
-    json.dump({"features": "mover", "model": "mover_mlp", "mu": mu.astype(float).tolist(), "scale": sd.astype(float).tolist(),
+    json.dump({"features": "mover2" if n == 87 else "mover", "model": "mover_mlp", "mu": mu.astype(float).tolist(), "scale": sd.astype(float).tolist(),
                "w1": st["0.weight"].tolist(), "b1": st["0.bias"].tolist(), "w2": (st["2.weight"][0] * K).tolist(),
                "b2": float(st["2.bias"][0] * K), "k": float(K), "lam": args.lam, "hidden": args.hidden}, open(args.output, "w"))
     print("saved", args.output)
