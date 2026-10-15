@@ -15,6 +15,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("data")
 ap.add_argument("--model", default="mlp")
 ap.add_argument("--hidden", type=int, default=32)
+ap.add_argument("--layers", type=int, default=1, help="hidden layers")
 ap.add_argument("--lam", type=float, default=0.5)
 ap.add_argument("--epochs", type=int, default=12)
 ap.add_argument("--lr", type=float, default=2e-3)
@@ -67,7 +68,8 @@ n = X.shape[1]
 if args.model == "linear":
     net = torch.nn.Linear(n, 1)
 else:
-    net = torch.nn.Sequential(torch.nn.Linear(n, args.hidden), torch.nn.ReLU(), torch.nn.Linear(args.hidden, 1))
+    dims = [n] + [args.hidden] * args.layers
+    net = torch.nn.Sequential(*[m for a_, b_ in zip(dims, dims[1:]) for m in (torch.nn.Linear(a_, b_), torch.nn.ReLU())], torch.nn.Linear(args.hidden, 1))
 net = net.to(dev)
 a = torch.zeros(int(ps.max()) + 1, device=dev, requires_grad=True)
 opt = torch.optim.Adam([{"params": net.parameters(), "weight_decay": args.wd}, {"params": [a]}], lr=args.lr)
@@ -138,7 +140,7 @@ if args.save_v:
     np.savez(args.save_v, v=all_v())
 if args.output:
     import json
-    assert args.model == "mlp"
+    assert args.model == "mlp" and args.layers == 1, "the Rust eval takes one hidden layer"
     st = {kk: vv.detach().cpu().numpy().astype(float) for kk, vv in net.state_dict().items()}
     if args.drop:  # (dropped inputs were 0 in training but not at inference: their weights out)
         st["0.weight"][:, [int(i) for i in args.drop.split(",")]] = 0

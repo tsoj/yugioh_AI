@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Instant;
 
-use ygoai::matchrun::{EngineSpec, MatchStats, Opening, load_book, play_opening, sprt_bounds};
+use ygoai::matchrun::{EngineSpec, MatchStats, Opening, load_book_lines, play_opening, sprt_bounds};
 
 struct Args {
     engines: Vec<EngineSpec>,
@@ -29,15 +29,32 @@ struct Args {
     records: Option<PathBuf>,
     book: Option<PathBuf>,
     book_min: i64,
+    shuffle: Option<u64>,
+    pool: usize,
 }
 
 fn usage(msg: &str) -> ! {
     eprintln!("ygoai-match: {msg}");
     eprintln!(
         "usage: ygoai-match --engine NAME=COMMAND --engine NAME=COMMAND --book BOOK [-n N] [--tc BASE+INC] \
-         [--sprt ELO0 ELO1] [--alpha A] [--beta B] [-c J] [--records PATH] [--book-min N] [--max-turns N]"
+         [--sprt ELO0 ELO1] [--alpha A] [--beta B] [-c J] [--records PATH] [--book-min N] [--shuffle SEED] [--pool N] [--max-turns N]"
     );
     std::process::exit(2)
+}
+
+/// Fisher-Yates with splitmix64: each test draws its own sample of the book (reproducible by seed).
+fn shuffle<T>(v: &mut [T], seed: u64) {
+    let mut x = seed;
+    let mut next = || {
+        x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = x;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    };
+    for i in (1..v.len()).rev() {
+        v.swap(i, (next() % (i as u64 + 1)) as usize);
+    }
 }
 
 fn parse_args() -> Args {
@@ -53,6 +70,8 @@ fn parse_args() -> Args {
         records: None,
         book: None,
         book_min: 2,
+        shuffle: None,
+        pool: usize::MAX,
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -85,6 +104,9 @@ fn parse_args() -> Args {
             "--records" => a.records = Some(next(&mut i, &arg).into()),
             "--book" => a.book = Some(next(&mut i, &arg).into()),
             "--book-min" => a.book_min = num(next(&mut i, &arg), &arg) as i64,
+            // (only the book's first N lines: the eval's training pairs come from later ones)
+            "--pool" => a.pool = num(next(&mut i, &arg), &arg) as usize,
+            "--shuffle" => a.shuffle = Some(next(&mut i, &arg).parse().unwrap_or_else(|_| usage("--shuffle takes an integer seed"))),
             // (accepted for scripts/match.py's command lines: only random openings use them)
             "--seed" | "--mirror-prob" => {
                 next(&mut i, &arg);
@@ -111,7 +133,11 @@ fn main() {
         eprintln!("{e}");
         std::process::exit(1);
     }
-    let mut openings: Vec<Opening> = load_book(args.book.as_ref().unwrap(), args.book_min).unwrap_or_else(|e| usage(&format!("book: {e}")));
+    let mut openings: Vec<Opening> = load_book_lines(args.book.as_ref().unwrap(), args.book_min, args.pool).unwrap_or_else(|e| usage(&format!("book: {e}")));
+    if let Some(seed) = args.shuffle {
+        shuffle(&mut openings, seed);
+        println!("book shuffled with seed {seed}");
+    }
     openings.truncate(args.openings);
     let (a, b) = (args.engines[0].clone(), args.engines[1].clone());
     println!("{} vs {}: {} openings x 2 games", a.name, b.name, openings.len());

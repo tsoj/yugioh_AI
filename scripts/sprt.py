@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import json
+import random
 import os
 import re
 import signal
@@ -57,6 +58,9 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--book", type=Path, help="openings from this book (match.py --book)")
     ap.add_argument("--book-min", type=int, default=2)
+    ap.add_argument("--shuffle", type=int, help="the Rust arbiter's book order (default: a random seed per test)")
+    ap.add_argument("--pool", type=int, default=10000,
+                    help="the Rust arbiter draws from the book's first N lines (later ones are eval training pairs)")
     ap.add_argument("--arbiter", choices=["python", "rust"], default="python",
                     help="scripts/match.py or the Rust arbiter ygoai-match (needs --book)")
     args = ap.parse_args()
@@ -91,6 +95,10 @@ def main() -> int:
            "--records", str(OUT / f"{name}.jsonl")]
     if args.book is not None:
         cmd += ["--book", str(args.book.resolve()), "--book-min", str(args.book_min)]
+    if args.arbiter == "rust":
+        if args.shuffle is None:
+            args.shuffle = random.randrange(2**32)
+        cmd += ["--shuffle", str(args.shuffle), "--pool", str(args.pool)]
     print(f"{args.new} ({shas['new'][:12]}) vs {args.base} ({shas['base'][:12]}): log {log}", flush=True)
     t0 = time.time()
     with open(log, "w") as f:
@@ -110,7 +118,7 @@ def main() -> int:
     with open(OUT / "results.jsonl", "a") as f:
         f.write(json.dumps({"new": args.new, "new_sha": shas["new"], "base": args.base, "base_sha": shas["base"],
                             "agent": agents, "tc": args.tc, "elo": args.elo, "verdict": verdict, "final": final,
-                            "seconds": round(time.time() - t0), "log": str(log)}) + "\n")
+                            "seconds": round(time.time() - t0), "log": str(log), "shuffle": args.shuffle, "pool": args.pool if args.arbiter == "rust" else None}) + "\n")
     print(verdict)
     return 0 if "H1 accepted" in verdict else 1
 
