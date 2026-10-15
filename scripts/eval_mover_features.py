@@ -1,7 +1,8 @@
 """Usage: scripts/eval_mover_features.py DATA.jsonl OUT.npz [--rust]
 
 Mover-view features of the datagen rows into an npz (see FEATURES); with --rust the rows' own
-`mover_x` (the Rust mover2 features, datagen since 75154c6) instead."""
+Rust mover2 features instead (`mover2`, from ygoai-datagen or ygoai-refeature; `mover_x` in data
+from before 3cf4fbf)."""
 import json, sys
 import numpy as np
 sys.path.insert(0, "scripts")
@@ -27,7 +28,7 @@ def features(r):
 cols = {k: [] for k in ["x", "value", "static", "result", "game", "player", "turn", "depth"]}
 for line in open(sys.argv[1]):
     r = json.loads(line)
-    cols["x"].append(r["mover_x"] if "--rust" in sys.argv else features(r))
+    cols["x"].append(r.get("mover2", r.get("mover_x")) if "--rust" in sys.argv else features(r))
     for k in ["value", "static", "result", "game", "player", "turn", "depth"]:
         cols[k].append(r[k])
 np.savez(sys.argv[2], **{k: np.asarray(v, np.float32 if k in ("x", "value", "static") else np.int64) for k, v in cols.items()})

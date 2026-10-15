@@ -1,88 +1,69 @@
-//! Features for datagen rows by replaying the games' recorded responses (no search): a line per
-//! row of OUT.jsonl.games with the game, the decision and the features there.
+//! Training rows from recorded games, by replaying them (no search): ygoai-datagen's
+//! OUT.games.jsonl in, a row per labeled decision with the feature sets FEATURES out
+//! (`ygoai::datarow`).
 //!
-//!   ygoai-refeature BOOK DATA.jsonl.games OUT.jsonl [JOBS]
-//!
-//! (BOOK the datagen's book: a game's number is its line in the book)
+//!   ygoai-refeature GAMES.jsonl OUT.jsonl --features SET,SET... [JOBS]
 
-use std::collections::HashSet;
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use serde_json::{Value, json};
-use ygoai::game::{DuelConfig, init, new_record, run_until_prompt};
-use ygoai::matchrun::load_book_head;
-use ygoai::messages::Msg;
-use ygoai::search::mover_features2;
+use ygoai::datarow::{FEATURE_SETS, GameData, replay_rows};
+use ygoai::game::init;
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-fn replay(book: &ygoai::matchrun::Opening, log: &Value) -> Vec<Value> {
-    let game = log["game"].as_u64().unwrap();
-    let wanted: HashSet<u64> = log["rows"].as_array().unwrap().iter().filter_map(|d| d.as_u64()).collect();
-    let responses: Vec<Vec<u8>> = log["responses"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|h| {
-            let h = h.as_str().unwrap();
-            (0..h.len()).step_by(2).map(|i| u8::from_str_radix(&h[i..i + 2], 16).unwrap()).collect()
-        })
-        .collect();
-    let record = new_record(&book.decks, book.seed, &DuelConfig::default());
-    let mut duel = record.setup(None).unwrap();
-    duel.ocg_start_duel();
-    let (mut out, mut prompt): (Vec<Value>, Option<Msg>) = (Vec::new(), None);
-    for (i, r) in responses.iter().enumerate() {
-        let Ok(step) = run_until_prompt(&mut duel, prompt.as_ref()) else { break };
-        let Some(p) = step.prompt else { break };
-        if wanted.contains(&(i as u64)) {
-            let player = p.player().unwrap();
-            out.push(json!({"game": game, "decision": i, "player": player, "mover_x": mover_features2(&mut duel, player, Some(&p))}));
-        }
-        duel.ocg_set_response(r);
-        prompt = Some(p);
-    }
-    out
-}
-
 fn main() {
     let a: Vec<String> = std::env::args().collect();
-    if a.len() < 4 {
-        eprintln!("usage: ygoai-refeature BOOK DATA.jsonl.games OUT.jsonl [JOBS]");
-        std::process::exit(2);
+    let usage = || -> ! {
+        eprintln!("usage: ygoai-refeature GAMES.jsonl OUT.jsonl --features SET,SET... [JOBS]  (sets: {})", FEATURE_SETS.join(", "));
+        std::process::exit(2)
+    };
+    if a.len() < 5 || a[3] != "--features" {
+        usage();
     }
-    let jobs: usize = a.get(4).map_or(8, |s| s.parse().unwrap());
-    let logs: Vec<Value> = std::io::BufReader::new(std::fs::File::open(&a[2]).expect("games"))
+    let sets: Arc<Vec<String>> = Arc::new(a[4].split(',').map(String::from).collect());
+    if let Some(s) = sets.iter().find(|s| !FEATURE_SETS.contains(&s.as_str())) {
+        eprintln!("unknown feature set {s}");
+        usage();
+    }
+    let jobs: usize = a.get(5).map_or(8, |s| s.parse().unwrap_or_else(|_| usage()));
+    let games: Vec<GameData> = std::io::BufReader::new(std::fs::File::open(&a[1]).expect("games"))
         .lines()
-        .map(|l| serde_json::from_str(&l.unwrap()).unwrap())
+        .map(|l| serde_json::from_str(&l.unwrap()).expect("a GameData line"))
         .collect();
-    let last = logs.iter().map(|l| l["game"].as_u64().unwrap() as usize).max().unwrap_or(0);
-    let book = Arc::new(load_book_head(a[1].as_ref(), 0, last + 1).expect("book"));
     init(None).unwrap();
-    let logs = Arc::new(logs);
-    let out = Arc::new(Mutex::new(std::io::BufWriter::new(std::fs::File::create(&a[3]).expect("output"))));
-    let (next, done) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let games = Arc::new(games);
+    let out = Arc::new(Mutex::new(std::io::BufWriter::new(std::fs::File::create(&a[2]).expect("output"))));
+    let (next, done, failed) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
     let t0 = std::time::Instant::now();
     let threads: Vec<_> = (0..jobs)
         .map(|_| {
-            let (book, logs, out, next, done) = (book.clone(), logs.clone(), out.clone(), next.clone(), done.clone());
+            let (games, out, next, done, failed, sets) = (games.clone(), out.clone(), next.clone(), done.clone(), failed.clone(), sets.clone());
             std::thread::spawn(move || {
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
-                    let Some(log) = logs.get(i) else { break };
-                    let g = log["game"].as_u64().unwrap() as usize;
-                    let rows = std::panic::catch_unwind(|| replay(&book[g], log)).unwrap_or_default();
-                    let mut w = out.lock().unwrap();
-                    for r in rows {
-                        writeln!(w, "{r}").unwrap();
+                    let Some(g) = games.get(i) else { break };
+                    match std::panic::catch_unwind(|| replay_rows(g, &sets)) {
+                        Ok(Ok(rows)) => {
+                            let mut w = out.lock().unwrap();
+                            for r in rows {
+                                writeln!(w, "{r}").unwrap();
+                            }
+                        }
+                        Ok(Err(e)) => {
+                            eprintln!("game {}: {e}", g.game);
+                            failed.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(_) => {
+                            eprintln!("game {}: panicked", g.game);
+                            failed.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
-                    w.flush().unwrap();
                     let k = done.fetch_add(1, Ordering::Relaxed) + 1;
-                    if k % 500 == 0 {
-                        eprintln!("[{:.0}s] {k}/{} games", t0.elapsed().as_secs_f64(), logs.len());
+                    if k % 1000 == 0 {
+                        eprintln!("[{:.0}s] {k}/{} games", t0.elapsed().as_secs_f64(), games.len());
                     }
                 }
             })
@@ -91,5 +72,6 @@ fn main() {
     for t in threads {
         t.join().unwrap();
     }
-    eprintln!("[{:.0}s] done", t0.elapsed().as_secs_f64());
+    out.lock().unwrap().flush().unwrap();
+    eprintln!("[{:.0}s] done, {} games failed", t0.elapsed().as_secs_f64(), failed.load(Ordering::Relaxed));
 }

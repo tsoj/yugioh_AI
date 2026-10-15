@@ -1,75 +1,41 @@
 //! Training data for the evaluation: self-play of the alpha-beta search on the true duel (both
-//! players, a fixed node budget per decision), one game per book opening. At each searched
-//! decision a line of JSON: the game, the mover, turn and phase, the search's root value and
-//! depth (for the mover), the static evaluation and its terms (`eval_features`, for the mover), a fuller state
-//! (`state`, the mover first) and the game's result for the mover (1 win, 0 draw or unfinished,
-//! -1 loss), and `decision`, the index of its response in the game.
+//! players, a fixed node budget per decision), one game per book opening. The data are the games
+//! (`ygoai::datarow::GameData`: the record and, at each searched decision, the search's root
+//! value and depth for the mover) in OUT.games.jsonl; OUT.jsonl gets their rows with the feature
+//! sets FEATURES (`ygoai::datarow`; default mover2,static). Other features later come from the
+//! games without search: ygoai-refeature.
 //!
-//!   ygoai-datagen BOOK FIRST COUNT NODES OUT.jsonl [JOBS]
+//!   ygoai-datagen BOOK FIRST COUNT NODES OUT.jsonl [JOBS] [--features SET,SET...]
 //!
 //! (openings FIRST..FIRST+COUNT of the book, every line; games in parallel on JOBS threads)
-//! OUT.jsonl.games gets a line per game: its responses (hex) and the decisions with a row, so
-//! ygoai-refeature can compute new features for the rows by replaying, without searching.
 
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
-use ygo_core::api::QueryInfo;
-use ygo_core::constants::*;
-use ygo_core::duel::Duel;
-use ygoai::game::{DuelConfig, init, new_record, run_until_prompt};
+use ygoai::datarow::{GameData, Label, row, set_results};
+use ygoai::game::{DuelConfig, RecordedResponse, init, new_record, run_until_prompt};
 use ygoai::heuristic::Heuristic;
 use ygoai::matchrun::load_book_head;
 use ygoai::messages::Msg;
 use ygoai::observe::{auto_response, is_hidden_prompt};
-use ygoai::search::{AlphaBeta, EVAL_WEIGHTS, LearnedEval, SearchParams, candidates, eval_features, evaluate_at, is_searched, mover_features2, rich_features};
-use ygoai::state::parse_location_query;
+use ygoai::search::{AlphaBeta, LearnedEval, SearchParams, candidates, is_searched};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 const MAX_DECISIONS: usize = 3000;
 
-/// One player's side: pile sizes, the monster zones (code, face-up, attack position, ATK, DEF,
-/// level, rank, type) and the spell/trap zones (code, face-down, type); empty zones are null.
-fn side(d: &mut Duel, p: u32) -> Value {
-    let q = |d: &mut Duel, loc: u32, flags: u32| parse_location_query(&d.ocg_query_location(&QueryInfo { flags, con: p as u8, loc, seq: 0, overlay_seq: 0 }));
-    let mz: Vec<Value> = q(d, LOCATION_MZONE, QUERY_CODE | QUERY_POSITION | QUERY_TYPE | QUERY_LEVEL | QUERY_RANK | QUERY_ATTACK | QUERY_DEFENSE)
-        .into_iter()
-        .map(|c| match c {
-            None => Value::Null,
-            Some(c) => {
-                let pos = c.position.unwrap_or(0);
-                json!([c.code, (pos & POS_FACEUP != 0) as u8, (pos & POS_ATTACK != 0) as u8, c.attack, c.defense, c.level, c.rank, c.type_])
-            }
-        })
-        .collect();
-    let sz: Vec<Value> = q(d, LOCATION_SZONE, QUERY_CODE | QUERY_POSITION | QUERY_TYPE)
-        .into_iter()
-        .map(|c| match c {
-            None => Value::Null,
-            Some(c) => json!([c.code, (c.position.unwrap_or(0) & POS_FACEDOWN != 0) as u8, c.type_]),
-        })
-        .collect();
-    let n = |d: &mut Duel, loc: u32| d.ocg_query_count(p as u8, loc);
-    json!({
-        "lp": d.ext_get_info()[3 + p as usize] as i32,
-        "hand": n(d, LOCATION_HAND), "deck": n(d, LOCATION_DECK), "grave": n(d, LOCATION_GRAVE),
-        "removed": n(d, LOCATION_REMOVED), "extra": n(d, LOCATION_EXTRA),
-        "mzone": mz, "szone": sz,
-    })
-}
-
-fn play(book: &ygoai::matchrun::Opening, game: usize, nodes: u64) -> (Vec<Value>, Value) {
-    let record = new_record(&book.decks, book.seed, &DuelConfig::default());
+fn play(book: &ygoai::matchrun::Opening, game: usize, nodes: u64, sets: &[String]) -> (Vec<Value>, GameData) {
+    let mut record = new_record(&book.decks, book.seed, &DuelConfig::default());
+    let eval = if LearnedEval::from_env().is_some() { std::env::var("YGOAI_EVAL").unwrap_or_else(|_| "built-in".into()) } else { "hand".into() };
+    record.agents = vec![format!("alphabeta {nodes} nodes, eval {eval}"); 2];
     let mut duel = record.setup(None).unwrap();
     duel.ocg_start_duel();
     let mut players = [Heuristic::new(1, 0), Heuristic::new(2, 1)];
     let mut abs = [AlphaBeta::default(), AlphaBeta::default()];
-    let (mut rows, mut prompt, mut winner): (Vec<Value>, Option<Msg>, Option<u32>) = (Vec::new(), None, None);
-    let mut responses: Vec<String> = Vec::new();
+    let (mut rows, mut labels, mut prompt, mut winner): (Vec<Value>, Vec<Label>, Option<Msg>, Option<u32>) = (Vec::new(), Vec::new(), None, None);
     for _ in 0..MAX_DECISIONS {
         let Ok(step) = run_until_prompt(&mut duel, prompt.as_ref()) else { break };
         if let Some(w) = step.messages.iter().find_map(|m| if let Msg::Win { player, .. } = m { Some(*player) } else { None }) {
@@ -95,19 +61,9 @@ fn play(book: &ygoai::matchrun::Opening, game: usize, nodes: u64) -> (Vec<Value>
             let params = SearchParams { budget: None, elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2], max_nodes: Some(nodes) };
             let (best, done) = ab.search(&duel, &p, &cands, &params);
             if ab.last_value.is_finite() {
-                let info = duel.ext_get_info();
-                let (f, stat) = (eval_features(&mut duel, player), evaluate_at(&mut duel, player, Some(&p)));
-                let dot: f64 = f.iter().zip(EVAL_WEIGHTS).map(|(x, w)| x * w).sum();
-                if LearnedEval::from_env().is_none() {
-                    assert!((dot - stat).abs() < 1e-6, "eval_features disagrees with evaluate: {dot} vs {stat}");
-                }
-                rows.push(json!({
-                    "game": game, "decision": responses.len(), "player": player, "turn": info[0], "turn_player": info[1], "phase": info[2],
-                    "prompt": p.name(), "value": ab.last_value, "depth": done,
-                    "static": stat, "eval": f.to_vec(), "rich": rich_features(&mut duel, player),
-                    "mover_x": mover_features2(&mut duel, player, Some(&p)),
-                    "state": [side(&mut duel, player), side(&mut duel, 1 - player)],
-                }));
+                let label = Label { decision: record.responses.len(), player, value: ab.last_value, depth: done as u32 };
+                rows.push(row(&mut duel, game, &p, &label, sets).unwrap());
+                labels.push(label);
             }
             cands[best].clone()
         } else {
@@ -115,58 +71,50 @@ fn play(book: &ygoai::matchrun::Opening, game: usize, nodes: u64) -> (Vec<Value>
         };
         let Ok(r) = ygoai::actions::encode(&p, &resp) else { break };
         duel.ocg_set_response(&r);
-        responses.push(r.iter().map(|b| format!("{b:02x}")).collect());
+        record.responses.push(RecordedResponse { player, response: resp });
         prompt = Some(p);
     }
-    let decisions: Vec<&Value> = rows.iter().map(|r| &r["decision"]).collect();
-    let log = json!({"game": game, "seed": book.seed, "responses": responses, "rows": decisions, "winner": winner});
-    for r in &mut rows {
-        let me = r["player"].as_u64().unwrap() as u32;
-        r["result"] = json!(match winner {
-            Some(w) if w == me => 1,
-            Some(w) if w < 2 => -1,
-            _ => 0,
-        });
-    }
-    (rows, log)
+    record.result.insert("winner".into(), json!(winner));
+    set_results(&mut rows, &record);
+    (rows, GameData { game, record, labels })
 }
 
 fn main() {
     ygoai::search::panic_messages_once();
     let a: Vec<String> = std::env::args().collect();
     if a.len() < 6 {
-        eprintln!("usage: ygoai-datagen BOOK FIRST COUNT NODES OUT.jsonl [JOBS]");
+        eprintln!("usage: ygoai-datagen BOOK FIRST COUNT NODES OUT.jsonl [JOBS] [--features SET,SET...]");
         std::process::exit(2);
     }
     let (first, count, nodes): (usize, usize, u64) = (a[2].parse().unwrap(), a[3].parse().unwrap(), a[4].parse().unwrap());
-    let jobs: usize = a.get(6).map_or(8, |s| s.parse().unwrap());
+    let jobs: usize = a.get(6).filter(|s| !s.starts_with("--")).map_or(8, |s| s.parse().unwrap());
+    let sets: Vec<String> = a.iter().position(|x| x == "--features").map_or("mover2,static", |i| a[i + 1].as_str()).split(',').map(String::from).collect();
+    let sets = Arc::new(sets);
     let book = Arc::new(load_book_head(a[1].as_ref(), 0, first + count).expect("book").split_off(first));
     init(None).unwrap();
     let create = |path: String| Arc::new(Mutex::new(std::io::BufWriter::new(std::fs::File::create(path).expect("output"))));
-    let (out, games_out) = (create(a[5].clone()), create(format!("{}.games", a[5])));
+    let (out, games_out) = (create(a[5].clone()), create(format!("{}.games.jsonl", a[5].trim_end_matches(".jsonl"))));
     let (next, done) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
     let t0 = std::time::Instant::now();
     let threads: Vec<_> = (0..jobs)
         .map(|_| {
-            let (book, out, games_out, next, done) = (book.clone(), out.clone(), games_out.clone(), next.clone(), done.clone());
+            let (book, out, games_out, next, done, sets) = (book.clone(), out.clone(), games_out.clone(), next.clone(), done.clone(), sets.clone());
             std::thread::spawn(move || {
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     if i >= book.len() {
                         break;
                     }
-                    let (rows, log) = std::panic::catch_unwind(|| play(&book[i], first + i, nodes)).unwrap_or_default();
+                    let Ok((rows, data)) = std::panic::catch_unwind(|| play(&book[i], first + i, nodes, &sets)) else { continue };
                     let mut w = out.lock().unwrap();
                     for r in rows {
                         writeln!(w, "{r}").unwrap();
                     }
                     w.flush().unwrap();
                     drop(w);
-                    if !log.is_null() {
-                        let mut g = games_out.lock().unwrap();
-                        writeln!(g, "{log}").unwrap();
-                        g.flush().unwrap();
-                    }
+                    let mut g = games_out.lock().unwrap();
+                    writeln!(g, "{}", serde_json::to_string(&data).unwrap()).unwrap();
+                    g.flush().unwrap();
                     let k = done.fetch_add(1, Ordering::Relaxed) + 1;
                     if k % 50 == 0 {
                         eprintln!("[{:.0}s] {k}/{} games", t0.elapsed().as_secs_f64(), book.len());
