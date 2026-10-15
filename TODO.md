@@ -93,7 +93,11 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
 ## Engine and core correctness
 
 - [ ] A datagen game that never finishes: opening 14478 of `match1.jsonl` (`selfplay_2000n`)
-      kept several threads busy for hours; find where it loops.
+      kept several threads busy for hours. With the old datagen binary (before ab5521c) it still
+      runs after 10 min, inside the Synchro material check (`procs::synchro::hand_checks`,
+      `check_p42`, `get_card_effect`): likely an exponential material search. The current binary
+      plays the game in 51 s (its search goes elsewhere), so the slow check is still there. Find
+      the position (old binary: `scratchpad/datagen-bin`) and bound or speed up the check.
 
 - [x] The 4 mismatching games against the C++ core (found 2026-10-13, older than the recent
       changes): pair17349 game 1 decision 947, pair19366 game 2 decision 1880, pair8112 game 0
