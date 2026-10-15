@@ -99,8 +99,13 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       changes): pair17349 game 1 decision 947, pair19366 game 2 decision 1880, pair8112 game 0
       decision 89, pair9854 game 1 decision 467 (`build/regress_pairs/`). Fixed (rust 745abcb);
       script bugs are now fixed in `lua_fixes/` instead of emulated (rust 0e3b15d, 46 cards).
-- [ ] Collect the Lua errors the C++ core really raises over the recorded deck pairs
+- [x] Collect the Lua errors the C++ core really raises over the recorded deck pairs
       (`YGO_DIFF_LOG=1`): identical games hide script bugs the port copies (e.g. Spell Gear).
+      Done 2026-10-15 (all 19470 pairs, 3 games, seed 1): 5 card scripts fixed (rust 81c49f0); no mismatches.
+- [ ] Left from that scan: the Freezing Chains of the Ice Barrier / Safe Zone "C stack overflow"
+      (endless IsSetCard/IsExistingMatchingCard recursion, pairs 9160 and 12763; Gozen Match's
+      error there follows it), and Alba System Dogmatikalamity's fusion check running out of the
+      core's script budget (pairs 2394 9294 15254 16976, those games skipped).
 - [ ] Last Turn activated during an attack: its forced battle leaves the outer attack without an
       attacker, and the core panics (C++ dereferences null). This is an upstream bug. The search now
       avoids such lines (9c3af1d); decide whether to guard it in the core too.
