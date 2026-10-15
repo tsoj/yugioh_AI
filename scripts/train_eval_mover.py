@@ -50,7 +50,11 @@ def fit_k(v, r):
         if best is None or loss < best[0]:
             best = (loss, kk)
     return best[1]
-K = fit_k(value, result)
+# (a merged npz has `src` per row: each data set's search values in its own scale; the export
+# uses the first set's, so put the newest data first)
+src = d["src"] if "src" in d.files else np.zeros(len(X), np.int64)
+Ks = {s_: fit_k(value[src == s_], result[src == s_]) for s_ in np.unique(src)}
+K, Kr = Ks[src[0]], np.array([Ks.get(i, 1.0) for i in range(src.max() + 1)])[src]
 
 rng = np.random.default_rng(0)
 held_pairs = set(rng.choice(np.unique(pair[pair < args.held_below] if args.held_below else pair), args.held, replace=False).tolist())
@@ -60,7 +64,7 @@ is_tr = ~is_hp & ~is_vin
 mu, sd = X[is_tr].mean(0), X[is_tr].std(0) + 1e-6
 Z = torch.tensor((X - mu) / sd, device=dev)
 Yr = torch.tensor((result + 1) / 2, dtype=torch.float32, device=dev)
-Yv = torch.tensor(1 / (1 + np.exp(-np.clip(value, -50 * K, 50 * K) / K)), dtype=torch.float32, device=dev)
+Yv = torch.tensor(1 / (1 + np.exp(-np.clip(value / Kr, -50, 50))), dtype=torch.float32, device=dev)
 PS = torch.tensor(ps, device=dev); SG = torch.tensor(sgn, device=dev)
 dec = torch.tensor(result != 0, device=dev)
 
@@ -123,7 +127,7 @@ def report(tag):
     print(f"{tag}: " + " | ".join(out) + f" | rank held-pairs {ranking(v, is_hp):.4f}", flush=True)
     return v
 
-print(f"{len(X)} rows, K {K:.1f}; train {is_tr.sum()} val-games {is_vin.sum()} held-pairs {is_hp.sum()}")
+print(f"{len(X)} rows, K {K:.1f} (per set: {', '.join(f'{v_:.1f}' for v_ in Ks.values())}); train {is_tr.sum()} val-games {is_vin.sum()} held-pairs {is_hp.sum()}")
 print(f"baselines rank held-pairs: static {ranking(static, is_hp):.4f} search {ranking(value, is_hp):.4f}")
 B = 8192
 for ep in range(args.epochs):
