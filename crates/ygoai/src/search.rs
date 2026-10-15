@@ -768,33 +768,166 @@ fn dominant(mine: &[(u32, i32, i32)], theirs: &[(u32, i32, i32)]) -> usize {
     mine.iter().filter(|&&(pos, a, _)| pos & POS_FACEUP_ATTACK != 0 && a > best).count()
 }
 
+/// One side read straight from the duel, with the values the location queries give
+/// (`side_features`, then `side_features2` below), and its monsters as (position, ATK, DEF).
+struct SideScan {
+    base: [f64; 16],
+    more: [f64; 14],
+    mons: Vec<(u32, i32, i32)>,
+}
+
+/// `SideScan` of player `p`: the queries' values without building and parsing their buffers (the
+/// duel is marked as querying meanwhile, as a query does).
+fn side_scan(d: &mut Duel, p: u32) -> SideScan {
+    const EXTRA_TYPES: u32 = TYPE_FUSION | TYPE_SYNCHRO | TYPE_XYZ | TYPE_LINK;
+    let was = d.querying;
+    d.querying = true;
+    let pl = p as usize;
+    let mut mons = Vec::with_capacity(7);
+    let (mut up, mut atk_up, mut atk_sum, mut best) = (0, 0, 0i64, 0i32);
+    let (mut lv_sum, mut lv_max, mut high, mut extra, mut overlays, mut counters, mut emz) = (0u32, 0u32, 0, 0, 0, 0u32, 0);
+    let count = |cs: &[(u16, [u16; 2])]| cs.iter().map(|(_, v)| v[0] as u32 + v[1] as u32).sum::<u32>();
+    for i in 0..d.player[pl].list_mzone.len() {
+        let Some(c) = d.player[pl].list_mzone[i] else { continue };
+        let pos = c.get_info_location(d).position;
+        let (atk, def) = (c.get_attack(d), c.get_defense(d));
+        mons.push((pos, atk, def));
+        if i >= 5 {
+            emz += 1;
+        }
+        overlays += d.card(c).xyz_materials.len();
+        counters += count(&d.card(c).counters);
+        if pos & POS_FACEUP != 0 {
+            up += 1;
+            let attacking = pos & POS_ATTACK != 0;
+            best = best.max(if attacking { atk } else { def });
+            if attacking {
+                atk_up += 1;
+                atk_sum += atk as i64;
+            }
+            let level = c.get_level(d);
+            let stars = if level > 0 { level } else { c.get_rank(d) };
+            (lv_sum, lv_max) = (lv_sum + stars, lv_max.max(stars));
+            high += (stars >= 5) as u32;
+            extra += (c.get_type(d, None, 0, 2) & EXTRA_TYPES != 0) as u32;
+        }
+    }
+    let (mut down, mut n_back, mut field, mut equips) = (0, 0, false, 0);
+    for i in 0..d.player[pl].list_szone.len() {
+        let Some(c) = d.player[pl].list_szone[i] else { continue };
+        if i < 5 {
+            n_back += 1;
+            down += (c.get_info_location(d).position & POS_FACEDOWN != 0) as u32;
+        }
+        field |= i == 5;
+        equips += d.card(c).equiping_target.is_some() as u32;
+        counters += count(&d.card(c).counters);
+    }
+    // (monsters, spells and traps of a pile, by their current types)
+    let kinds = |d: &mut Duel, pile: fn(&ygo_core::duel::PlayerInfo) -> &Vec<CardId>| -> [f64; 3] {
+        let mut k = [0.0; 3];
+        for i in 0..pile(&d.player[pl]).len() {
+            let t = pile(&d.player[pl])[i].get_type(d, None, 0, 2);
+            for (j, flag) in [TYPE_MONSTER, TYPE_SPELL, TYPE_TRAP].into_iter().enumerate() {
+                k[j] += (t & flag != 0) as u8 as f64;
+            }
+        }
+        k
+    };
+    let hand = kinds(d, |p| &p.list_hand);
+    let grave = kinds(d, |p| &p.list_grave);
+    let removed = kinds(d, |p| &p.list_remove);
+    d.querying = was;
+    let lp = d.ext_get_info()[3 + pl] as i32;
+    let pl_ = &d.player[pl];
+    let deck = pl_.list_main.len() as f64;
+    let base = [
+        lp as f64 / 1000.0,
+        pl_.list_hand.len() as f64,
+        deck / 10.0,
+        pl_.list_grave.len() as f64 / 10.0,
+        pl_.list_remove.len() as f64 / 10.0,
+        pl_.list_extra.len() as f64 / 10.0,
+        mons.len() as f64,
+        up as f64,
+        atk_up as f64,
+        (mons.len() - up) as f64,
+        atk_sum as f64 / 1000.0,
+        best as f64 / 1000.0,
+        down as f64,
+        (n_back - down) as f64,
+        field as u8 as f64,
+        (deck <= 2.0) as u8 as f64,
+    ];
+    let more = [
+        lv_sum as f64 / 10.0,
+        lv_max as f64 / 10.0,
+        high as f64,
+        extra as f64,
+        hand[0],
+        hand[1],
+        hand[2],
+        grave[0] / 10.0,
+        (grave[1] + grave[2]) / 10.0,
+        removed[0] / 10.0,
+        overlays as f64,
+        equips as f64,
+        counters as f64 / 10.0,
+        emz as f64,
+    ];
+    SideScan { base, more, mons }
+}
+
 /// The features of the mover's view (the player whose decision is pending; scripts/train_eval.py
 /// mover features): the mover's side (`side_features`, then its dominant monsters), the
 /// opponent's the same way, whether the mover is the turn player, the phase group, the prompt
-/// type (none without a prompt) and the turn / 10 (at most 3).
-pub fn mover_features(d: &mut Duel, mover: u32, prompt: Option<&Msg>) -> Vec<f64> {
-    let mons: Vec<Vec<(u32, i32, i32)>> = [mover, 1 - mover]
-        .iter()
-        .map(|&p| {
-            parse_location_query(&query(d, p, LOCATION_MZONE, MZONE_QUERY))
-                .into_iter()
-                .flatten()
-                .map(|c| (c.position.unwrap_or(0), c.attack.unwrap_or(0), c.defense.unwrap_or(0)))
-                .collect()
-        })
-        .collect();
-    let mut f = Vec::with_capacity(49);
-    f.extend(side_features(d, mover));
-    f.push(dominant(&mons[0], &mons[1]) as f64);
-    f.extend(side_features(d, 1 - mover));
-    f.push(dominant(&mons[1], &mons[0]) as f64);
+/// type (none without a prompt) and the turn / 10 (at most 3). With `more` (`mover2`) then: the
+/// mover's and the opponent's further terms (their face-up monsters' Levels (Ranks for Xyz)
+/// summed / 10 and the most / 10, those of Level 5 or more, their Extra Deck monsters on the
+/// field; monsters, spells and traps in hand; monsters and spells/traps in the GY / 10; banished
+/// monsters / 10; Xyz materials, equipped cards and counters on the field; the Extra Monster
+/// Zones held), the pending prompt's options (Normal Summons, Special Summons, repositions,
+/// monster Sets, spell/trap Sets and activations of an idle command; attacks and activations of a
+/// battle command; the effects of a chain window) and the chain's length.
+fn mover_view(d: &mut Duel, mover: u32, prompt: Option<&Msg>, more: bool) -> Vec<f64> {
+    let (a, b) = (side_scan(d, mover), side_scan(d, 1 - mover));
+    let mut f = Vec::with_capacity(87);
+    f.extend(a.base);
+    f.push(dominant(&a.mons, &b.mons) as f64);
+    f.extend(b.base);
+    f.push(dominant(&b.mons, &a.mons) as f64);
     let info = d.ext_get_info();
     f.push((info[1] == mover) as u8 as f64);
     f.extend(MOVER_PHASES.iter().map(|g| g.contains(&info[2]) as u8 as f64));
     let name = prompt.map(|m| m.name());
     f.extend(MOVER_PROMPTS.iter().map(|p| (name == Some(*p)) as u8 as f64));
     f.push(info[0].min(30) as f64 / 10.0);
+    if more {
+        f.extend(a.more);
+        f.extend(b.more);
+        let mut m = [0usize; 9];
+        match prompt {
+            Some(Msg::SelectIdlecmd { summonable, spsummonable, repositionable, msetable, ssetable, activatable, .. }) => {
+                m[..6].copy_from_slice(&[summonable.len(), spsummonable.len(), repositionable.len(), msetable.len(), ssetable.len(), activatable.len()]);
+            }
+            Some(Msg::SelectBattlecmd { attackable, activatable, .. }) => (m[6], m[7]) = (attackable.len(), activatable.len()),
+            Some(Msg::SelectChain { chains, .. }) => m[8] = chains.len(),
+            _ => {}
+        }
+        f.extend(m.iter().map(|&x| x as f64));
+        f.push(d.core.current_chain.len() as f64);
+    }
     f
+}
+
+/// The 49 features of the `mover` evaluation (see `mover_view`).
+pub fn mover_features(d: &mut Duel, mover: u32, prompt: Option<&Msg>) -> Vec<f64> {
+    mover_view(d, mover, prompt, false)
+}
+
+/// The 87 features of the `mover2` evaluation (see `mover_view`).
+pub fn mover_features2(d: &mut Duel, mover: u32, prompt: Option<&Msg>) -> Vec<f64> {
+    mover_view(d, mover, prompt, true)
 }
 
 /// A trained evaluation (scripts/train_eval.py's export): linear on the raw features, or the
@@ -822,10 +955,10 @@ pub struct LearnedEval {
 
 impl LearnedEval {
     pub fn value(&self, d: &mut Duel, me: u32, prompt: Option<&Msg>) -> f64 {
-        if self.features == "mover" {
+        if self.features == "mover" || self.features == "mover2" {
             // (the mover's value, an unconstrained MLP: plus for me, minus for the opponent)
             let mover = prompt.and_then(|m| m.player()).unwrap_or(me);
-            let x = mover_features(d, mover, prompt);
+            let x = if self.features == "mover" { mover_features(d, mover, prompt) } else { mover_features2(d, mover, prompt) };
             let z: Vec<f64> = x.iter().zip(&self.mu).zip(&self.scale).map(|((a, m), s)| (a - m) / s).collect();
             let v = self.b2
                 + self.w1.iter().zip(&self.b1).zip(&self.w2).map(|((row, b), w2)| w2 * (row.iter().zip(&z).map(|(w, x)| w * x).sum::<f64>() + b).max(0.0)).sum::<f64>();

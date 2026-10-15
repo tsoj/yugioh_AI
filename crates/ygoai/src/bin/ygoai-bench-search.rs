@@ -43,6 +43,9 @@ fn main() {
     let stats_path = std::env::var("YGOAI_STATS").ok();
     let mut stats = NodeStats::default();
     let skip: usize = std::env::var("YGOAI_SKIP").map_or(0, |s| s.parse().unwrap());
+    // ($YGOAI_TIME_EVAL: the evaluation's time per call, 1000 calls at each searched position)
+    let time_eval = std::env::var_os("YGOAI_TIME_EVAL").is_some();
+    let (mut eval_secs, mut eval_calls) = (0.0, 0u64);
     let mut best_out = std::env::var("YGOAI_BEST").ok().map(|p| std::io::BufWriter::new(std::fs::File::create(p).expect("best file")));
     for (oi, opening) in book.iter().enumerate().take(n).skip(skip) {
         let mut si = 0;
@@ -69,6 +72,16 @@ fn main() {
             let player = p.player().unwrap();
             let cands = candidates(&p);
             if player == 0 && is_searched(&p) && cands.len() > 1 {
+                if time_eval {
+                    let t = Instant::now();
+                    let mut acc = 0.0;
+                    for _ in 0..1000 {
+                        acc += ygoai::search::evaluate_at(&mut duel, 0, Some(&p));
+                    }
+                    eval_secs += t.elapsed().as_secs_f64();
+                    eval_calls += 1000;
+                    std::hint::black_box(acc);
+                }
                 ab.prepare();
                 let before = ab.nodes;
                 let (bp, bh, bb) = (ab.tt_probes, ab.tt_hits, ab.broken);
@@ -119,6 +132,9 @@ fn main() {
     }
     if let Some(path) = stats_path {
         print_stats(&stats, &path);
+    }
+    if time_eval {
+        println!("evaluation: {:.2} us per call ({eval_calls} calls)", eval_secs / eval_calls as f64 * 1e6);
     }
     println!(
         "{searches} searches, {nodes} nodes in {secs:.1} s: {:.0} nodes/s, mean depth {:.2}; TT hits {} of {} probes; {broken} broken lines; checksum {checksum:016x}",
