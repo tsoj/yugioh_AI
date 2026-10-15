@@ -22,6 +22,7 @@ ap.add_argument("--wd", type=float, default=0.0)
 ap.add_argument("--sigma", type=float, default=1.0, help="prior sd of the pair term (logits)")
 ap.add_argument("--nopair", action="store_true")
 ap.add_argument("--held", type=int, default=50, help="deck pairs held out for validation")
+ap.add_argument("--held-below", type=int, default=0, help="choose them among the pairs below this one (0: all)")
 ap.add_argument("--drop", default="", help="feature indices to zero, comma list")
 ap.add_argument("-o", "--output")
 ap.add_argument("--save-v", help="npz of the final v on all rows (for paired comparisons)")
@@ -51,7 +52,7 @@ def fit_k(v, r):
 K = fit_k(value, result)
 
 rng = np.random.default_rng(0)
-held_pairs = set(rng.choice(np.unique(pair), args.held, replace=False).tolist())
+held_pairs = set(rng.choice(np.unique(pair[pair < args.held_below] if args.held_below else pair), args.held, replace=False).tolist())
 is_hp = np.isin(pair, list(held_pairs))
 is_vin = ~is_hp & (k >= 18)
 is_tr = ~is_hp & ~is_vin
