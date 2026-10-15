@@ -27,29 +27,16 @@ See `docs/search-decisions.md` for what is and isn't searched.
   - [ ] cancel in selections, and unselecting in `SelectUnselectCard`
 - [ ] Widen the capped candidate lists once ordering and reductions can take it:
       `CARD_WIDTH`, `MAX_CHILDREN`, `MULTI_CARDS`, `TRIBUTE_WIDTH`, `SUM_WIDTH`, `UNSELECT_WIDTH`.
-- [ ] **Next, before adding more decision types: budget search.** Replace depth by a node
-      budget: an approximate number of nodes the subtree may use. A node costs 1 node of it, and
-      it gives each child, before searching, the share it expects that child to need: the
-      expected cost includes the chance of a cutoff before a move (by move number) and of a
-      re-search. These probabilities come from online statistics by node type (prompt, width) and
-      from the TT (an entry, its flag, a TT move). Iterative deepening grows the root budget.
-      Not a hard limit; a soft allocation in expectation.
-  - [x] Measure the widths (done: about 45% of the nodes are 2-way; `YGOAI_STATS` in
-        `ygoai-bench-search`).
-  - [ ] Measure cutoffs by move index, TT state and prompt; LMR re-search rates; subtree sizes
-        by depth (`YGOAI_STATS`).
-  - [ ] Implement the budget search as a feature; SPRT vs `lmr`.
-  - [ ] LMR in budget terms, calibrated to the statistics: skewed shares when the node is
-        confident (a TT move, a cut node by the TT flag), near uniform when only the static
-        ordering is known. Adapt Stockfish's log(depth) * log(move number) reduction (in budget
-        terms: shares like (i+1)^-a, with a growing with log of the budget and with confidence).
-  - [ ] Retest the decision features (`unselect` etc.) on top of it (`unselect` failed with one
-        ply per node: H0, -19.8 Elo, 492 games).
+- [x] Budget search (node budgets instead of depth, shares by online cutoff statistics): every
+      variant failed or was stopped near zero (runs/sprt/results.jsonl, 297c001..f8ed04f); removed
+      in the search/ split. `YGOAI_STATS` (widths, cutoffs, LMR re-searches, subtree sizes) stays.
+  - [ ] Retest the decision features (`unselect` etc.) on the current search (`unselect` failed
+        with one ply per node: H0, -19.8 Elo, 492 games).
 - [x] `MAX_DEPTH` was 12: the depth search (`lmr`) stopped there whatever its time (mean depth
       10.8 already at 3000 nodes). Now 100, a safety bound only (SPRT vs 12 stopped at 1420 games:
       +2.9 +/- 13.0, LLR -0.47).
-- [ ] Try skipping "tactical" decisions at low budget: answer some decisions with the heuristic
-      when the budget is small, as the horizon does now for the inner decisions. Which ones count
+- [ ] Try skipping "tactical" decisions at low depth: answer some decisions with the heuristic
+      when little depth is left, as the horizon does now for the inner decisions. Which ones count
       as "tactical" is open: e.g. zones, positions, chain responses that do not change the eval,
       battle details.
 - [ ] Better move ordering for the new decisions, e.g. history by decision type and card. The
@@ -60,7 +47,9 @@ See `docs/search-decisions.md` for what is and isn't searched.
 Already in: iterative deepening, heuristic move ordering, TT with TT move and bounds,
 butterfly-style history, hard/soft time bounds, LMR (default since f783119).
 
-- [ ] Queued retests vs `lmr`: `lmr_noresearch` (as a replacement for LMR), `lmr,pv_ext`.
+- [x] Search laid out like a chess engine (Nalwald/Stockfish names): crates/ygoai/src/search/
+      (search, tt, history, movegen, movepick, evaluate, params). Removed with it: the node-budget
+      search, `lmr_noresearch`, `rfp_kind`, `pv_ext` (failed or near zero; git history has them).
 - [ ] LMR the chess way: a log formula over depth and move number, adjusted by history,
       PV/non-PV and cut nodes; with PVS, a null-window reduced search.
 - [ ] Not tried yet (from the chess progression in memory): aspiration windows, null move

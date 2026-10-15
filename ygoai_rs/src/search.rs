@@ -1,4 +1,4 @@
-//! The searches for Python's agents: alpha-beta (crates/ygoai/src/search.rs, AlphaBetaAgent) and
+//! The searches for Python's agents: alpha-beta (crates/ygoai/src/search/, AlphaBetaAgent) and
 //! plain UCT (crates/ygoai/src/mcts.rs, MctsAgent).
 
 use pyo3::exceptions::PyValueError;

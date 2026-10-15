@@ -105,26 +105,10 @@ fn main() {
             duel.ocg_set_response(&ygoai::actions::encode(&p, &resp).unwrap());
             prompt = Some(p);
         }
-        if std::env::var_os("YGOAI_DUMP_BEST").is_some() {
-            let b = ab.best_at();
-            for (r, row) in b.chunks(12).enumerate() {
-                let tot: f64 = row.iter().sum();
-                if tot >= 50.0 {
-                    let q: Vec<String> = row.iter().take(6).map(|x| format!("{:.2}", x / tot)).collect();
-                    println!("type {} tt {} budget {}: {tot:>6} {}", r / 9, (r / 3) % 3, r % 3, q.join(" "));
-                }
-            }
-        }
         if let Some(st) = ab.stats.take() {
             merge(&mut stats.widths, st.widths);
             merge(&mut stats.lmr, st.lmr);
             merge(&mut stats.subtree, st.subtree);
-            for (k, v) in st.calib {
-                let e = stats.calib.entry(k).or_default();
-                for j in 0..3 {
-                    e[j] += v[j];
-                }
-            }
             for (k, n) in st.cuts {
                 *stats.cuts.entry(k).or_default() += n;
             }
@@ -201,30 +185,6 @@ fn print_stats(st: &NodeStats, path: &str) {
     }
     for (i, [n, re]) in by_i {
         println!("  move {:>2}: {:>9} reduced, {:>5.1}% re-searched", i + 1, n, re as f64 / n as f64 * 100.0);
-    }
-    if !st.calib.is_empty() {
-        println!("\nbudget: used / given, by TT state and depth (all prompts)");
-        let mut by: BTreeMap<(u8, i8), [f64; 3]> = BTreeMap::new();
-        for (&(_, tt, d), v) in &st.calib {
-            let e = by.entry((tt, d)).or_default();
-            for j in 0..3 {
-                e[j] += v[j];
-            }
-        }
-        for ((tt, d), [n, given, used]) in by {
-            println!("  {:<9} depth {d:>2}: {n:>9} nodes, mean budget {:>9.1}, used {:>9.1}, ratio {:.2}", TT[tt as usize], given / n, used / n, used / given);
-        }
-        println!("  by prompt:");
-        let mut by: BTreeMap<&str, [f64; 3]> = BTreeMap::new();
-        for (&(label, _, _), v) in &st.calib {
-            let e = by.entry(label).or_default();
-            for j in 0..3 {
-                e[j] += v[j];
-            }
-        }
-        for (label, [n, given, used]) in by {
-            println!("  {label:<10} {n:>9} nodes, ratio {:.2}", used / given);
-        }
     }
     println!("\nmean subtree size (nodes) by depth (all prompts)");
     let mut by_d: BTreeMap<i8, [u64; 2]> = BTreeMap::new();

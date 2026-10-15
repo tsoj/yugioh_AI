@@ -30,7 +30,7 @@ import numpy as np
 import torch
 
 EVAL_NAMES = ["lp", "monsters", "dominant", "hand", "backrow", "deck_out"]
-# (the search's weights, crates/ygoai/src/search.rs EVAL_WEIGHTS)
+# (the search's weights, crates/ygoai/src/search/evaluate.rs EVAL_WEIGHTS)
 EVAL_WEIGHTS = [1 / 100, 4.3, 17.6, 9.1, 5.1, 20.0]
 
 

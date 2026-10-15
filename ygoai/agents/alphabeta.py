@@ -1,7 +1,7 @@
 """Alpha-beta search with iterative deepening on the reconstructed belief duel.
 
 The duel comes from the belief replay as for belief_mc (same reconstruction, time budget and
-fallbacks); only the choice differs. The search itself runs in Rust (crates/ygoai/src/search.rs,
+fallbacks); only the choice differs. The search itself runs in Rust (crates/ygoai/src/search/,
 ygoai_rs.AlphaBetaSearch), on copies of the duel:
 
 - Plies are the decisions of either player at command prompts, chain windows,
@@ -35,7 +35,7 @@ from .belief_mc import BeliefMCAgent, candidates
 from .heuristic_agents import HeuristicAgent
 
 # time: a soft bound per searched decision (remaining / MOVES_TO_GO + increment); the Rust search
-# applies the same bounds as before (crates/ygoai/src/search.rs)
+# applies the same bounds as before (crates/ygoai/src/search/)
 MOVES_TO_GO = 20
 MAX_AUTO_STEPS = 300  # (prompts answered by the rules between two plies)
 

@@ -1,6 +1,6 @@
 # Which decisions the alpha-beta search makes
 
-The search (`crates/ygoai/src/search.rs`) branches only on some of the core's prompts. Every
+The search (`crates/ygoai/src/search/`) branches only on some of the core's prompts. Every
 other prompt along a line is answered by the rules' player, the heuristic in
 `crates/ygoai/src/heuristic.rs`, inside the same ply. In the search a move like "Tribute Summon
 X" is then one branch, and the heuristic picks the tributes, the position and the zone.
