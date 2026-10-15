@@ -69,7 +69,7 @@ if args.model == "linear":
 else:
     net = torch.nn.Sequential(torch.nn.Linear(n, args.hidden), torch.nn.ReLU(), torch.nn.Linear(args.hidden, 1))
 net = net.to(dev)
-a = torch.zeros(1000, device=dev, requires_grad=True)
+a = torch.zeros(int(ps.max()) + 1, device=dev, requires_grad=True)
 opt = torch.optim.Adam([{"params": net.parameters(), "weight_decay": args.wd}, {"params": [a]}], lr=args.lr)
 tr_idx = torch.tensor(np.nonzero(is_tr)[0], device=dev)
 N = len(tr_idx)
