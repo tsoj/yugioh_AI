@@ -158,9 +158,9 @@ pub fn passrisk_lp() -> f64 {
 /// The features that passed their SPRTs (LMR: +19.1 +/- 14.9, LLR +3.01, 1204 games, 2026-10-13),
 /// and `predict`, taken without a pass (+3.8 +/- 11.7, LLR -0.35 at 1760 games, 2026-10-14) for
 /// the room it leaves the time management; `futility` (+19.4 +/- 13.5, LLR +3.03, 1364 games,
-/// 2026-10-16). (The node-budget search, `lmr_noresearch`, `rfp_kind`
+/// 2026-10-16); `lmrzw` (+11.1 +/- 8.8, LLR +3.05, 3074 games at 1000 nodes, 2026-10-16). (The node-budget search, `lmr_noresearch`, `rfp_kind`
 /// and `pv_ext` were removed after failing their tests: git history before the search/ split.)
-pub const DEFAULT_FEATURES: &str = "lmr,predict,futility";
+pub const DEFAULT_FEATURES: &str = "lmr,predict,futility,lmrzw";
 
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Features {
