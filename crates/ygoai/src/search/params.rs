@@ -100,6 +100,15 @@ pub fn deckpick_decks() -> usize {
     *N.get_or_init(|| std::env::var("YGOAI_DECKPICK").ok().and_then(|s| s.parse().ok()).unwrap_or(DECKPICK_DECKS).max(1))
 }
 
+/// `deckpick`: how much less deep the decks after the first are searched (again at the full depth
+/// if they are worse), $YGOAI_DECKPICK_R to override
+pub const DECKPICK_REDUCTION: i32 = 0;
+
+pub fn deckpick_reduction() -> i32 {
+    static R: std::sync::OnceLock<i32> = std::sync::OnceLock::new();
+    *R.get_or_init(|| std::env::var("YGOAI_DECKPICK_R").ok().and_then(|s| s.parse().ok()).unwrap_or(DECKPICK_REDUCTION).max(0))
+}
+
 pub const DEFAULT_FEATURES: &str = "lmr,predict,futility";
 
 #[derive(Clone, Copy, Default, Debug)]

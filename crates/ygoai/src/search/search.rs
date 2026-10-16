@@ -391,14 +391,19 @@ impl SearchState<'_> {
 
     /// A root move's value: its worst over the decks (one deck: its value), the deck that was worst
     /// for it searched first; a deck that takes it to `alpha` or below refutes it (the others
-    /// are not searched).
+    /// are not searched). The decks after the first are searched `deckpick_reduction()` plies less
+    /// deep, and again at the full depth if that finds them worse.
     #[allow(clippy::too_many_arguments)]
     fn search_root_move(&mut self, duels: &mut [Duel], order: &mut [usize], prompt: &Msg, mv: &Response, alpha: f64, beta: f64, depth: i32) -> Result<f64, Stop> {
         let mut value = f64::INFINITY;
         for i in 0..order.len() {
             let k = order[i];
             self.deck_key = (k as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-            let v = self.search_move(&mut duels[k], prompt, mv, alpha, beta.min(value), depth, 1, false);
+            let reduced = if i > 0 { (depth - deckpick_reduction()).max(0) } else { depth };
+            let mut v = self.search_move(&mut duels[k], prompt, mv, alpha, beta.min(value), reduced, 1, false);
+            if reduced < depth && matches!(v, Ok(x) if x < value) {
+                v = self.search_move(&mut duels[k], prompt, mv, alpha, beta.min(value), depth, 1, false);
+            }
             self.deck_key = 0;
             let v = v?;
             if v < value {
