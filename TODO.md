@@ -3,6 +3,18 @@
 Planned work, roughly in order. SPRTs run at 30+0.3, SPRT [0, 15], with book
 `runs/books/match1.jsonl`, and are read by LLR. Results go to `runs/sprt/results.jsonl`.
 
+## Next (user's order, 2026-10-16)
+
+1. First-child extension at nodes with 1 or 2 children (TT move), then different card guesses per
+   iteration (both below).
+2. A new data round with the current engine (labels from match-style records), train the same
+   architecture (MLP16, mover2), SPRT it.
+3. More input features.
+4. Enough diverse openings for tests and datagen: match1.jsonl has 19996 lines (15535 pass
+   book_min 2); SPRTs draw from the first 10000 (shuffled); the eval data used deck pairs from
+   lines 10000-10999 (pairs500x20*.jsonl). Keep test and training openings apart and check how
+   often SPRTs reuse openings (and decks) the nets were trained on.
+
 ## Running now
 
 - [ ] Self-play data with repeated deck pairs (500 pairs x 20 games, both seat orders):
