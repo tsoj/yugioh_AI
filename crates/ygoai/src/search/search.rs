@@ -586,7 +586,9 @@ impl SearchState<'_> {
             // less; the full depth after all if it raises alpha
             if f.lmr && depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNTER {
                 let r = if f.lmrlog { lmr_reduction(depth, i) } else { 1 };
-                let reduced = self.search_move(duel, prompt, mv, alpha, beta, (new_depth - r).max(0), height + 1, false)?;
+                // (`lmrzw`: with a null window, as it only has to show that the move does not raise alpha)
+                let reduced_beta = if f.lmrzw && alpha.is_finite() { alpha + NULL_WINDOW } else { beta };
+                let reduced = self.search_move(duel, prompt, mv, alpha, reduced_beta, (new_depth - r).max(0), height + 1, false)?;
                 if reduced <= alpha {
                     value = Some(reduced);
                 }

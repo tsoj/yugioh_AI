@@ -151,7 +151,7 @@ pub fn passrisk_lp() -> f64 {
 /// materials), `position`, `place` (the zone).
 /// `narrowext`: at a node with only one or two moves, the TT move is searched a ply deeper.
 /// `lmrlog`: LMR by `lmr_reduction` instead of one ply. `rfpall`: reverse futility pruning at all
-/// nodes below the root (`rfp_params`).
+/// nodes below the root (`rfp_params`). `lmrzw`: the reduced search of LMR with a null window.
 /// `predict`: with a clock, the next iteration starts only if it is expected to end within the
 /// time budget (by this iteration's time and the depth's node growth, learned across searches)
 /// instead of while less than half the budget is used.
@@ -186,6 +186,7 @@ pub struct Features {
     pub passrisk: bool,
     pub lmrlog: bool,
     pub rfpall: bool,
+    pub lmrzw: bool,
 }
 
 impl Features {
@@ -212,6 +213,7 @@ impl Features {
                 "passrisk" => f.passrisk = true,
                 "lmrlog" => f.lmrlog = true,
                 "rfpall" => f.rfpall = true,
+                "lmrzw" => f.lmrzw = true,
                 _ => panic!("YGOAI_SEARCH: unknown feature {name}"),
             }
         }
