@@ -139,7 +139,7 @@ impl AlphaBeta {
         let turn_player = duel.ext_get_info()[1];
         let stop_time = p.budget.map(|b| start_time + std::time::Duration::from_secs_f64(b.max((HARD_FACTOR * b).min(HARD_SHARE * p.clock_remaining))));
         let max_nodes = p.max_nodes.map(|n| self.nodes + n);
-        let mut state = SearchState { tables: self, policies, stop_time, max_nodes, features: Features::from_env() };
+        let mut state = SearchState { tables: self, policies, stop_time, max_nodes, features: Features::from_env(), root_depth: 0 };
         let card_order = state.rules_card_order(root_prompt);
         let preference = ordered(root_prompt, turn_player, card_order.as_deref());
         let mut move_order: Vec<usize> = (0..root_moves.len()).collect();
@@ -165,6 +165,8 @@ struct SearchState<'a> {
     /// (in the count of `tables.nodes`)
     max_nodes: Option<u64>,
     features: Features,
+    /// (the iteration's depth)
+    root_depth: i32,
 }
 
 /// Where `do_move` arrived.
@@ -217,6 +219,7 @@ impl SearchState<'_> {
         // (the root's moves are searched on copies of it: it stays as it is)
         let mut root_duel = duel.clone();
         for depth in 1..=max_depth {
+            self.root_depth = depth;
             if let Some(b) = budget
                 && depth > 1
             {
@@ -390,7 +393,10 @@ impl SearchState<'_> {
 
             // (the node's last search may use its position: nothing needs it afterwards)
             let last = i == move_order.len() - 1;
-            let new_depth = depth - 1;
+            // extension (`narrowext`): the TT move of a node with only one or two moves, a ply
+            // deeper (not past twice the iteration's depth, so that a line of such nodes ends)
+            let extend = f.narrowext && i == 0 && tt_move == Some(m) && move_order.len() <= NARROW_EXT_MAX_CHILDREN && height < 2 * self.root_depth;
+            let new_depth = depth - 1 + extend as i32;
             let mut value = None;
 
             // late move reduction: a late move, unlikely the best by the move ordering, one ply

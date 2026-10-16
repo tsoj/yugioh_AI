@@ -69,6 +69,8 @@ pub fn futility_params() -> (f64, f64, i32) {
         Err(_) => (FUTILITY_MARGIN, FUTILITY_MARGIN_PER_PLY, FUTILITY_MAX_DEPTH),
     })
 }
+/// (`narrowext`: the nodes with at most this many moves extend their TT move)
+pub const NARROW_EXT_MAX_CHILDREN: usize = 2;
 /// (quiescence plies past the nominal depth)
 pub const MAX_QUIESCE_PLY: i32 = 6;
 
@@ -80,6 +82,7 @@ pub const MAX_QUIESCE_PLY: i32 = 6;
 /// first few choices): `unselect` (card by card selections, e.g. most materials), `tribute`,
 /// `multicard` (selections of several cards), `sum` (selections by a sum: Synchro and Ritual
 /// materials), `position`, `place` (the zone).
+/// `narrowext`: at a node with only one or two moves, the TT move is searched a ply deeper.
 /// `predict`: with a clock, the next iteration starts only if it is expected to end within the
 /// time budget (by this iteration's time and the depth's node growth, learned across searches)
 /// instead of while less than half the budget is used.
@@ -105,6 +108,7 @@ pub struct Features {
     pub position: bool,
     pub place: bool,
     pub predict: bool,
+    pub narrowext: bool,
 }
 
 impl Features {
@@ -125,6 +129,7 @@ impl Features {
                 "position" => f.position = true,
                 "place" => f.place = true,
                 "predict" => f.predict = true,
+                "narrowext" => f.narrowext = true,
                 _ => panic!("YGOAI_SEARCH: unknown feature {name}"),
             }
         }

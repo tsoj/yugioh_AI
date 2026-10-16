@@ -86,7 +86,9 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
     (1a362d951150a90d with `hand`), mean depth 12.71 at 3000 nodes (was 10.31).
   - [ ] Tune further (margins, max depth, per move kind) now that the units are LP.
 - [ ] Extend the first child when it is the TT move and the node has only 1 or 2 children: by 1 ply,
-      or by a fraction of a ply (e.g. 0.5; needs fractional depth).
+      or by a fraction of a ply (e.g. 0.5; needs fractional depth). `narrowext` (1 ply, up to
+      height 2 * the iteration's depth): mean depth at 3000 nodes 12.71 -> 10.13; SPRT vs the
+      default running.
 - [ ] qsearch, if retried: a TT in quiescence, cheaper chain windows (pass plus the best few
       answers), pruning of hopeless attacks.
 - Retested at the Rust speed and stopped near zero: PVS (H0), qsearch, futility, conthist,
