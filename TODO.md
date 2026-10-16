@@ -101,6 +101,21 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       Feature `resample` (c0342ea): the guessed cards still hidden get codes drawn from the deck
       model (presence-weighted, copies from the count model) within the observations'
       requirements, ~1.7 ms per draw; SPRT vs the default running. TT and history unchanged.
+      Stopped (2026-10-16): 30+0.3 at 480 games -14.5 +/- 22.7 (LLR -1.46); 1000 nodes at 960
+      games -5.4 +/- 16.6 (LLR -1.46); T = 0.3 (`YGOAI_RESAMPLE_T`, 28ddb41) at 1000 nodes, 2300
+      games +3.2 +/- 10.7 (LLR -0.62).
+- [x] `deckpick` (73d477b): after the root's move the opponent picks the worst of 3 guessed decks
+      (the reconstruction's + 2 draws at T = 0.3), a pseudo-move with cutoffs, the deck in the TT
+      key; 2 plies less depth at 1000 nodes (10.0 -> 8.0). H0 at 1000 nodes: -5.0 +/- 11.3, LLR
+      -3.00 at 2006 games.
+- Measurements (2026-10-16): `ygoai-tree-compare` (50 positions, 3000 nodes): trees under
+  different guesses share ~21% of their edges (68% one ply below the root, 8% at height 12);
+  on shared edges 92% same view, ~65% same value; 40% of edges come after an unknown card was
+  revealed; root move = the truth's 78-80%. `ygoai-guess-scaling` (508 positions, reference 50000
+  nodes with the true cards): the reference's move picked at 300 / 1000 / 3000 / 10000 nodes:
+  true cards 67.9 / 69.5 / 74.8 / 81.3%, drawn decks 65.0 / 66.0 / 68.0 / 70.6%, the likeliest deck
+  64.0 / 65.0 / 65.2 / 70.3% (+-2): depth helps on guesses about half as much; the likeliest deck
+  is no better than draws.
   - [ ] If it fails, or after: a TT key without the guessed cards' codes while they are hidden
         (zone cards' codes and stats, the codes in the opponent's prompts), so that entries carry
         over between guesses. History: keep the codes (an entry for a card matters in every
