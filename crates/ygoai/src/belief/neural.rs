@@ -14,6 +14,7 @@ use std::sync::{Mutex, OnceLock};
 use crate::belief::completion::{Completion, CorpusCompletion, VanillaCompletion, canonical_code, card, fits_need};
 use crate::belief::script_index::{GlobalKey, global_keys, win_condition_codes};
 use crate::belief::tracker::Need;
+use crate::pyrandom::PyRandom;
 
 /// Rounds of the search for the number of distinct cards (complete_deck's max_iter)
 const MAX_ITER: usize = 60;
@@ -34,7 +35,11 @@ pub struct DeckModels {
     index: HashMap<u32, usize>,
     is_extra: Vec<bool>,
     avg_copies: f64,
+    /// (`sample_deck`: the last presence vector, by the visible counts and the deck size)
+    last_presence: Mutex<Option<PresenceKey>>,
 }
+
+type PresenceKey = (Vec<i64>, i64, std::sync::Arc<Vec<f32>>);
 
 impl DeckModels {
     /// The models and their vocabulary, as built into crates/deckmodels.
@@ -42,7 +47,7 @@ impl DeckModels {
         let models = deckmodels::Models::load()?;
         let meta: Meta = serde_json::from_str(deckmodels::meta_json().ok_or("no deck models")?).map_err(|e| e.to_string())?;
         let index = meta.codes.iter().enumerate().map(|(i, &c)| (c, i)).collect();
-        Ok(DeckModels { models, codes: meta.codes, index, is_extra: meta.is_extra, avg_copies: meta.avg_copies })
+        Ok(DeckModels { models, codes: meta.codes, index, is_extra: meta.is_extra, avg_copies: meta.avg_copies, last_presence: Mutex::new(None) })
     }
 
     pub fn vocab_len(&self) -> usize {
@@ -208,6 +213,105 @@ impl DeckModels {
         Ok((expand(&main), expand(&extra)))
     }
 
+    /// P(1, 2, 3 copies) per card of the set (vocabulary indices).
+    fn count_probs(&self, set: &[usize]) -> Vec<[f64; 3]> {
+        if set.is_empty() {
+            return vec![];
+        }
+        let v = self.models.count_logits(set);
+        (0..set.len())
+            .map(|i| {
+                let x = &v[3 * i..3 * i + 3];
+                let m = x.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                let e: Vec<f64> = x.iter().map(|&y| ((y - m) as f64).exp()).collect();
+                let s: f64 = e.iter().sum();
+                [e[0] / s, e[1] / s, e[2] / s]
+            })
+            .collect()
+    }
+
+    /// A random deck (main, extra codes) given the observed codes and the sizes, as
+    /// `complete_deck` but drawn: the unseen cards in a random order weighted by P(presence)
+    /// (Efraimidis-Spirakis), as many as the deck's expected number of different cards, each with
+    /// a number of copies drawn from the count model (a seen card at least as many as seen); then
+    /// filled up as `complete_deck` does.
+    pub fn sample_deck(&self, observed: &[u32], main_size: usize, extra_size: usize, usable: &dyn Fn(u32) -> bool, rng: &mut PyRandom) -> Result<(Vec<u32>, Vec<u32>), String> {
+        let v = self.codes.len();
+        let mut c_vis = vec![0i64; v];
+        for c in observed {
+            if let Some(&j) = self.index.get(c)
+                && c_vis[j] < 3
+            {
+                c_vis[j] += 1;
+            }
+        }
+        let target = (main_size + extra_size) as i64;
+        // (the same for all the draws of a decision)
+        let presence = {
+            let mut last = self.last_presence.lock().unwrap();
+            match &*last {
+                Some((c, t, p)) if *c == c_vis && *t == target => p.clone(),
+                _ => {
+                    let p = std::sync::Arc::new(self.presence(&c_vis, target as f32));
+                    *last = Some((c_vis.clone(), target, p.clone()));
+                    p
+                }
+            }
+        };
+        let visible: Vec<usize> = (0..v).filter(|&j| c_vis[j] > 0).collect();
+        let mut keyed: Vec<(f64, usize)> = (0..v).filter(|&j| c_vis[j] == 0).map(|j| (rng.random().max(1e-300).ln() / (presence[j] as f64).max(1e-12), j)).collect();
+        keyed.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        let k = ((target as f64 / self.avg_copies.max(1e-6)).round() as usize).max(visible.len());
+        // (the usable ones only, checked in the drawn order: a first check of a card reads its script)
+        let order: Vec<usize> = keyed.into_iter().map(|x| x.1).filter(|&j| usable(self.codes[j])).take(k + target as usize).collect();
+        let k = k.min(visible.len() + order.len());
+        let cand: Vec<usize> = visible.iter().chain(order.iter().take(k - visible.len())).copied().collect();
+        let probs = self.count_probs(&cand);
+        let sizes = [main_size as i64, extra_size as i64];
+        let mut sec: [Vec<(usize, i64)>; 2] = [vec![], vec![]];
+        let mut total = [0i64; 2];
+        for (i, &j) in cand.iter().enumerate() {
+            let s = self.is_extra[j] as usize;
+            let min = c_vis[j].max(1);
+            let w: Vec<f64> = (1..=3).map(|n| if n >= min { probs[i][n as usize - 1] } else { 0.0 }).collect();
+            let mut u = rng.random() * w.iter().sum::<f64>();
+            let mut n = 3;
+            for (m, &x) in w.iter().enumerate() {
+                if u < x {
+                    n = m as i64 + 1;
+                    break;
+                }
+                u -= x;
+            }
+            let n = n.min(sizes[s] - total[s]);
+            if n > 0 {
+                sec[s].push((j, n));
+                total[s] += n;
+            }
+        }
+        // (short: more copies of the section's cards, then more cards in the drawn order)
+        for s in 0..2 {
+            for e in sec[s].iter_mut() {
+                while e.1 < 3 && total[s] < sizes[s] {
+                    e.1 += 1;
+                    total[s] += 1;
+                }
+            }
+            for &j in order.iter().skip(k - visible.len()) {
+                if total[s] >= sizes[s] {
+                    break;
+                }
+                if self.is_extra[j] as usize == s {
+                    let n = (sizes[s] - total[s]).min(1 + rng.randrange(3) as i64);
+                    sec[s].push((j, n));
+                    total[s] += n;
+                }
+            }
+        }
+        let expand = |s: &[(usize, i64)]| s.iter().flat_map(|&(j, n)| std::iter::repeat_n(self.codes[j], n as usize)).collect::<Vec<u32>>();
+        Ok((expand(&sec[0]), expand(&sec[1])))
+    }
+
     /// Every card of the vocabulary, the likeliest to be in the deck first (the known ones left out).
     pub fn ranked(&self, canon: &[u32]) -> Vec<u32> {
         let mut c_vis = vec![0i64; self.codes.len()];
@@ -277,6 +381,34 @@ impl NeuralCompletion {
         &self.models
     }
 
+    /// The fills (as `Completion::complete`) from the deck that `deck` makes of the observed codes
+    /// and the deck's sizes (given which cards the fills can use).
+    #[allow(clippy::type_complexity)]
+    fn fills(
+        &self,
+        known_main: &[u32],
+        known_extra: &[u32],
+        n_main: usize,
+        n_extra: usize,
+        present: &[u32],
+        deck: &dyn Fn(&[u32], usize, usize, &dyn Fn(u32) -> bool) -> Result<(Vec<u32>, Vec<u32>), String>,
+    ) -> Result<Fills, String> {
+        let km: Vec<u32> = known_main.iter().map(|&c| canonical_code(c)).collect();
+        let ke: Vec<u32> = known_extra.iter().map(|&c| canonical_code(c)).collect();
+        let observed: Vec<u32> = km.iter().chain(&ke).copied().collect();
+        let wins = win_condition_codes();
+        let mut have: BTreeSet<GlobalKey> = BTreeSet::new();
+        for &c in present.iter().chain(&km).chain(&ke) {
+            have.extend(global_keys(canonical_code(c)));
+        }
+        let usable = |code: u32| card(code).is_some() && !wins.contains(&code) && global_keys(code).is_subset(&have);
+        let (main, extra) = deck(&observed, km.len() + n_main, ke.len() + n_extra, &usable)?;
+        let corpus = || CorpusCompletion::get();
+        let fill_main = self.fill_section(&main, &km, n_main, &usable, &|| Ok(corpus()?.complete(known_main, known_extra, n_main, 0, present)?.0))?;
+        let fill_extra = self.fill_section(&extra, &ke, n_extra, &usable, &|| Ok(corpus()?.complete(known_main, known_extra, 0, n_extra, present)?.1))?;
+        Ok((fill_main, fill_extra))
+    }
+
     /// The model's cards of one section beyond the known ones, those usable (the corpus completion's
     /// for the rest): `n` of them.
     fn fill_section(&self, model_cards: &[u32], known: &[u32], n: usize, usable: &dyn Fn(u32) -> bool, spare: &dyn Fn() -> Result<Vec<u32>, String>) -> Result<Vec<u32>, String> {
@@ -332,22 +464,20 @@ impl Completion for NeuralCompletion {
         if let Some(r) = self.cache.lock().unwrap().get(&key) {
             return Ok(r.clone());
         }
-        let km: Vec<u32> = known_main.iter().map(|&c| canonical_code(c)).collect();
-        let ke: Vec<u32> = known_extra.iter().map(|&c| canonical_code(c)).collect();
-        let observed: Vec<u32> = km.iter().chain(&ke).copied().collect();
-        let (main, extra) = self.models.complete_deck(&observed, km.len() + n_main, ke.len() + n_extra)?;
-        let wins = win_condition_codes();
-        let mut have: BTreeSet<GlobalKey> = BTreeSet::new();
-        for &c in present.iter().chain(&km).chain(&ke) {
-            have.extend(global_keys(canonical_code(c)));
-        }
-        let usable = |code: u32| card(code).is_some() && !wins.contains(&code) && global_keys(code).is_subset(&have);
-        let corpus = || CorpusCompletion::get();
-        let fill_main = self.fill_section(&main, &km, n_main, &usable, &|| Ok(corpus()?.complete(known_main, known_extra, n_main, 0, present)?.0))?;
-        let fill_extra = self.fill_section(&extra, &ke, n_extra, &usable, &|| Ok(corpus()?.complete(known_main, known_extra, 0, n_extra, present)?.1))?;
-        let r = (fill_main, fill_extra);
+        let r = self.fills(known_main, known_extra, n_main, n_extra, present, &|observed, main_size, extra_size, _| self.models.complete_deck(observed, main_size, extra_size))?;
         self.cache.lock().unwrap().insert(key, r.clone());
         Ok(r)
+    }
+
+    fn sample(&self, known_main: &[u32], known_extra: &[u32], n_main: usize, n_extra: usize, present: &[u32], rng: &mut PyRandom) -> Result<(Vec<u32>, Vec<u32>), String> {
+        let rng = std::cell::RefCell::new(rng);
+        let (mut main, mut extra) =
+            self.fills(known_main, known_extra, n_main, n_extra, present, &|observed, main_size, extra_size, usable| {
+            self.models.sample_deck(observed, main_size, extra_size, usable, &mut rng.borrow_mut())
+        })?;
+        rng.borrow_mut().shuffle(&mut main);
+        rng.borrow_mut().shuffle(&mut extra);
+        Ok((main, extra))
     }
 
     fn stand_ins(&self, need: Need, known: &[u32]) -> Vec<u32> {

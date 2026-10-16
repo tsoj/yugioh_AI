@@ -212,6 +212,21 @@ pub type Ranks = Option<Vec<u32>>;
 /// The key of leaves_memo.
 type LeavesKey = (PoolId, u32, usize, u64);
 
+/// A deck card whose code the completion guessed (a wildcard atom): which physical copy (its
+/// owner's copies of the code in creation order, as `Hypothesis::deck_ranks`) and what the
+/// observations require of it.
+#[derive(Debug, Clone)]
+pub struct Guess {
+    pub player: u32,
+    pub extra: bool,
+    pub code: u32,
+    pub rank: u32,
+    /// (a hidden card of a known kind)
+    pub need: Option<Need>,
+    /// codes the observations ruled out
+    pub excluded: Vec<u32>,
+}
+
 /// A complete, consistent guess of the hidden information.
 #[derive(Debug, Clone, Default)]
 pub struct Hypothesis {
@@ -227,6 +242,11 @@ pub struct Hypothesis {
     pub set_card_shuffles: Vec<Vec<u32>>,
     /// opponent atoms whose code was guessed
     pub unknown_atoms: usize,
+    /// those atoms (`Guess`), and per player the deck cards whose codes are known (main, extra)
+    pub guesses: Vec<Guess>,
+    pub known_decks: Vec<(Vec<u32>, Vec<u32>)>,
+    /// atom -> its rank (see `deck_ranks`)
+    pub atom_ranks: HashMap<VarId, u32>,
     /// tracker var id -> code
     pub var_codes: HashMap<VarId, Option<u32>>,
     /// var ids fixed by observations

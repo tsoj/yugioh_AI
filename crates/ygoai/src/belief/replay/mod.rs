@@ -20,7 +20,7 @@ use ygo_core::constants::*;
 use crate::actions::Response;
 use crate::belief::completion::{Completion, VanillaCompletion};
 use crate::belief::infer::LocMap;
-use crate::belief::tracker::{Hypothesis, PoolLoc, Tracker, TrackerError, VarId};
+use crate::belief::tracker::{Guess, Hypothesis, PoolLoc, Tracker, TrackerError, VarId};
 use crate::game::{Deck, DuelConfig, InitInfo, ObsItem, setup_duel};
 use crate::messages::Msg;
 use crate::rduel::RDuel;
@@ -412,6 +412,8 @@ pub struct BeliefReplay {
     pub init: InitInfo,
     pub items: Vec<ObsItem>,
     pub completion: &'static dyn Completion,
+    /// the cards whose codes the completion guessed (card id, `Guess`), from `build_duel`
+    pub guessed: Vec<(u32, Guess)>,
     pub check_state: bool,
     pub max_probes: usize,
     pub probe_items: usize,
@@ -576,6 +578,7 @@ impl BeliefReplay {
             init,
             items,
             completion: completion.unwrap_or(vanilla),
+            guessed: Vec::new(),
             check_state: true,
             max_probes: 24,
             probe_items: 60,
@@ -936,6 +939,11 @@ impl BeliefReplay {
         // a swap at the very start exchanges two copies' roles for the whole duel
         let roles = roles(self.swaps.get(&(0, 0)).map_or(&[][..], |v| &v[..]));
         let swap_roles = |lst: Option<Vec<u32>>| lst.map(|l| l.into_iter().map(|x| *roles.get(&x).unwrap_or(&x)).collect::<Vec<u32>>());
+        self.guessed = hyp
+            .guesses
+            .iter()
+            .filter_map(|g| id_of.get(&(g.player, g.code, g.rank)).map(|&cid| (*roles.get(&cid).unwrap_or(&cid), g.clone())))
+            .collect();
         for p in 0..2u32 {
             let pi = p as usize;
             let deck_ids = swap_roles(ids(p, &hyp.deck_orders[pi], hyp.deck_ranks.get(pi).and_then(|r| r.as_ref()), None));

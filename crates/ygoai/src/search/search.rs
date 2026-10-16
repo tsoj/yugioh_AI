@@ -132,6 +132,12 @@ impl AlphaBeta {
     /// The best of `root_moves` (responses to the duel's pending prompt `root_prompt`) and the
     /// depth completed (after `prepare`). The duel is not changed.
     pub fn search(&mut self, duel: &Duel, root_prompt: &Msg, root_moves: &[Response], p: &SearchParams) -> (usize, i32) {
+        self.search_resampling(duel, root_prompt, root_moves, p, None)
+    }
+
+    /// `search`, with `resample` changing the guessed hidden information of the root's copy for
+    /// each iteration after the first (`resample`).
+    pub fn search_resampling(&mut self, duel: &Duel, root_prompt: &Msg, root_moves: &[Response], p: &SearchParams, resample: Option<&mut dyn FnMut(&mut Duel)>) -> (usize, i32) {
         let start_time = Instant::now() - std::time::Duration::from_secs_f64(p.elapsed);
         let mut policies = [Heuristic::new(p.seeds[0] as i128, 0), Heuristic::new(p.seeds[1] as i128, 1)];
         let us = root_prompt.player().unwrap_or(0) as usize;
@@ -152,7 +158,7 @@ impl AlphaBeta {
             move_order.truncate(known);
         }
         let fixed_depth = p.budget.is_none() && p.max_nodes.is_none();
-        state.iterative_deepening(duel, root_prompt, root_moves, move_order, start_time, p.budget, fixed_depth)
+        state.iterative_deepening(duel, root_prompt, root_moves, move_order, start_time, p.budget, fixed_depth, resample)
     }
 }
 
@@ -210,6 +216,7 @@ impl SearchState<'_> {
         start_time: Instant,
         budget: Option<f64>,
         fixed_depth: bool,
+        mut resample: Option<&mut dyn FnMut(&mut Duel)>,
     ) -> (usize, i32) {
         let (mut best_move, mut completed_depth) = (move_order[0], 0);
         self.tables.last_value = f64::NAN;
@@ -228,6 +235,12 @@ impl SearchState<'_> {
                 if late {
                     break;
                 }
+            }
+            if depth > 1
+                && let Some(f) = resample.as_mut()
+            {
+                root_duel = duel.clone();
+                f(&mut root_duel);
             }
             let (iteration_nodes, iteration_start) = (self.tables.nodes, start_time.elapsed().as_secs_f64());
             let mut values: Vec<Option<f64>> = vec![None; moves.len()];

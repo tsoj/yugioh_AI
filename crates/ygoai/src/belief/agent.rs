@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 
 use crate::belief::completion::Completion;
+use crate::belief::guesses::Guesses;
 use crate::belief::replay::BeliefReplay;
 use crate::game::{InitInfo, ObsItem};
 use crate::messages::Msg;
@@ -105,6 +106,14 @@ impl AgentBelief {
         let s = summary(&br);
         self.prev = if consistent { Some(br) } else { None };
         (s, out)
+    }
+
+    /// What the latest consistent reconstruction guessed (None: there is none).
+    pub fn guesses(&self) -> Option<Guesses> {
+        let br = self.prev.as_ref()?;
+        let opp = 1 - self.viewer as usize;
+        let known = br.hypothesis.as_ref().and_then(|h| h.known_decks.get(opp).cloned()).unwrap_or_default();
+        Some(Guesses { viewer: self.viewer, cards: br.guessed.clone(), known })
     }
 
     /// Whether the stream since the last call shows opponent cards it did not show before: per

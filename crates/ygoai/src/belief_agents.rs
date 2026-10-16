@@ -15,6 +15,7 @@ use crate::actions::Response;
 use crate::belief::agent::AgentBelief;
 use crate::belief::completion::{Completion, CorpusCompletion, VanillaCompletion, card};
 use crate::belief::neural::NeuralCompletion;
+use crate::belief::guesses::resample;
 use crate::belief::tracker::Need;
 use crate::game::{Agent, AgentError, InitInfo, ObsItem};
 use crate::heuristic::Heuristic;
@@ -91,6 +92,8 @@ pub struct BeliefSearchAgent {
     belief: Option<AgentBelief>,
     /// (the last response's search: its root value and depth, `Agent::search_info`)
     info: Option<(f64, u32)>,
+    /// (the search feature `resample`)
+    resample: bool,
     // statistics
     pub searches: usize,
     pub failures: usize,
@@ -119,6 +122,7 @@ impl BeliefSearchAgent {
             items: Vec::new(),
             belief: None,
             info: None,
+            resample: crate::search::Features::from_env().resample,
             searches: 0,
             failures: 0,
             nodes: 0,
@@ -161,6 +165,8 @@ impl BeliefSearchAgent {
         let hint = self.fallback.hint.take(); // (the select hint: the search answers this selection)
         let elapsed = t0.elapsed().as_secs_f64();
         let remaining = clock.map_or(0.0, |c| c.0);
+        // (new guesses for each iteration: only of a consistent reconstruction)
+        let guesses = if self.resample && !r.approximate { self.belief.as_ref().and_then(|b| b.guesses()).filter(|g| !g.cards.is_empty()) } else { None };
         if matches!(self.search, Search::AlphaBetaNaive { .. }) {
             naive_hidden_cards(&mut duel, self.player, self.completion, &mut self.rng);
         }
@@ -171,7 +177,9 @@ impl BeliefSearchAgent {
                 ab.prepare();
                 let before = ab.nodes;
                 let params = SearchParams { budget, elapsed, clock_remaining: remaining, hint, seeds, max_nodes: *max_nodes };
-                let (best, depth) = ab.search(&duel.d, &core_prompt, &core_cands, &params);
+                let (comp, rng) = (self.completion.unwrap_or(VanillaCompletion::get()), &mut self.rng);
+                let mut resample = guesses.map(|g| move |d: &mut ygo_core::duel::Duel| resample(d, &g, comp, rng));
+                let (best, depth) = ab.search_resampling(&duel.d, &core_prompt, &core_cands, &params, resample.as_mut().map(|f| f as &mut dyn FnMut(&mut ygo_core::duel::Duel)));
                 self.nodes += ab.nodes - before;
                 self.info = ab.last_value.is_finite().then_some((ab.last_value, depth as u32));
                 best

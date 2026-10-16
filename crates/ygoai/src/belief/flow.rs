@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use ygo_core::constants::*;
 
 use crate::belief::completion::{Completion, VanillaCompletion, card, fits_need, monster_sset_codes};
-use crate::belief::tracker::{Hypothesis, Kind, Need, PoolLoc, Result, ShuffleOutcome, Tracker, TrackerError, VarId};
+use crate::belief::tracker::{Guess, Hypothesis, Kind, Need, PoolLoc, Result, ShuffleOutcome, Tracker, TrackerError, VarId};
 
 const WILD_MAIN: &str = "main";
 const WILD_EXTRA: &str = "extra";
@@ -688,6 +688,8 @@ impl<'a> FlowSolver<'a> {
         let vanilla: &dyn Completion = VanillaCompletion::get();
         let comp: &dyn Completion = self.completion.unwrap_or(vanilla);
         let mut unknown = 0;
+        // (the guessed atoms: Hypothesis::guesses)
+        let mut guessed: Vec<(VarId, Option<Need>, Vec<u32>)> = Vec::new();
         // codes excluded for a slot are excluded for the card it realizes to
         let mut excluded: HashMap<VarId, BTreeSet<u32>> = HashMap::new();
         for &v in &self.t.exclusions {
@@ -729,6 +731,13 @@ impl<'a> FlowSolver<'a> {
                 Key::Wild(w) => w,
                 _ => unreachable!(),
             };
+            for &a in &wild {
+                let need = match wild_name(a) {
+                    WILD_MAIN | WILD_EXTRA => None,
+                    w => wild_need(w),
+                };
+                guessed.push((a, need, excluded.get(&a).map_or(vec![], |e| e.iter().copied().collect())));
+            }
             let typed: Vec<VarId> = wild.iter().copied().filter(|&a| !matches!(wild_name(a), WILD_MAIN | WILD_EXTRA)).collect();
             for a in typed {
                 let need = wild_need(wild_name(a)).unwrap();
@@ -789,7 +798,23 @@ impl<'a> FlowSolver<'a> {
             }
         }
         // 3. the rest as in the search based solver (orders, shuffles, copy ranks)
-        finish(self.t, unknown)
+        let mut h = finish(self.t, unknown)?;
+        h.known_decks = (0..2)
+            .map(|p| {
+                let known = |k: Kind| -> Vec<u32> {
+                    self.t.atoms[p].iter().filter(|&&a| self.t.vars[a].kind == k && !guessed.iter().any(|g| g.0 == a)).filter_map(|&a| self.t.vars[a].resolved).collect()
+                };
+                (known(Kind::Main), known(Kind::Extra))
+            })
+            .collect();
+        h.guesses = guessed
+            .into_iter()
+            .map(|(a, need, excluded)| {
+                let v = &self.t.vars[a];
+                Guess { player: v.owner, extra: v.kind == Kind::Extra, code: v.resolved.unwrap_or(0), rank: h.atom_ranks.get(&a).copied().unwrap_or(0), need, excluded }
+            })
+            .collect();
+        Ok(h)
     }
 }
 
@@ -838,7 +863,7 @@ pub fn finish(t: &Tracker, unknown: usize) -> Result<Hypothesis> {
     }
     let rank_list = |vs: &[VarId]| -> Option<Vec<u32>> { vs.iter().map(|&v| atom(Some(v)).map(|a| ranks[&a])).collect() };
     let owner_list = |vs: &[VarId]| -> Option<Vec<u32>> { vs.iter().map(|&v| atom(Some(v)).map(|a| t.vars[a].owner)).collect() };
-    let mut h = Hypothesis { unknown_atoms: unknown, ..Hypothesis::default() };
+    let mut h = Hypothesis { unknown_atoms: unknown, atom_ranks: ranks.clone(), ..Hypothesis::default() };
     for p in 0..2u32 {
         let di = initial_index(t, p, LOCATION_DECK).ok_or_else(|| TrackerError("no initial deck".into()))?;
         h.deck_ranks.push(rank_list(&t.pools[t.initial_pools[di]].claims));

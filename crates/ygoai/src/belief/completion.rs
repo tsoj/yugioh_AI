@@ -109,6 +109,15 @@ pub trait Completion: Send + Sync {
     /// where the Python completion raises RuntimeError (e.g. a filler pool exhausted).
     fn complete(&self, known_main: &[u32], known_extra: &[u32], n_main: usize, n_extra: usize, present: &[u32]) -> Result<(Vec<u32>, Vec<u32>), String>;
 
+    /// Like `complete`, but a random draw from the completion's guesses (by default `complete`'s
+    /// cards in a random order).
+    fn sample(&self, known_main: &[u32], known_extra: &[u32], n_main: usize, n_extra: usize, present: &[u32], rng: &mut PyRandom) -> Result<(Vec<u32>, Vec<u32>), String> {
+        let (mut main, mut extra) = self.complete(known_main, known_extra, n_main, n_extra, present)?;
+        rng.shuffle(&mut main);
+        rng.shuffle(&mut extra);
+        Ok((main, extra))
+    }
+
     /// Codes for a hidden card of a known kind that was never revealed, the likeliest first
     /// (`known`: the other known cards of its deck); by default effect-less ones.
     fn stand_ins(&self, need: Need, _known: &[u32]) -> Vec<u32> {

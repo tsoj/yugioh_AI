@@ -109,6 +109,8 @@ pub struct Features {
     pub place: bool,
     pub predict: bool,
     pub narrowext: bool,
+    /// (a belief agent: new guesses of the opponent's hidden cards for each iteration)
+    pub resample: bool,
 }
 
 impl Features {
@@ -130,6 +132,7 @@ impl Features {
                 "place" => f.place = true,
                 "predict" => f.predict = true,
                 "narrowext" => f.narrowext = true,
+                "resample" => f.resample = true,
                 _ => panic!("YGOAI_SEARCH: unknown feature {name}"),
             }
         }

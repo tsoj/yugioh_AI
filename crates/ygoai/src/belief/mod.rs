@@ -8,6 +8,7 @@ pub mod agent;
 pub mod check;
 pub mod completion;
 pub mod flow;
+pub mod guesses;
 pub mod infer;
 pub mod neural;
 pub mod read_guided;
