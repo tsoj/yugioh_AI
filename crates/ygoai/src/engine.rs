@@ -1,5 +1,6 @@
 //! An agent as an engine process on stdio (protocol.py's `serve`): JSON lines from the arbiter
-//! ("isready", "init", "prompt", "end", "quit"), a response line per prompt. A new game ("init")
+//! ("isready", "init", "prompt", "end", "quit"), a response line per prompt (with "info": the
+//! search's value and depth, if it searched). A new game ("init")
 //! gets a new agent, except the first one, which "isready" created and warmed up.
 
 use std::io::{BufRead, Write};
@@ -70,7 +71,10 @@ pub fn serve(mut factory: impl FnMut() -> Result<Box<dyn Agent>, String>) -> Res
                 let prompt: Msg = field(&msg, "prompt")?;
                 let state: Option<Snapshot> = field(&msg, "state")?;
                 let resp = a.respond(&prompt, state.as_ref(), clock).map_err(|e| format!("{e:?}"))?;
-                send(&json!({"response": resp}))?;
+                match a.search_info() {
+                    Some((value, depth)) => send(&json!({"response": resp, "info": {"value": value, "depth": depth}}))?,
+                    None => send(&json!({"response": resp}))?,
+                }
             }
             "end" => {
                 if let Some(a) = agent.as_mut() {

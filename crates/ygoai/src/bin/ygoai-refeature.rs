@@ -1,5 +1,6 @@
 //! Training rows from recorded games, by replaying them (no search): ygoai-datagen's
-//! OUT.games.jsonl in, a row per labeled decision with the feature sets FEATURES out
+//! OUT.games.jsonl, or ygoai-match's records (--records; the engines' searches are their labels,
+//! the game number its line), in; a row per labeled decision with the feature sets FEATURES out
 //! (`ygoai::datarow`).
 //!
 //!   ygoai-refeature GAMES.jsonl OUT.jsonl --features SET,SET... [JOBS]
@@ -9,7 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ygoai::datarow::{FEATURE_SETS, GameData, replay_rows};
-use ygoai::game::init;
+use ygoai::game::{GameRecord, init};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -31,7 +32,14 @@ fn main() {
     let jobs: usize = a.get(5).map_or(8, |s| s.parse().unwrap_or_else(|_| usage()));
     let games: Vec<GameData> = std::io::BufReader::new(std::fs::File::open(&a[1]).expect("games"))
         .lines()
-        .map(|l| serde_json::from_str(&l.unwrap()).expect("a GameData line"))
+        .enumerate()
+        .map(|(i, l)| {
+            let l = l.unwrap();
+            serde_json::from_str::<GameData>(&l).unwrap_or_else(|_| {
+                let record: GameRecord = serde_json::from_str(&l).expect("a GameData or GameRecord line");
+                GameData { game: i, labels: record.labels.clone(), record, viewer_responses: true }
+            })
+        })
         .collect();
     init(None).unwrap();
     let games = Arc::new(games);

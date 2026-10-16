@@ -17,6 +17,7 @@ use ygo_core::duel::Duel;
 use crate::actions::encode;
 use crate::game::{GameRecord, run_until_prompt};
 use crate::messages::Msg;
+use crate::observe::to_core_response;
 use crate::search::{eval_features, evaluate_at, mover_features, mover_features2, rich_features};
 use crate::state::parse_location_query;
 
@@ -30,14 +31,7 @@ use crate::state::parse_location_query;
 ///   included: not for features as they are)
 pub const FEATURE_SETS: [&str; 6] = ["mover2", "mover", "eval", "rich", "static", "state"];
 
-/// A searched decision's labels.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Label {
-    pub decision: usize,
-    pub player: u32,
-    pub value: f64,
-    pub depth: u32,
-}
+pub use crate::game::Label;
 
 /// A game of the data: its number (the line of its opening in the book), the record and the labels.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +39,11 @@ pub struct GameData {
     pub game: usize,
     pub record: GameRecord,
     pub labels: Vec<Label>,
+    /// (the record's responses are to the prompts as the players saw them, a match's record
+    /// (`game::play`, translated by `observe::to_core_response`), not in the core's order as
+    /// ygoai-datagen's)
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub viewer_responses: bool,
 }
 
 /// One player's side: pile sizes, the monster zones (code, face-up, attack position, ATK, DEF,
@@ -139,7 +138,12 @@ pub fn replay_rows(g: &GameData, sets: &[String]) -> Result<Vec<Value>, String> 
         if let Some(l) = labels.get(&i) {
             rows.push(row(&mut duel, g.game, &p, l, sets)?);
         }
-        let r = encode(&p, &entry.response).map_err(|e| format!("game {}: response {i}: {e:?}", g.game))?;
+        let core = if g.viewer_responses {
+            to_core_response(&p, entry.player, &entry.response).map_err(|e| format!("game {}: response {i}: {e:?}", g.game))?
+        } else {
+            entry.response.clone()
+        };
+        let r = encode(&p, &core).map_err(|e| format!("game {}: response {i}: {e:?}", g.game))?;
         duel.ocg_set_response(&r);
         prompt = Some(p);
     }

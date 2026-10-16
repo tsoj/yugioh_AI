@@ -67,6 +67,9 @@ impl<A: Agent + ?Sized> Agent for Named<A> {
     fn end(&mut self, result: &serde_json::Map<String, Value>) {
         self.0.end(result)
     }
+    fn search_info(&mut self) -> Option<(f64, u32)> {
+        self.0.search_info()
+    }
 }
 
 #[derive(Debug, Clone)]

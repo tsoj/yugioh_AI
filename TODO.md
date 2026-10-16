@@ -113,6 +113,10 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       warns about a net without an anchor or with one measured on other weights (hash). The
       hand eval, NULL_WINDOW, the RFP and futility margins and MCTS's VALUE_K are in LP too; WIN
       is 1e7. Bench checksums unchanged (default, futility, the round-1 net).
+- [x] Match games as data (2026-10-16): engines send their search's root value and depth with each
+      response ("info"), and ygoai-match's records carry them as `labels`; ygoai-refeature reads
+      such records (the game number is the line). The labels are the engine's view (its
+      reconstruction), the features the true duel's, as in the datagen.
 - [ ] More features: normal summon used, LP thresholds, ...
 - [ ] Later: the learned policy/value nets and effect-text embeddings (see memory).
 

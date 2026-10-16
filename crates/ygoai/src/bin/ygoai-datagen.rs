@@ -76,7 +76,7 @@ fn play(book: &ygoai::matchrun::Opening, game: usize, nodes: u64, sets: &[String
     }
     record.result.insert("winner".into(), json!(winner));
     set_results(&mut rows, &record);
-    (rows, GameData { game, record, labels })
+    (rows, GameData { game, record, labels, viewer_responses: false })
 }
 
 fn main() {

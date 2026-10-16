@@ -221,6 +221,16 @@ pub struct RecordedResponse {
     pub response: Response,
 }
 
+/// A searched decision's labels: the response's index in the record, the player who searched,
+/// the root value for that player (in LP) and the depth completed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Label {
+    pub decision: usize,
+    pub player: u32,
+    pub value: f64,
+    pub depth: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GameRecord {
     #[serde(default = "record_version")]
@@ -238,6 +248,10 @@ pub struct GameRecord {
     pub result: serde_json::Map<String, Value>,
     #[serde(default)]
     pub agents: Vec<String>,
+    /// the agents' searches (`Agent::search_info`) at the decisions they searched (matches;
+    /// ygoai-datagen keeps its own in `datarow::GameData`)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<Label>,
 }
 
 fn record_version() -> u32 {
@@ -266,6 +280,7 @@ pub fn new_record(decks: &[Deck], seed: i64, config: &DuelConfig) -> GameRecord 
         responses: Vec::new(),
         result: serde_json::Map::new(),
         agents: Vec::new(),
+        labels: Vec::new(),
     }
 }
 
@@ -322,6 +337,11 @@ pub trait Agent {
     fn observe(&mut self, _msg: &Msg) {}
     fn respond(&mut self, prompt: &Msg, state: Option<&Snapshot>, clock: Option<(f64, f64)>) -> Result<Response, AgentError>;
     fn end(&mut self, _result: &serde_json::Map<String, Value>) {}
+    /// The last response's search, if it searched: its root value for this agent's player and
+    /// the depth completed (a chess engine's "info score ... depth ...").
+    fn search_info(&mut self) -> Option<(f64, u32)> {
+        None
+    }
 }
 
 /// Receives the god-view event stream of a duel.
@@ -503,9 +523,10 @@ pub fn play(
             };
             let core = to_core_response(&p, player, &response).map_err(|e| AgentError::Failed(format!("InvalidResponse: {e}")))?;
             let raw = encode(&p, &core).map_err(|e| AgentError::Failed(format!("InvalidResponse: {e}")))?;
-            Ok((response, raw))
+            let info = if is_hidden_prompt(&p) { None } else { agents[player as usize].search_info() };
+            Ok((response, raw, info))
         })();
-        let (response, raw) = match answered {
+        let (response, raw, info) = match answered {
             Ok(x) => x,
             Err(AgentError::Forfeit(reason)) => {
                 result = Some(result_of(Some(1 - player), json!(reason)));
@@ -524,6 +545,9 @@ pub fn play(
                 break;
             }
             c.remaining += c.increment;
+        }
+        if let Some((value, depth)) = info {
+            record.labels.push(Label { decision: record.responses.len(), player, value, depth });
         }
         record.responses.push(RecordedResponse { player, response: response.clone() });
         for obs in observers.iter_mut() {

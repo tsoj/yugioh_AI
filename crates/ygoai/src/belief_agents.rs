@@ -89,6 +89,8 @@ pub struct BeliefSearchAgent {
     player: u32,
     items: Vec<ObsItem>,
     belief: Option<AgentBelief>,
+    /// (the last response's search: its root value and depth, `Agent::search_info`)
+    info: Option<(f64, u32)>,
     // statistics
     pub searches: usize,
     pub failures: usize,
@@ -116,6 +118,7 @@ impl BeliefSearchAgent {
             player: 0,
             items: Vec::new(),
             belief: None,
+            info: None,
             searches: 0,
             failures: 0,
             nodes: 0,
@@ -168,8 +171,9 @@ impl BeliefSearchAgent {
                 ab.prepare();
                 let before = ab.nodes;
                 let params = SearchParams { budget, elapsed, clock_remaining: remaining, hint, seeds, max_nodes: *max_nodes };
-                let (best, _) = ab.search(&duel.d, &core_prompt, &core_cands, &params);
+                let (best, depth) = ab.search(&duel.d, &core_prompt, &core_cands, &params);
                 self.nodes += ab.nodes - before;
+                self.info = ab.last_value.is_finite().then_some((ab.last_value, depth as u32));
                 best
             }
             Search::Mcts { max_sims, c, rollout_turns, cutoff_eval } => {
@@ -225,6 +229,7 @@ impl Agent for BeliefSearchAgent {
     }
     fn respond(&mut self, prompt: &Msg, state: Option<&Snapshot>, clock: Option<(f64, f64)>) -> Result<Response, AgentError> {
         self.items.push(ObsItem::Prompt(prompt.clone(), state.cloned()));
+        self.info = None;
         // (a card selection's candidates by the rules' order of its cards: the search keeps the first)
         let order = match prompt {
             Msg::SelectCard { cards, .. } | Msg::SelectUnselectCard { select_cards: cards, .. } => Some(self.fallback.card_order(cards)),
@@ -242,6 +247,9 @@ impl Agent for BeliefSearchAgent {
         };
         self.items.push(ObsItem::Response(resp.clone()));
         Ok(resp)
+    }
+    fn search_info(&mut self) -> Option<(f64, u32)> {
+        self.info.take()
     }
     fn end(&mut self, _result: &serde_json::Map<String, Value>) {
         if std::env::var_os("YGOAI_AGENT_STATS").is_some() {

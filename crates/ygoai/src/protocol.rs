@@ -87,6 +87,8 @@ pub struct EngineProcess {
     lines: Receiver<String>,
     pending: Vec<Msg>,
     pub last_think_time: f64,
+    /// (the last response's "info": the search's value and depth)
+    info: Option<(f64, u32)>,
 }
 
 fn engine_error(name: &str, what: &str) -> AgentError {
@@ -116,7 +118,7 @@ impl EngineProcess {
                 }
             }
         });
-        let mut e = EngineProcess { name: name.into(), child, stdin, lines, pending: Vec::new(), last_think_time: 0.0 };
+        let mut e = EngineProcess { name: name.into(), child, stdin, lines, pending: Vec::new(), last_think_time: 0.0, info: None };
         e.send(&json!({"type": "isready"}))?;
         match e.lines.recv_timeout(Duration::from_secs_f64(READY_TIMEOUT)) {
             Ok(line) => {
@@ -202,7 +204,11 @@ impl Agent for EngineProcess {
         let Some(resp) = reply.get("response") else {
             return Err(engine_error(&self.name, &format!("sent {reply} instead of a response")));
         };
+        self.info = reply.get("info").and_then(|i| Some((i.get("value")?.as_f64()?, i.get("depth")?.as_u64()? as u32)));
         serde_json::from_value(resp.clone()).map_err(|e| AgentError::Failed(format!("InvalidResponse: {e}")))
+    }
+    fn search_info(&mut self) -> Option<(f64, u32)> {
+        self.info.take()
     }
     fn end(&mut self, result: &serde_json::Map<String, Value>) {
         let msg = json!({"type": "end", "obs": std::mem::take(&mut self.pending), "result": result});
