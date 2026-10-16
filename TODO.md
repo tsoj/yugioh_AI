@@ -5,8 +5,7 @@ Planned work, roughly in order. SPRTs run at 30+0.3, SPRT [0, 15], with book
 
 ## Next (user's order, 2026-10-16)
 
-1. First-child extension at nodes with 1 or 2 children (TT move), then different card guesses per
-   iteration (both below).
+1. Different card guesses per iteration (below; the first-child extension failed).
 2. A new data round with the current engine (labels from match-style records), train the same
    architecture (MLP16, mover2), SPRT it.
 3. More input features.
@@ -87,8 +86,9 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
   - [ ] Tune further (margins, max depth, per move kind) now that the units are LP.
 - [ ] Extend the first child when it is the TT move and the node has only 1 or 2 children: by 1 ply,
       or by a fraction of a ply (e.g. 0.5; needs fractional depth). `narrowext` (1 ply, up to
-      height 2 * the iteration's depth): mean depth at 3000 nodes 12.71 -> 10.13; SPRT vs the
-      default running.
+      height 2 * the iteration's depth): mean depth at 3000 nodes 12.71 -> 10.13 (in games 10.9 ->
+      9.5); SPRT vs the default stopped heading to H0 at 1120 games, -6.5 +/- 14.6, LLR -2.07.
+      Untried: the fractional (0.5 ply) version, or only at nodes with exactly 1 child.
 - [ ] qsearch, if retried: a TT in quiescence, cheaper chain windows (pass plus the best few
       answers), pruning of hopeless attacks.
 - Retested at the Rust speed and stopped near zero: PVS (H0), qsearch, futility, conthist,
