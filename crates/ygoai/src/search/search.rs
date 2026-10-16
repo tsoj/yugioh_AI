@@ -121,6 +121,9 @@ fn lists_hidden(d: &Duel, m: &Msg, cards: &[u32]) -> bool {
     serde_json::to_value(m).is_ok_and(|v| walk(d, &v, cards))
 }
 
+/// (`AlphaBeta::killers`: no move)
+const NO_KILLER: usize = usize::MAX;
+
 /// (`NodeStats::cuts`: no cutoff, all the children searched)
 pub const NO_CUT: u8 = 255;
 
@@ -128,6 +131,9 @@ pub const NO_CUT: u8 = 255;
 pub struct AlphaBeta {
     hash_table: TranspositionTable,
     history_table: HistoryTable,
+    /// by height: the history slots of the last two moves that caused a cutoff there (`killers`;
+    /// NO_KILLER if none), cleared for each decision
+    killers: Vec<[usize; 2]>,
     pub nodes: u64,
     /// transposition table lookups, and those that found the position
     pub tt_probes: u64,
@@ -150,6 +156,7 @@ impl Default for AlphaBeta {
         AlphaBeta {
             hash_table: TranspositionTable::default(),
             history_table: HistoryTable::default(),
+            killers: vec![],
             nodes: 0,
             tt_probes: 0,
             tt_hits: 0,
@@ -225,6 +232,7 @@ impl AlphaBeta {
         let stop_time = p.budget.map(|b| start_time + std::time::Duration::from_secs_f64(b.max((HARD_FACTOR * b).min(HARD_SHARE * p.clock_remaining))));
         let max_nodes = p.max_nodes.map(|n| self.nodes + n);
         let features = Features::from_env();
+        self.killers.clear();
         // (`passrisk`: the opponent's cards hidden at the root)
         let unknown = if features.passrisk {
             duel.ext_get_all_cards().iter().filter(|e| e[0] != us as u32 && e[5] != 0 && is_hidden(duel, e[5])).map(|e| e[5]).collect()
@@ -537,7 +545,8 @@ impl SearchState<'_> {
         // (futility pruning: the moves after the first whose static eval plus the margin cannot raise alpha)
         let futility_value = static_eval.filter(|_| f.futility && depth <= futility_max_depth).map(|s| s + futility_margin + futility_per_ply * depth as f64);
 
-        // move ordering: the TT move first, then by history (the rules' order among equals)
+        // move ordering: the TT move first, then (`killers`) the killer moves, then by history
+        // (the rules' order among equals)
         let history_keys: Vec<HistoryKey> = moves
             .iter()
             .map(|m| {
@@ -545,11 +554,13 @@ impl SearchState<'_> {
                 HistoryKey { key, counter_key: f.conthist.then(|| counter_key(previous, key)) }
             })
             .collect();
+        let killers = if f.killers { self.tables.killers.get(height as usize).copied().unwrap_or([NO_KILLER; 2]) } else { [NO_KILLER; 2] };
+        let killer_rank = |k: usize| killers.iter().position(|&x| x == history_keys[k].key).unwrap_or(2);
         let mut move_order: Vec<usize> = (0..moves.len()).collect();
         move_order.sort_by(|&a, &b| {
             let history = &self.tables.history_table;
-            ((Some(a) != tt_move), -history.get(history_keys[a]))
-                .partial_cmp(&((Some(b) != tt_move), -history.get(history_keys[b])))
+            ((Some(a) != tt_move), killer_rank(a), -history.get(history_keys[a]))
+                .partial_cmp(&((Some(b) != tt_move), killer_rank(b), -history.get(history_keys[b])))
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         move_order.truncate(MAX_CHILDREN);
@@ -626,6 +637,16 @@ impl SearchState<'_> {
                 // (history: this move up, the ones tried before it down)
                 let tried: Vec<HistoryKey> = move_order[..i].iter().map(|&k| history_keys[k]).collect();
                 self.tables.history_table.update(history_keys[m], &tried, depth);
+                if f.killers {
+                    let h = height as usize;
+                    if self.tables.killers.len() <= h {
+                        self.tables.killers.resize(h + 1, [NO_KILLER; 2]);
+                    }
+                    let k = &mut self.tables.killers[h];
+                    if k[0] != history_keys[m].key {
+                        *k = [history_keys[m].key, k[0]];
+                    }
+                }
                 cut_at = i as u8;
                 break;
             }
