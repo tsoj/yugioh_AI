@@ -16,6 +16,15 @@ use crate::belief::script_index::{GlobalKey, global_keys, win_condition_codes};
 use crate::belief::tracker::Need;
 use crate::pyrandom::PyRandom;
 
+/// The temperature of `sample_deck`'s draws (the weights to the power 1 / T: towards
+/// `complete_deck`'s likeliest deck below 1), $YGOAI_RESAMPLE_T to override
+const SAMPLE_TEMPERATURE: f64 = 1.0;
+
+fn sample_temperature() -> f64 {
+    static T: OnceLock<f64> = OnceLock::new();
+    *T.get_or_init(|| std::env::var("YGOAI_RESAMPLE_T").ok().and_then(|s| s.parse().ok()).unwrap_or(SAMPLE_TEMPERATURE))
+}
+
 /// Rounds of the search for the number of distinct cards (complete_deck's max_iter)
 const MAX_ITER: usize = 60;
 /// The deck size the ranking for stand-ins assumes
@@ -232,6 +241,7 @@ impl DeckModels {
 
     /// A random deck (main, extra codes) given the observed codes and the sizes, as
     /// `complete_deck` but drawn: the unseen cards in a random order weighted by P(presence)
+    /// (to the power 1 / `SAMPLE_TEMPERATURE`, as the copies' probabilities)
     /// (Efraimidis-Spirakis), as many as the deck's expected number of different cards, each with
     /// a number of copies drawn from the count model (a seen card at least as many as seen); then
     /// filled up as `complete_deck` does.
@@ -246,6 +256,7 @@ impl DeckModels {
             }
         }
         let target = (main_size + extra_size) as i64;
+        let t = sample_temperature();
         // (the same for all the draws of a decision)
         let presence = {
             let mut last = self.last_presence.lock().unwrap();
@@ -259,7 +270,10 @@ impl DeckModels {
             }
         };
         let visible: Vec<usize> = (0..v).filter(|&j| c_vis[j] > 0).collect();
-        let mut keyed: Vec<(f64, usize)> = (0..v).filter(|&j| c_vis[j] == 0).map(|j| (rng.random().max(1e-300).ln() / (presence[j] as f64).max(1e-12), j)).collect();
+        let mut keyed: Vec<(f64, usize)> = (0..v)
+            .filter(|&j| c_vis[j] == 0)
+            .map(|j| (rng.random().max(1e-300).ln() * (-(presence[j] as f64).max(1e-12).ln() / t).exp(), j))
+            .collect();
         keyed.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
         let k = ((target as f64 / self.avg_copies.max(1e-6)).round() as usize).max(visible.len());
         // (the usable ones only, checked in the drawn order: a first check of a card reads its script)
@@ -273,7 +287,7 @@ impl DeckModels {
         for (i, &j) in cand.iter().enumerate() {
             let s = self.is_extra[j] as usize;
             let min = c_vis[j].max(1);
-            let w: Vec<f64> = (1..=3).map(|n| if n >= min { probs[i][n as usize - 1] } else { 0.0 }).collect();
+            let w: Vec<f64> = (1..=3).map(|n| if n >= min { probs[i][n as usize - 1].powf(1.0 / t) } else { 0.0 }).collect();
             let mut u = rng.random() * w.iter().sum::<f64>();
             let mut n = 3;
             for (m, &x) in w.iter().enumerate() {
