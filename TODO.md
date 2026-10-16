@@ -73,7 +73,7 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       budget. It uses about 25% more of the budget than the old rule (start while under half).
 - [ ] Time management: node-based scaling of the soft bound, best-move stability, eval stability;
       the split between early and late moves (`MOVES_TO_GO` = 20).
-- [ ] Futility pruning again (Stockfish's parent-node form): the moves after the first at depth
+- [x] Futility pruning again (Stockfish's parent-node form): the moves after the first at depth
       <= 3 whose static eval + 45 + 4 * depth cannot raise alpha (margins measured with the mover2
       eval: the 99th percentile of the gap over the moves that raised alpha, 49/52/55/72 at depth
       1-4). Mean depth at 3000 nodes 9.60 -> 9.91 (up to depth 1: 9.74, 2: 9.83, 4: 10.02). SPRT
@@ -81,8 +81,10 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
   - Smaller margins (`YGOAI_FUTILITY=margin,per_ply,max_depth`), mean depth at 3000 nodes (15
     openings, base 9.65): 25,2,3 10.29; 15,2,4 10.80; 10,2,6 11.54; 5,2,8 12.37; 0,2,all 14.41;
     20,0,all 13.52; 10,0,all 15.00; 0,0,all 17.85; -10,0,all 20.80; -20,0,all 25.66. SPRT of
-    5,2,8 (+2.7 plies) vs `lmr,predict` running. (These are in the mover2 eval's points; in LP,
-    since the anchor, x 116.7: 5,2,8 is 583,233,8.)
+    5,2,8 (+2.7 plies) vs `lmr,predict`: H1, +19.4 +/- 13.5, LLR +3.03 at 1364 games; default since
+    2026-10-16 (in LP: 583.4 + 233.4 * depth up to depth 8). Bench checksum 7ff0dd5b80995d11
+    (1a362d951150a90d with `hand`), mean depth 12.71 at 3000 nodes (was 10.31).
+  - [ ] Tune further (margins, max depth, per move kind) now that the units are LP.
 - [ ] Extend the first child when it is the TT move and the node has only 1 or 2 children: by 1 ply,
       or by a fraction of a ply (e.g. 0.5; needs fractional depth).
 - [ ] qsearch, if retried: a TT in quiescence, cheaper chain windows (pass plus the best few

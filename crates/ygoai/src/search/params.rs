@@ -48,13 +48,15 @@ pub const RFP_MARGIN_MULTIPLIER: f64 = 1400.0;
 /// (late move reductions from this depth on, for the moves after the first LMR_MIN_MOVE_COUNTER)
 pub const LMR_MIN_DEPTH: i32 = 2;
 pub const LMR_MIN_MOVE_COUNTER: usize = 2;
-/// (futility pruning up to this depth, margin FUTILITY_MARGIN + FUTILITY_MARGIN_PER_PLY * depth: about
-/// the 99th percentile of alpha minus the static eval over the later moves that raised alpha, at
-/// depth 1 to 3 (49, 52, 55 points of the mover2 eval, 1 point = 116.7 LP by its anchor; 4M
-/// moves of 40 bench openings at 3000 nodes, lmr))
-pub const FUTILITY_MAX_DEPTH: i32 = 3;
-pub const FUTILITY_MARGIN: f64 = 5250.0;
-pub const FUTILITY_MARGIN_PER_PLY: f64 = 467.0;
+/// (futility pruning up to this depth, margin FUTILITY_MARGIN + FUTILITY_MARGIN_PER_PLY * depth:
+/// 5 + 2 * depth points of the mover2 eval (1 point = 116.68 LP), chosen for +2 plies at 3000
+/// nodes (mean depth 9.65 -> 12.37); SPRT vs lmr,predict H1, +19.4 +/- 13.5 at 1364 games. The
+/// measured 99th percentile of alpha minus the static eval over the later moves that raised
+/// alpha was 49, 52, 55, 72 points at depth 1-4: a margin about ten times larger (SPRT stopped
+/// near zero))
+pub const FUTILITY_MAX_DEPTH: i32 = 8;
+pub const FUTILITY_MARGIN: f64 = 5.0 * 116.68036281706055;
+pub const FUTILITY_MARGIN_PER_PLY: f64 = 2.0 * 116.68036281706055;
 /// The futility parameters (FUTILITY_MARGIN, FUTILITY_MARGIN_PER_PLY, FUTILITY_MAX_DEPTH), or
 /// $YGOAI_FUTILITY as "margin,per_ply,max_depth" (in LP; read once).
 pub fn futility_params() -> (f64, f64, i32) {
@@ -83,9 +85,10 @@ pub const MAX_QUIESCE_PLY: i32 = 6;
 /// instead of while less than half the budget is used.
 /// The features that passed their SPRTs (LMR: +19.1 +/- 14.9, LLR +3.01, 1204 games, 2026-10-13),
 /// and `predict`, taken without a pass (+3.8 +/- 11.7, LLR -0.35 at 1760 games, 2026-10-14) for
-/// the room it leaves the time management. (The node-budget search, `lmr_noresearch`, `rfp_kind`
+/// the room it leaves the time management; `futility` (+19.4 +/- 13.5, LLR +3.03, 1364 games,
+/// 2026-10-16). (The node-budget search, `lmr_noresearch`, `rfp_kind`
 /// and `pv_ext` were removed after failing their tests: git history before the search/ split.)
-pub const DEFAULT_FEATURES: &str = "lmr,predict";
+pub const DEFAULT_FEATURES: &str = "lmr,predict,futility";
 
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Features {
