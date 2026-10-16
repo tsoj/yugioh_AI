@@ -69,28 +69,51 @@ pub fn futility_params() -> (f64, f64, i32) {
         Err(_) => (FUTILITY_MARGIN, FUTILITY_MARGIN_PER_PLY, FUTILITY_MAX_DEPTH),
     })
 }
+/// (`lmrlog`: the reduction of a late move, max(1, round(LMR_ADDITION + ln(depth) * ln(move
+/// number) / LMR_DIVISOR)), Nalwald's form; $YGOAI_LMR as "addition,divisor" to override)
+pub const LMR_ADDITION: f64 = 0.5;
+pub const LMR_DIVISOR: f64 = 2.0;
+
+pub fn lmr_params() -> (f64, f64) {
+    static P: std::sync::OnceLock<(f64, f64)> = std::sync::OnceLock::new();
+    *P.get_or_init(|| match std::env::var("YGOAI_LMR") {
+        Ok(s) => {
+            let v: Vec<&str> = s.split(',').collect();
+            (v[0].parse().unwrap(), v[1].parse().unwrap())
+        }
+        Err(_) => (LMR_ADDITION, LMR_DIVISOR),
+    })
+}
+
+/// The late move reduction at `depth` of the move with index `i` (`lmrlog`).
+pub fn lmr_reduction(depth: i32, i: usize) -> i32 {
+    let (add, div) = lmr_params();
+    ((add + (depth as f64).ln() * ((i + 1) as f64).ln() / div).round() as i32).max(1)
+}
+
+/// (`rfpall`: reverse futility pruning at all nodes below the root, margin RFP_MARGIN +
+/// RFP_MARGIN_PER_PLY * depth up to RFP_ALL_MAX_DEPTH, as futility's; $YGOAI_RFP as
+/// "margin,per_ply,max_depth" in LP to override)
+pub const RFP_MARGIN: f64 = FUTILITY_MARGIN;
+pub const RFP_MARGIN_PER_PLY: f64 = FUTILITY_MARGIN_PER_PLY;
+pub const RFP_ALL_MAX_DEPTH: i32 = FUTILITY_MAX_DEPTH;
+
+pub fn rfp_params() -> (f64, f64, i32) {
+    static P: std::sync::OnceLock<(f64, f64, i32)> = std::sync::OnceLock::new();
+    *P.get_or_init(|| match std::env::var("YGOAI_RFP") {
+        Ok(s) => {
+            let v: Vec<&str> = s.split(',').collect();
+            (v[0].parse().unwrap(), v[1].parse().unwrap(), v[2].parse().unwrap())
+        }
+        Err(_) => (RFP_MARGIN, RFP_MARGIN_PER_PLY, RFP_ALL_MAX_DEPTH),
+    })
+}
+
 /// (`narrowext`: the nodes with at most this many moves extend their TT move)
 pub const NARROW_EXT_MAX_CHILDREN: usize = 2;
 /// (quiescence plies past the nominal depth)
 pub const MAX_QUIESCE_PLY: i32 = 6;
 
-/// Search features, each off unless named in $YGOAI_SEARCH (a comma list; unset: DEFAULT_FEATURES):
-/// `pvs`, `rfp` (reverse futility pruning at null-window nodes; with pvs), `futility` (futility
-/// pruning up to FUTILITY_MAX_DEPTH), `lmr`, `conthist` (continuation history), `qsearch`
-/// (battle and chain decisions past the depth).
-/// Decisions inside a move that the search can make instead of the rules' player (each the rules'
-/// first few choices): `unselect` (card by card selections, e.g. most materials), `tribute`,
-/// `multicard` (selections of several cards), `sum` (selections by a sum: Synchro and Ritual
-/// materials), `position`, `place` (the zone).
-/// `narrowext`: at a node with only one or two moves, the TT move is searched a ply deeper.
-/// `predict`: with a clock, the next iteration starts only if it is expected to end within the
-/// time budget (by this iteration's time and the depth's node growth, learned across searches)
-/// instead of while less than half the budget is used.
-/// The features that passed their SPRTs (LMR: +19.1 +/- 14.9, LLR +3.01, 1204 games, 2026-10-13),
-/// and `predict`, taken without a pass (+3.8 +/- 11.7, LLR -0.35 at 1760 games, 2026-10-14) for
-/// the room it leaves the time management; `futility` (+19.4 +/- 13.5, LLR +3.03, 1364 games,
-/// 2026-10-16). (The node-budget search, `lmr_noresearch`, `rfp_kind`
-/// and `pv_ext` were removed after failing their tests: git history before the search/ split.)
 /// `deckpick`: the decks the opponent picks from (the reconstruction's guess and draws of new
 /// guesses), $YGOAI_DECKPICK to override
 pub const DECKPICK_DECKS: usize = 3;
@@ -118,6 +141,25 @@ pub fn passrisk_lp() -> f64 {
     *R.get_or_init(|| std::env::var("YGOAI_PASSRISK").ok().and_then(|s| s.parse().ok()).unwrap_or(PASSRISK_LP))
 }
 
+/// Search features, each off unless named in $YGOAI_SEARCH (a comma list; unset: DEFAULT_FEATURES):
+/// `pvs`, `rfp` (reverse futility pruning at null-window nodes; with pvs), `futility` (futility
+/// pruning up to FUTILITY_MAX_DEPTH), `lmr`, `conthist` (continuation history), `qsearch`
+/// (battle and chain decisions past the depth).
+/// Decisions inside a move that the search can make instead of the rules' player (each the rules'
+/// first few choices): `unselect` (card by card selections, e.g. most materials), `tribute`,
+/// `multicard` (selections of several cards), `sum` (selections by a sum: Synchro and Ritual
+/// materials), `position`, `place` (the zone).
+/// `narrowext`: at a node with only one or two moves, the TT move is searched a ply deeper.
+/// `lmrlog`: LMR by `lmr_reduction` instead of one ply. `rfpall`: reverse futility pruning at all
+/// nodes below the root (`rfp_params`).
+/// `predict`: with a clock, the next iteration starts only if it is expected to end within the
+/// time budget (by this iteration's time and the depth's node growth, learned across searches)
+/// instead of while less than half the budget is used.
+/// The features that passed their SPRTs (LMR: +19.1 +/- 14.9, LLR +3.01, 1204 games, 2026-10-13),
+/// and `predict`, taken without a pass (+3.8 +/- 11.7, LLR -0.35 at 1760 games, 2026-10-14) for
+/// the room it leaves the time management; `futility` (+19.4 +/- 13.5, LLR +3.03, 1364 games,
+/// 2026-10-16). (The node-budget search, `lmr_noresearch`, `rfp_kind`
+/// and `pv_ext` were removed after failing their tests: git history before the search/ split.)
 pub const DEFAULT_FEATURES: &str = "lmr,predict,futility";
 
 #[derive(Clone, Copy, Default, Debug)]
@@ -142,6 +184,8 @@ pub struct Features {
     pub deckpick: bool,
     /// (lines with the opponent passing on our chain link while holding unknown cards: less for us)
     pub passrisk: bool,
+    pub lmrlog: bool,
+    pub rfpall: bool,
 }
 
 impl Features {
@@ -166,6 +210,8 @@ impl Features {
                 "resample" => f.resample = true,
                 "deckpick" => f.deckpick = true,
                 "passrisk" => f.passrisk = true,
+                "lmrlog" => f.lmrlog = true,
+                "rfpall" => f.rfpall = true,
                 _ => panic!("YGOAI_SEARCH: unknown feature {name}"),
             }
         }

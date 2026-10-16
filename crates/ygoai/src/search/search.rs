@@ -524,6 +524,14 @@ impl SearchState<'_> {
                 return Ok(static_eval);
             }
         }
+        // (`rfpall`: at any node below the root, by futility's margins)
+        let (rfp_margin, rfp_per_ply, rfp_max_depth) = rfp_params();
+        if f.rfpall && height > 0 && depth <= rfp_max_depth && beta.is_finite() && beta.abs() < WIN / 2.0 {
+            let static_eval = self.evaluate_at(duel, us, Some(prompt));
+            if static_eval - (rfp_margin + rfp_per_ply * depth as f64) >= beta {
+                return Ok(static_eval);
+            }
+        }
         let (futility_margin, futility_per_ply, futility_max_depth) = futility_params();
         let static_eval = if (f.futility && depth <= futility_max_depth) || (self.tables.stats.is_some() && depth <= 4) { Some(self.evaluate_at(duel, us, Some(prompt))) } else { None };
         // (futility pruning: the moves after the first whose static eval plus the margin cannot raise alpha)
@@ -577,7 +585,8 @@ impl SearchState<'_> {
             // late move reduction: a late move, unlikely the best by the move ordering, one ply
             // less; the full depth after all if it raises alpha
             if f.lmr && depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNTER {
-                let reduced = self.search_move(duel, prompt, mv, alpha, beta, new_depth - 1, height + 1, false)?;
+                let r = if f.lmrlog { lmr_reduction(depth, i) } else { 1 };
+                let reduced = self.search_move(duel, prompt, mv, alpha, beta, (new_depth - r).max(0), height + 1, false)?;
                 if reduced <= alpha {
                     value = Some(reduced);
                 }
