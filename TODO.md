@@ -98,6 +98,13 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
 
 - [ ] Different card guesses and deck fillers in each iteration of the iterative deepening (the
       opponent's hidden cards re-sampled per depth), instead of one guess for the whole search.
+      Feature `resample` (c0342ea): the guessed cards still hidden get codes drawn from the deck
+      model (presence-weighted, copies from the count model) within the observations'
+      requirements, ~1.7 ms per draw; SPRT vs the default running. TT and history unchanged.
+  - [ ] If it fails, or after: a TT key without the guessed cards' codes while they are hidden
+        (zone cards' codes and stats, the codes in the opponent's prompts), so that entries carry
+        over between guesses. History: keep the codes (an entry for a card matters in every
+        guess that has it).
 
 ## Evaluation
 
