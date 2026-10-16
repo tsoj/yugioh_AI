@@ -40,10 +40,11 @@ ps = pair * 2 + (k % 2)
 sgn = np.where(player == 0, 1.0, -1.0).astype(np.float32)
 
 def fit_k(v, r):
-    keep = (r != 0) & (np.abs(v) < 1000)
+    # (no wins and losses: +/-100000 before the values were in LP, +/-1e7 since)
+    keep = (r != 0) & (np.abs(v) < 90000)
     v, y = v[keep].astype(np.float64), (r[keep] + 1) / 2
     best = None
-    for kk in np.geomspace(1, 1000, 200):
+    for kk in np.geomspace(1, 1e5, 400):
         z = -v / kk
         p = 1 / (1 + np.exp(np.clip(z, -50, 50)))
         loss = -np.mean(y * np.log(p + 1e-9) + (1 - y) * np.log(1 - p + 1e-9))
@@ -155,3 +156,14 @@ if args.output:
                "w2": (st[f"{2 * args.layers}.weight"][0] * K).tolist(), "b2": float(st[f"{2 * args.layers}.bias"][0] * K),
                "k": float(K), "lam": args.lam, "hidden": args.hidden, "n_layers": args.layers}, open(args.output, "w"))
     print("saved", args.output)
+    # the LP anchor (ygoai-anchor) on the held-out pairs' rows, so that the engine's values are in LP
+    import os, subprocess, tempfile
+    anchor = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "rust", "target", "release", "ygoai-anchor")
+    if os.path.exists(anchor):
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+            for row in d["x"][is_hp]:
+                f.write(json.dumps({"x": row.astype(float).tolist()}) + "\n")
+        subprocess.run([anchor, args.output, f.name, "--write"], check=True)
+        os.unlink(f.name)
+    else:
+        print(f"warning: {anchor} not built: {args.output} has no LP anchor (run ygoai-anchor)")

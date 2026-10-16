@@ -1,6 +1,7 @@
 //! The search's parameters and its optional features ($YGOAI_SEARCH).
 
-pub const WIN: f64 = 100000.0;
+/// (values are in LP: the learned eval's by its LP anchor)
+pub const WIN: f64 = 10_000_000.0;
 /// (a safety bound only: the clock ends the iterations)
 pub const MAX_DEPTH: i32 = 100;
 /// (without a time control: a fixed depth)
@@ -40,21 +41,22 @@ pub const CONT_BITS: u32 = 16;
 pub const HIST_DECAY: f64 = 0.5;
 
 /// (the null window's width, 1 LP: the smallest step of a value)
-pub const NULL_WINDOW: f64 = 0.01;
+pub const NULL_WINDOW: f64 = 1.0;
 /// (reverse futility pruning at null-window nodes up to this depth, by this margin per ply)
 pub const RFP_MAX_DEPTH: i32 = 2;
-pub const RFP_MARGIN_MULTIPLIER: f64 = 12.0;
+pub const RFP_MARGIN_MULTIPLIER: f64 = 1400.0;
 /// (late move reductions from this depth on, for the moves after the first LMR_MIN_MOVE_COUNTER)
 pub const LMR_MIN_DEPTH: i32 = 2;
 pub const LMR_MIN_MOVE_COUNTER: usize = 2;
 /// (futility pruning up to this depth, margin FUTILITY_MARGIN + FUTILITY_MARGIN_PER_PLY * depth: about
 /// the 99th percentile of alpha minus the static eval over the later moves that raised alpha, at
-/// depth 1 to 3 (49, 52, 55; 4M moves of 40 bench openings at 3000 nodes, mover2 eval, lmr))
+/// depth 1 to 3 (49, 52, 55 points of the mover2 eval, 1 point = 116.7 LP by its anchor; 4M
+/// moves of 40 bench openings at 3000 nodes, lmr))
 pub const FUTILITY_MAX_DEPTH: i32 = 3;
-pub const FUTILITY_MARGIN: f64 = 45.0;
-pub const FUTILITY_MARGIN_PER_PLY: f64 = 4.0;
+pub const FUTILITY_MARGIN: f64 = 5250.0;
+pub const FUTILITY_MARGIN_PER_PLY: f64 = 467.0;
 /// The futility parameters (FUTILITY_MARGIN, FUTILITY_MARGIN_PER_PLY, FUTILITY_MAX_DEPTH), or
-/// $YGOAI_FUTILITY as "margin,per_ply,max_depth" (read once).
+/// $YGOAI_FUTILITY as "margin,per_ply,max_depth" (in LP; read once).
 pub fn futility_params() -> (f64, f64, i32) {
     static P: std::sync::OnceLock<(f64, f64, i32)> = std::sync::OnceLock::new();
     *P.get_or_init(|| match std::env::var("YGOAI_FUTILITY") {

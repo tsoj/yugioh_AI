@@ -9,15 +9,15 @@ use ygo_core::types::CardId;
 use crate::messages::Msg;
 use crate::state::parse_location_query;
 
-// evaluation weights (points; 1 point = 100 LP)
-pub const W_LP: f64 = 1.0 / 100.0;
-pub const W_MONSTER: f64 = 4.3;
+// evaluation weights (in LP, as all values)
+pub const W_LP: f64 = 1.0;
+pub const W_MONSTER: f64 = 430.0;
 /// (a face-up monster stronger than everything on the other side)
-pub const W_DOMINANT: f64 = 17.6;
-pub const W_HAND: f64 = 9.1;
-pub const W_BACKROW: f64 = 5.1;
+pub const W_DOMINANT: f64 = 1760.0;
+pub const W_HAND: f64 = 910.0;
+pub const W_BACKROW: f64 = 510.0;
 /// (two cards or fewer left to draw)
-pub const W_DECK_OUT: f64 = 20.0;
+pub const W_DECK_OUT: f64 = 2000.0;
 
 const MZONE_QUERY: u32 = QUERY_POSITION | QUERY_ATTACK | QUERY_DEFENSE;
 
@@ -303,7 +303,8 @@ pub fn mover_features2(d: &mut Duel, mover: u32, prompt: Option<&Msg>) -> Vec<f6
 
 /// A trained evaluation (scripts/train_eval.py's export): linear on the raw features, or the
 /// antisymmetric MLP v(z) = g(z) - g(-z), g(z) = w2 . relu(w1 z + b1), z the features divided by
-/// `scale`. Its value is in eval points.
+/// `scale`. Its value is in LP: the network's output times its `lp_anchor`'s factor (see
+/// `LpAnchor`; without one, in the network's own points, with a warning).
 #[derive(serde::Deserialize)]
 pub struct LearnedEval {
     features: String,
@@ -325,7 +326,31 @@ pub struct LearnedEval {
     /// (`mover`: hidden layers after the first, each relu(w h + b); `w2` reads the last)
     #[serde(default)]
     layers: Vec<Layer>,
+    #[serde(default)]
+    pub lp_anchor: Option<LpAnchor>,
+    /// (the factor in use: the anchor's if it belongs to these weights, else 1)
+    #[serde(skip)]
+    lp_factor: f64,
 }
+
+/// The network's output in LP (ygoai-anchor): `factor` = 1 / `slope`, the mean change of the
+/// output per LP of the LP difference (the mover's LP up and the opponent's down by 250 each,
+/// against the reverse) over `positions` positions of `data` where both players have at least
+/// LP_ANCHOR_MIN_LP. `weights_hash`: `LearnedEval::weights_hash` of the weights it was measured
+/// on (another hash: the network changed since, and the engine warns).
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
+pub struct LpAnchor {
+    pub factor: f64,
+    pub slope: f64,
+    pub positions: u64,
+    pub data: String,
+    pub weights_hash: String,
+}
+
+/// (`LpAnchor`: the positions measured have both players at this many LP or more)
+pub const LP_ANCHOR_MIN_LP: f64 = 2000.0;
+/// (`LpAnchor`: each player's LP moved by this much, both ways)
+pub const LP_ANCHOR_STEP: f64 = 250.0;
 
 #[derive(serde::Deserialize)]
 struct Layer {
@@ -339,17 +364,78 @@ fn dense_relu(w: &[Vec<f64>], b: &[f64], x: &[f64]) -> Vec<f64> {
 }
 
 impl LearnedEval {
+    /// The evaluation of a model file's text; `name` for the warnings.
+    pub fn from_json(text: &str, name: &str) -> LearnedEval {
+        let mut e: LearnedEval = serde_json::from_str(text).unwrap_or_else(|err| panic!("eval {name}: {err}"));
+        e.lp_factor = 1.0;
+        match &e.lp_anchor {
+            None => eprintln!("warning: eval {name} has no LP anchor (run ygoai-anchor): its values are in the network's own points, the search's margins are in LP"),
+            Some(a) if a.weights_hash != e.weights_hash() => eprintln!(
+                "warning: eval {name}: the LP anchor was measured on other weights (hash {} vs {}): run ygoai-anchor again; values in the network's own points",
+                a.weights_hash,
+                e.weights_hash()
+            ),
+            Some(a) => e.lp_factor = a.factor,
+        }
+        e
+    }
+
+    /// A hash of the network (its features, model type and every parameter's bits; FNV-1a).
+    pub fn weights_hash(&self) -> String {
+        let mut h: u64 = 0xcbf29ce484222325;
+        let mut eat = |bytes: &[u8]| {
+            for b in bytes {
+                h = (h ^ *b as u64).wrapping_mul(0x100000001b3);
+            }
+        };
+        eat(self.features.as_bytes());
+        eat(self.model.as_bytes());
+        let mut all: Vec<f64> = Vec::new();
+        for v in [&self.mu, &self.scale, &self.weights, &self.b1, &self.w2] {
+            all.extend(v.iter().copied());
+            all.push(f64::NAN); // (a separator)
+        }
+        all.extend(self.w1.iter().flatten().copied());
+        for l in &self.layers {
+            all.extend(l.w.iter().flatten().chain(&l.b).copied());
+        }
+        all.push(self.b2);
+        for x in all {
+            eat(&x.to_bits().to_le_bytes());
+        }
+        format!("{h:016x}")
+    }
+
+    /// The indices of the mover's and the opponent's LP / 1000 in the features (`mover`, `mover2`).
+    pub fn lp_features(&self) -> Option<(usize, usize)> {
+        (self.features == "mover" || self.features == "mover2").then_some((0, 17))
+    }
+
+    /// The number of features the network reads.
+    pub fn n_features(&self) -> usize {
+        self.scale.len()
+    }
+
+    /// The network's output (its own points) for the mover's features `x` (`mover`, `mover2`).
+    pub fn mover_output(&self, x: &[f64]) -> f64 {
+        let z: Vec<f64> = x.iter().zip(&self.mu).zip(&self.scale).map(|((a, m), s)| (a - m) / s).collect();
+        let mut h = dense_relu(&self.w1, &self.b1, &z);
+        for l in &self.layers {
+            h = dense_relu(&l.w, &l.b, &h);
+        }
+        self.b2 + self.w2.iter().zip(&h).map(|(w, x)| w * x).sum::<f64>()
+    }
+
     pub fn value(&self, d: &mut Duel, me: u32, prompt: Option<&Msg>) -> f64 {
+        self.lp_factor * self.output(d, me, prompt)
+    }
+
+    fn output(&self, d: &mut Duel, me: u32, prompt: Option<&Msg>) -> f64 {
         if self.features == "mover" || self.features == "mover2" {
             // (the mover's value, an unconstrained MLP: plus for me, minus for the opponent)
             let mover = prompt.and_then(|m| m.player()).unwrap_or(me);
             let x = if self.features == "mover" { mover_features(d, mover, prompt) } else { mover_features2(d, mover, prompt) };
-            let z: Vec<f64> = x.iter().zip(&self.mu).zip(&self.scale).map(|((a, m), s)| (a - m) / s).collect();
-            let mut h = dense_relu(&self.w1, &self.b1, &z);
-            for l in &self.layers {
-                h = dense_relu(&l.w, &l.b, &h);
-            }
-            let v = self.b2 + self.w2.iter().zip(&h).map(|(w, x)| w * x).sum::<f64>();
+            let v = self.mover_output(&x);
             return if mover == me { v } else { -v };
         }
         let x = if self.features == "rich" { rich_features(d, me) } else { eval_features(d, me).to_vec() };
@@ -376,9 +462,9 @@ impl LearnedEval {
             Some(p) if p == "hand" => None,
             Some(path) => {
                 let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("YGOAI_EVAL {path}: {e}"));
-                Some(serde_json::from_str(&text).unwrap_or_else(|e| panic!("YGOAI_EVAL {path}: {e}")))
+                Some(LearnedEval::from_json(&text, &path))
             }
-            None => Some(serde_json::from_str(DEFAULT_EVAL).expect("models/eval_mover2_mlp16.json")),
+            None => Some(LearnedEval::from_json(DEFAULT_EVAL, "models/eval_mover2_mlp16.json")),
         })
         .as_ref()
     }
@@ -389,7 +475,7 @@ impl LearnedEval {
 /// runs/data/pairs500x20_2000n.jsonl), which had +28.5 +/- 17.6 vs the hand-written eval).
 const DEFAULT_EVAL: &str = include_str!("../../models/eval_mover2_mlp16.json");
 
-/// The position's value for `me` (in points of 100 LP): the trained evaluation (see
+/// The position's value for `me` (in LP): the trained evaluation (see
 /// `LearnedEval::from_env`), or the hand-written one (alphabeta.evaluate) with YGOAI_EVAL=hand.
 pub fn evaluate(d: &mut Duel, me: u32) -> f64 {
     evaluate_at(d, me, None)
