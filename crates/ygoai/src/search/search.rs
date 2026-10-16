@@ -224,7 +224,14 @@ impl AlphaBeta {
         let turn_player = duel.ext_get_info()[1];
         let stop_time = p.budget.map(|b| start_time + std::time::Duration::from_secs_f64(b.max((HARD_FACTOR * b).min(HARD_SHARE * p.clock_remaining))));
         let max_nodes = p.max_nodes.map(|n| self.nodes + n);
-        let mut state = SearchState { tables: self, policies, stop_time, max_nodes, features: Features::from_env(), root_depth: 0, deck_key: 0 };
+        let features = Features::from_env();
+        // (`passrisk`: the opponent's cards hidden at the root)
+        let unknown = if features.passrisk {
+            duel.ext_get_all_cards().iter().filter(|e| e[0] != us as u32 && e[5] != 0 && is_hidden(duel, e[5])).map(|e| e[5]).collect()
+        } else {
+            vec![]
+        };
+        let mut state = SearchState { tables: self, policies, stop_time, max_nodes, features, root_depth: 0, deck_key: 0, root_player: us as u32, unknown, line_risk: false };
         let card_order = state.rules_card_order(root_prompt);
         let preference = ordered(root_prompt, turn_player, card_order.as_deref());
         let mut move_order: Vec<usize> = (0..root_moves.len()).collect();
@@ -254,6 +261,12 @@ struct SearchState<'a> {
     root_depth: i32,
     /// (`deckpick`: the deck searched, in the TT key: the key leaves out the codes of hidden cards)
     deck_key: u64,
+    /// (`passrisk`) the root's player, the opponent's cards hidden from it at the root, and
+    /// whether the line searched has the opponent pass on its chain link while holding one of
+    /// them in the hand or Set (in the TT key)
+    root_player: u32,
+    unknown: Vec<u32>,
+    line_risk: bool,
 }
 
 /// Where `do_move` arrived.
@@ -269,6 +282,44 @@ enum NewPosition {
 }
 
 impl SearchState<'_> {
+    /// The static evaluation for `us`, less `passrisk_lp()` for the root's player on a line with
+    /// the risk (`passrisk`).
+    fn evaluate_at(&self, duel: &mut Duel, us: u32, prompt: Option<&Msg>) -> f64 {
+        let v = evaluate_at(duel, us, prompt);
+        self.with_risk(v, us)
+    }
+
+    fn evaluate(&self, duel: &mut Duel, us: u32) -> f64 {
+        let v = evaluate(duel, us);
+        self.with_risk(v, us)
+    }
+
+    fn with_risk(&self, v: f64, us: u32) -> f64 {
+        if !self.line_risk {
+            v
+        } else if us == self.root_player {
+            v - passrisk_lp()
+        } else {
+            v + passrisk_lp()
+        }
+    }
+
+    /// (`passrisk`) Whether answering `prompt` with `response` is the opponent passing on the root
+    /// player's chain link while holding a card the root's player does not know (hidden in the hand
+    /// or Set): a line that may be optimistic about the opponent's hidden cards.
+    fn passes_unknown(&self, duel: &Duel, prompt: &Msg, response: &Response) -> bool {
+        if !self.features.passrisk || response.index != Some(-1) {
+            return false;
+        }
+        let Msg::SelectChain { player, .. } = prompt else { return false };
+        if *player == self.root_player || duel.core.current_chain.last().is_none_or(|l| l.triggering_controler as u32 != self.root_player) {
+            return false;
+        }
+        self.unknown.iter().any(|&cid| {
+            is_hidden(duel, cid) && duel.card_by_id(cid).is_some_and(|c| duel.card(c).current.location as u32 & (LOCATION_HAND | LOCATION_SZONE) != 0)
+        })
+    }
+
     fn should_stop(&self) -> bool {
         self.stop_time.is_some_and(|d| Instant::now() > d) || self.max_nodes.is_some_and(|n| self.tables.nodes >= n)
     }
@@ -432,7 +483,7 @@ impl SearchState<'_> {
             if f.qsearch && depth > -MAX_QUIESCE_PLY && !quiet {
                 return self.quiesce(duel, prompt, alpha, beta, depth, height);
             }
-            return Ok(evaluate_at(duel, us, Some(prompt)));
+            return Ok(self.evaluate_at(duel, us, Some(prompt)));
         }
 
         // (moves are indices into the rules' order: the hash table keeps one, the history reorders them)
@@ -443,7 +494,7 @@ impl SearchState<'_> {
         }
 
         // transposition table: update alpha, beta or return immediately
-        let key = hash_key(duel, prompt) ^ self.deck_key;
+        let key = hash_key(duel, prompt) ^ self.deck_key ^ if self.line_risk { 0xD6E8_FEB8_6659_FD93 } else { 0 };
         let hash_result = self.tables.hash_table.get(key);
         let (mut tt_move, mut tt_state) = (None, 0u8);
         let nodes_before = self.tables.nodes;
@@ -468,13 +519,13 @@ impl SearchState<'_> {
 
         // reverse futility pruning: so far ahead that the moves would not bring it below beta
         if f.rfp && beta - alpha <= NULL_WINDOW && depth <= RFP_MAX_DEPTH && beta.abs() < WIN / 2.0 {
-            let static_eval = evaluate_at(duel, us, Some(prompt));
+            let static_eval = self.evaluate_at(duel, us, Some(prompt));
             if static_eval - RFP_MARGIN_MULTIPLIER * depth as f64 >= beta {
                 return Ok(static_eval);
             }
         }
         let (futility_margin, futility_per_ply, futility_max_depth) = futility_params();
-        let static_eval = if (f.futility && depth <= futility_max_depth) || (self.tables.stats.is_some() && depth <= 4) { Some(evaluate_at(duel, us, Some(prompt))) } else { None };
+        let static_eval = if (f.futility && depth <= futility_max_depth) || (self.tables.stats.is_some() && depth <= 4) { Some(self.evaluate_at(duel, us, Some(prompt))) } else { None };
         // (futility pruning: the moves after the first whose static eval plus the margin cannot raise alpha)
         let futility_value = static_eval.filter(|_| f.futility && depth <= futility_max_depth).map(|s| s + futility_margin + futility_per_ply * depth as f64);
 
@@ -598,7 +649,7 @@ impl SearchState<'_> {
         let mut moves = ordered(prompt, duel.ext_get_info()[1], None);
         let mut best_value = f64::NEG_INFINITY;
         if matches!(prompt, Msg::SelectBattlecmd { .. }) {
-            let stand_pat = evaluate_at(duel, prompt.player().unwrap_or(0), Some(prompt));
+            let stand_pat = self.evaluate_at(duel, prompt.player().unwrap_or(0), Some(prompt));
             best_value = stand_pat;
             if stand_pat >= beta {
                 return Ok(stand_pat);
@@ -684,6 +735,18 @@ impl SearchState<'_> {
     /// (`make_and_search` without the trace)
     #[allow(clippy::too_many_arguments)]
     fn make_and_search_untraced(&mut self, duel: &mut Duel, prompt: &Msg, mv: &Response, alpha: f64, beta: f64, depth: i32, height: i32) -> Result<f64, Stop> {
+        let saved_risk = self.line_risk;
+        let result = self.make_and_search_risk(duel, prompt, mv, alpha, beta, depth, height);
+        self.line_risk = saved_risk;
+        result
+    }
+
+    /// (`make_and_search_untraced`, `line_risk` restored by the caller)
+    #[allow(clippy::too_many_arguments)]
+    fn make_and_search_risk(&mut self, duel: &mut Duel, prompt: &Msg, mv: &Response, alpha: f64, beta: f64, depth: i32, height: i32) -> Result<f64, Stop> {
+        if self.passes_unknown(duel, prompt, mv) {
+            self.line_risk = true;
+        }
         let us = prompt.player().unwrap_or(0);
         let previous = if self.features.conthist { move_key(prompt, mv) } else { 0 };
         Ok(match self.do_move(duel, prompt, mv, depth)? {
@@ -694,8 +757,8 @@ impl SearchState<'_> {
                     -WIN + height as f64
                 }
             }
-            NewPosition::End => evaluate(duel, us),
-            NewPosition::StepLimit(last) => evaluate_at(duel, us, Some(&last)),
+            NewPosition::End => self.evaluate(duel, us),
+            NewPosition::StepLimit(last) => self.evaluate_at(duel, us, Some(&last)),
             NewPosition::Decision(next) => {
                 if next.player().unwrap_or(0) == us {
                     self.search(duel, &next, alpha, beta, depth, height, previous)?
@@ -747,6 +810,9 @@ impl SearchState<'_> {
             } else {
                 self.policies[player as usize].respond_to(&prompt, None).map_err(|_| Stop::Broken)?
             };
+            if self.passes_unknown(duel, &prompt, &response) {
+                self.line_risk = true;
+            }
             duel.ocg_set_response(&encode(&prompt, &response).map_err(|_| Stop::Broken)?);
         }
         Ok(NewPosition::StepLimit(prompt))

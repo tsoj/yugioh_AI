@@ -109,6 +109,15 @@ pub fn deckpick_reduction() -> i32 {
     *R.get_or_init(|| std::env::var("YGOAI_DECKPICK_R").ok().and_then(|s| s.parse().ok()).unwrap_or(DECKPICK_REDUCTION).max(0))
 }
 
+/// `passrisk`: what a line with the opponent passing on the root player's chain link while holding
+/// cards it does not know costs the root's player (LP; once per line), $YGOAI_PASSRISK to override
+pub const PASSRISK_LP: f64 = 500.0;
+
+pub fn passrisk_lp() -> f64 {
+    static R: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    *R.get_or_init(|| std::env::var("YGOAI_PASSRISK").ok().and_then(|s| s.parse().ok()).unwrap_or(PASSRISK_LP))
+}
+
 pub const DEFAULT_FEATURES: &str = "lmr,predict,futility";
 
 #[derive(Clone, Copy, Default, Debug)]
@@ -131,6 +140,8 @@ pub struct Features {
     pub resample: bool,
     /// (a belief agent: the opponent picks among DECKPICK_DECKS guesses after the root's move)
     pub deckpick: bool,
+    /// (lines with the opponent passing on our chain link while holding unknown cards: less for us)
+    pub passrisk: bool,
 }
 
 impl Features {
@@ -154,6 +165,7 @@ impl Features {
                 "narrowext" => f.narrowext = true,
                 "resample" => f.resample = true,
                 "deckpick" => f.deckpick = true,
+                "passrisk" => f.passrisk = true,
                 _ => panic!("YGOAI_SEARCH: unknown feature {name}"),
             }
         }
