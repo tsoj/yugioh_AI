@@ -53,6 +53,74 @@ pub struct NodeStats {
     pub gaps: Vec<(String, i8, f32, bool)>,
 }
 
+/// (`AlphaBeta::trace`) The edges a search went along, for comparing the trees of searches of
+/// the same decision under different guesses of the hidden cards (ygoai-tree-compare).
+#[derive(Default)]
+pub struct Trace {
+    /// the player whose view counts (the root's)
+    pub viewer: u32,
+    /// the cards in question (the opponent's hidden ones at the root), by card id
+    pub cards: Vec<u32>,
+    pub edges: Vec<TraceEdge>,
+    /// (the path hashes of the edges being searched)
+    path: Vec<u64>,
+}
+
+impl Trace {
+    pub fn new(viewer: u32, cards: Vec<u32>) -> Trace {
+        Trace { viewer, cards, edges: Vec::new(), path: Vec::new() }
+    }
+}
+
+pub struct TraceEdge {
+    /// the iteration's depth
+    pub iteration: i32,
+    /// a hash of the moves from the root (each move as `move_key` and the response)
+    pub path: u64,
+    pub height: i32,
+    /// who made the move
+    pub mover: u32,
+    /// of `Trace::cards`, those not hidden any more after the move
+    pub revealed: u8,
+    /// whether the prompt the move answered listed one of `Trace::cards` still hidden
+    pub listed: bool,
+    /// a hash of what the viewer sees after the move (its prompt included if the next decision is
+    /// its own)
+    pub visible: u64,
+    /// the move's value for the mover (None: aborted)
+    pub value: Option<f64>,
+}
+
+/// Whether a card is hidden from the other player (not face-up, not in a graveyard or among
+/// materials).
+pub fn is_hidden(d: &Duel, cid: u32) -> bool {
+    d.card_by_id(cid).is_some_and(|c| {
+        let x = d.card(c);
+        x.current.location as u32 & (LOCATION_GRAVE | LOCATION_OVERLAY) == 0 && x.overlay_target.is_none() && x.is_position(POS_FACEUP) == 0
+    })
+}
+
+/// Whether a prompt lists a hidden card of `cards` (its card entries by place).
+fn lists_hidden(d: &Duel, m: &Msg, cards: &[u32]) -> bool {
+    fn walk(d: &Duel, v: &serde_json::Value, cards: &[u32]) -> bool {
+        match v {
+            serde_json::Value::Object(o) => {
+                if let (Some(con), Some(loc), Some(seq)) = (o.get("con").and_then(|x| x.as_u64()), o.get("loc").and_then(|x| x.as_u64()), o.get("seq").and_then(|x| x.as_u64()))
+                    && let Some(c) = d.get_field_card(con as u32, loc as u32 & 0xffff, seq as u32)
+                    && cards.contains(&d.card(c).cardid)
+                    && is_hidden(d, d.card(c).cardid)
+                {
+                    return true;
+                }
+                o.values().any(|x| walk(d, x, cards))
+            }
+            serde_json::Value::Array(a) => a.iter().any(|x| walk(d, x, cards)),
+            _ => false,
+        }
+    }
+    serde_json::to_value(m).is_ok_and(|v| walk(d, &v, cards))
+}
+
 /// (`NodeStats::cuts`: no cutoff, all the children searched)
 pub const NO_CUT: u8 = 255;
 
@@ -68,6 +136,8 @@ pub struct AlphaBeta {
     pub broken: u64,
     /// (if set, statistics of the expanded nodes, see `NodeStats`)
     pub stats: Option<NodeStats>,
+    /// (if set, the edges searched, see `Trace`)
+    pub trace: Option<Trace>,
     /// the root value of the last search's last completed iteration (NaN if none completed)
     pub last_value: f64,
     /// by depth: [sum of ln(nodes of the iteration / nodes of the one before), weight], kept
@@ -85,6 +155,7 @@ impl Default for AlphaBeta {
             tt_hits: 0,
             broken: 0,
             stats: None,
+            trace: None,
             last_value: f64::NAN,
             growth: vec![[GROWTH_PRIOR.ln() * GROWTH_PRIOR_WEIGHT, GROWTH_PRIOR_WEIGHT]; MAX_DEPTH as usize + 2],
         }
@@ -546,6 +617,33 @@ impl SearchState<'_> {
     /// (`search_move` on the given duel)
     #[allow(clippy::too_many_arguments)]
     fn make_and_search(&mut self, duel: &mut Duel, prompt: &Msg, mv: &Response, alpha: f64, beta: f64, depth: i32, height: i32) -> Result<f64, Stop> {
+        if self.tables.trace.is_none() {
+            return self.make_and_search_untraced(duel, prompt, mv, alpha, beta, depth, height);
+        }
+        use std::hash::{Hash, Hasher};
+        let (path, listed) = {
+            let t = self.tables.trace.as_mut().unwrap();
+            let mut h = rustc_hash::FxHasher::default();
+            (t.path.last().copied().unwrap_or(0), move_key(prompt, mv), serde_json::to_string(mv).unwrap_or_default()).hash(&mut h);
+            let path = h.finish();
+            t.path.push(path);
+            (path, lists_hidden(duel, prompt, &t.cards))
+        };
+        let result = self.make_and_search_untraced(duel, prompt, mv, alpha, beta, depth, height);
+        let t = self.tables.trace.as_mut().unwrap();
+        t.path.pop();
+        let revealed = t.cards.iter().filter(|&&c| !is_hidden(duel, c)).count() as u8;
+        let mut h = rustc_hash::FxHasher::default();
+        serde_json::to_string(&crate::state::viewer_view(duel, t.viewer)).unwrap_or_default().hash(&mut h);
+        let visible = h.finish();
+        let edge = TraceEdge { iteration: self.root_depth, path, height, mover: prompt.player().unwrap_or(0), revealed, listed, visible, value: result.as_ref().ok().copied() };
+        self.tables.trace.as_mut().unwrap().edges.push(edge);
+        result
+    }
+
+    /// (`make_and_search` without the trace)
+    #[allow(clippy::too_many_arguments)]
+    fn make_and_search_untraced(&mut self, duel: &mut Duel, prompt: &Msg, mv: &Response, alpha: f64, beta: f64, depth: i32, height: i32) -> Result<f64, Stop> {
         let us = prompt.player().unwrap_or(0);
         let previous = if self.features.conthist { move_key(prompt, mv) } else { 0 };
         Ok(match self.do_move(duel, prompt, mv, depth)? {

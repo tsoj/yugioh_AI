@@ -21,5 +21,5 @@ pub use evaluate::*;
 pub use movegen::{candidates, candidates_in, is_searched};
 pub use movepick::{move_key, ordered, prompt_label};
 pub use params::*;
-pub use search::{AlphaBeta, NO_CUT, NodeStats, SearchParams, panic_messages_once};
+pub use search::{AlphaBeta, NO_CUT, NodeStats, SearchParams, Trace, TraceEdge, is_hidden, panic_messages_once};
 pub use tt::hash_key;
