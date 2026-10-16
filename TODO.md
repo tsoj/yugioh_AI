@@ -62,7 +62,19 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       (search, tt, history, movegen, movepick, evaluate, params). Removed with it: the node-budget
       search, `lmr_noresearch`, `rfp_kind`, `pv_ext` (failed or near zero; git history has them).
 - [ ] LMR the chess way: a log formula over depth and move number, adjusted by history,
-      PV/non-PV and cut nodes; with PVS, a null-window reduced search.
+      PV/non-PV and cut nodes; with PVS, a null-window reduced search. SPRTs at 1000 nodes
+      (TC 60+1), 2026-10-16:
+  - [x] `lmrzw` (the reduced search with a null window; depth at 3000 nodes 12.71 -> 12.84): H1,
+        +11.1 +/- 8.8, LLR +3.05 at 3074 games; default since a6e2819 (checksum 91ffa3dab8e8055b).
+  - `lmrlog` (max(1, round(0.5 + ln depth ln(i+1) / 2)) plies; 13.22): stopped at 4280 games,
+    +5.4 +/- 7.7, LLR +0.28. `rfpall` (RFP at all nodes below the root by futility's margins; 14.88):
+    stopped at 3840 games, +3.6 +/- 8.0, LLR -0.82. Both on top of `lmrzw` (15.29): stopped at
+    2880 games, +1.4 +/- 9.4, LLR -1.54. `pvs` on top of `lmrzw` (12.65): H0, -9.2 +/- 13.5 at
+    1290 games.
+  - 30+0.3 is about 5000-8000 nodes per move by the games' depths (13-13.8 vs 8.6-9.1 at 1000
+    nodes), but the speed depends on the load: 15600 nodes/s idle, 3800 with three SPRTs running.
+  - 74% of the game pairs are split (the same deck wins both); openings the engine decides would
+    make SPRTs 3-4x faster.
 - [ ] Not tried yet (from the chess progression in memory): aspiration windows, null move
       pruning, killer moves, late move pruning, internal iterative reduction, improving
       heuristic, SEE-like pruning, singular extensions / multicut, double/negative extensions,
