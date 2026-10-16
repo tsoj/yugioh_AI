@@ -91,6 +91,15 @@ pub const MAX_QUIESCE_PLY: i32 = 6;
 /// the room it leaves the time management; `futility` (+19.4 +/- 13.5, LLR +3.03, 1364 games,
 /// 2026-10-16). (The node-budget search, `lmr_noresearch`, `rfp_kind`
 /// and `pv_ext` were removed after failing their tests: git history before the search/ split.)
+/// `deckpick`: the decks the opponent picks from (the reconstruction's guess and draws of new
+/// guesses), $YGOAI_DECKPICK to override
+pub const DECKPICK_DECKS: usize = 3;
+
+pub fn deckpick_decks() -> usize {
+    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *N.get_or_init(|| std::env::var("YGOAI_DECKPICK").ok().and_then(|s| s.parse().ok()).unwrap_or(DECKPICK_DECKS).max(1))
+}
+
 pub const DEFAULT_FEATURES: &str = "lmr,predict,futility";
 
 #[derive(Clone, Copy, Default, Debug)]
@@ -111,6 +120,8 @@ pub struct Features {
     pub narrowext: bool,
     /// (a belief agent: new guesses of the opponent's hidden cards for each iteration)
     pub resample: bool,
+    /// (a belief agent: the opponent picks among DECKPICK_DECKS guesses after the root's move)
+    pub deckpick: bool,
 }
 
 impl Features {
@@ -133,6 +144,7 @@ impl Features {
                 "predict" => f.predict = true,
                 "narrowext" => f.narrowext = true,
                 "resample" => f.resample = true,
+                "deckpick" => f.deckpick = true,
                 _ => panic!("YGOAI_SEARCH: unknown feature {name}"),
             }
         }

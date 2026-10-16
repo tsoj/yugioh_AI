@@ -209,6 +209,14 @@ impl AlphaBeta {
     /// `search`, with `resample` changing the guessed hidden information of the root's copy for
     /// each iteration after the first (`resample`).
     pub fn search_resampling(&mut self, duel: &Duel, root_prompt: &Msg, root_moves: &[Response], p: &SearchParams, resample: Option<&mut dyn FnMut(&mut Duel)>) -> (usize, i32) {
+        self.search_decks(std::slice::from_ref(duel), root_prompt, root_moves, p, resample)
+    }
+
+    /// `search` with the opponent choosing among `decks` (the root's duel under different guesses
+    /// of its hidden cards) right after the root's move, as a pseudo-move (`deckpick`): a root
+    /// move's value is its worst over the decks.
+    pub fn search_decks(&mut self, decks: &[Duel], root_prompt: &Msg, root_moves: &[Response], p: &SearchParams, resample: Option<&mut dyn FnMut(&mut Duel)>) -> (usize, i32) {
+        let duel = &decks[0];
         let start_time = Instant::now() - std::time::Duration::from_secs_f64(p.elapsed);
         let mut policies = [Heuristic::new(p.seeds[0] as i128, 0), Heuristic::new(p.seeds[1] as i128, 1)];
         let us = root_prompt.player().unwrap_or(0) as usize;
@@ -216,7 +224,7 @@ impl AlphaBeta {
         let turn_player = duel.ext_get_info()[1];
         let stop_time = p.budget.map(|b| start_time + std::time::Duration::from_secs_f64(b.max((HARD_FACTOR * b).min(HARD_SHARE * p.clock_remaining))));
         let max_nodes = p.max_nodes.map(|n| self.nodes + n);
-        let mut state = SearchState { tables: self, policies, stop_time, max_nodes, features: Features::from_env(), root_depth: 0 };
+        let mut state = SearchState { tables: self, policies, stop_time, max_nodes, features: Features::from_env(), root_depth: 0, deck_key: 0 };
         let card_order = state.rules_card_order(root_prompt);
         let preference = ordered(root_prompt, turn_player, card_order.as_deref());
         let mut move_order: Vec<usize> = (0..root_moves.len()).collect();
@@ -229,7 +237,7 @@ impl AlphaBeta {
             move_order.truncate(known);
         }
         let fixed_depth = p.budget.is_none() && p.max_nodes.is_none();
-        state.iterative_deepening(duel, root_prompt, root_moves, move_order, start_time, p.budget, fixed_depth, resample)
+        state.iterative_deepening(decks, root_prompt, root_moves, move_order, start_time, p.budget, fixed_depth, resample)
     }
 }
 
@@ -244,6 +252,8 @@ struct SearchState<'a> {
     features: Features,
     /// (the iteration's depth)
     root_depth: i32,
+    /// (`deckpick`: the deck searched, in the TT key: the key leaves out the codes of hidden cards)
+    deck_key: u64,
 }
 
 /// Where `do_move` arrived.
@@ -280,7 +290,7 @@ impl SearchState<'_> {
     #[allow(clippy::too_many_arguments)]
     fn iterative_deepening(
         &mut self,
-        duel: &Duel,
+        decks: &[Duel],
         prompt: &Msg,
         moves: &[Response],
         mut move_order: Vec<usize>,
@@ -295,7 +305,9 @@ impl SearchState<'_> {
         let (mut last_nodes, mut last_secs) = (0u64, 0.0);
         let max_depth = if fixed_depth { DEPTH_NO_CLOCK } else { MAX_DEPTH };
         // (the root's moves are searched on copies of it: it stays as it is)
-        let mut root_duel = duel.clone();
+        let mut root_duels: Vec<Duel> = decks.to_vec();
+        // (`deckpick`: per root move, the decks the worst first)
+        let mut deck_orders: Vec<Vec<usize>> = vec![(0..decks.len()).collect(); moves.len()];
         for depth in 1..=max_depth {
             self.root_depth = depth;
             if let Some(b) = budget
@@ -310,8 +322,8 @@ impl SearchState<'_> {
             if depth > 1
                 && let Some(f) = resample.as_mut()
             {
-                root_duel = duel.clone();
-                f(&mut root_duel);
+                root_duels[0] = decks[0].clone();
+                f(&mut root_duels[0]);
             }
             let (iteration_nodes, iteration_start) = (self.tables.nodes, start_time.elapsed().as_secs_f64());
             let mut values: Vec<Option<f64>> = vec![None; moves.len()];
@@ -321,12 +333,12 @@ impl SearchState<'_> {
                 let null_window = self.features.pvs && move_counter > 0 && alpha.is_finite();
                 let mut result = if null_window {
                     // (PVS: does it beat the best so far? only then its value)
-                    self.search_move(&mut root_duel, prompt, &moves[m], alpha, alpha + NULL_WINDOW, depth - 1, 1, false)
+                    self.search_root_move(&mut root_duels, &mut deck_orders[m], prompt, &moves[m], alpha, alpha + NULL_WINDOW, depth - 1)
                 } else {
-                    self.search_move(&mut root_duel, prompt, &moves[m], alpha, f64::INFINITY, depth - 1, 1, false)
+                    self.search_root_move(&mut root_duels, &mut deck_orders[m], prompt, &moves[m], alpha, f64::INFINITY, depth - 1)
                 };
                 if null_window && matches!(result, Ok(v) if v > alpha) {
-                    result = self.search_move(&mut root_duel, prompt, &moves[m], alpha, f64::INFINITY, depth - 1, 1, false);
+                    result = self.search_root_move(&mut root_duels, &mut deck_orders[m], prompt, &moves[m], alpha, f64::INFINITY, depth - 1);
                 }
                 match result {
                     Ok(value) => {
@@ -377,6 +389,29 @@ impl SearchState<'_> {
         (best_move, completed_depth)
     }
 
+    /// A root move's value: its worst over the decks (one deck: its value), the deck that was worst
+    /// for it searched first; a deck that takes it to `alpha` or below refutes it (the others
+    /// are not searched).
+    #[allow(clippy::too_many_arguments)]
+    fn search_root_move(&mut self, duels: &mut [Duel], order: &mut [usize], prompt: &Msg, mv: &Response, alpha: f64, beta: f64, depth: i32) -> Result<f64, Stop> {
+        let mut value = f64::INFINITY;
+        for i in 0..order.len() {
+            let k = order[i];
+            self.deck_key = (k as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            let v = self.search_move(&mut duels[k], prompt, mv, alpha, beta.min(value), depth, 1, false);
+            self.deck_key = 0;
+            let v = v?;
+            if v < value {
+                value = v;
+                order[..=i].rotate_right(1);
+            }
+            if value <= alpha {
+                break;
+            }
+        }
+        Ok(value)
+    }
+
     /// The value of the decision `prompt` for its player (negamax), searched `depth` plies deep;
     /// `height` plies below the root, reached by the move with history slot `previous`.
     #[allow(clippy::too_many_arguments)]
@@ -403,7 +438,7 @@ impl SearchState<'_> {
         }
 
         // transposition table: update alpha, beta or return immediately
-        let key = hash_key(duel, prompt);
+        let key = hash_key(duel, prompt) ^ self.deck_key;
         let hash_result = self.tables.hash_table.get(key);
         let (mut tt_move, mut tt_state) = (None, 0u8);
         let nodes_before = self.tables.nodes;
