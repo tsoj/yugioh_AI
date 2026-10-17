@@ -177,9 +177,19 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       response ("info"), and ygoai-match's records carry them as `labels`; ygoai-refeature reads
       such records (the game number is the line). The labels are the engine's view (its
       reconstruction), the features the true duel's, as in the datagen.
-- [ ] Round 3 (running): datagen with the round-2 net on runs/books/pairs500x20_c.jsonl (lines
-      11000-11499 of match1, 20 games per pair), into runs/data/pairs500x20c_2000n*.jsonl (games 0-3862
-      in the first file, the OOM kill below; the rest in _p2 and _p3, the missing ids to fill in).
+- [x] Round 3 (default since 2026-10-17): datagen with the round-2 net on runs/books/pairs500x20_c.jsonl
+      (lines 11000-11499 of match1, 20 games per pair; all 10000 games in
+      runs/data/pairs500x20c_2000n_all.games.jsonl, the ones the OOM below lost replayed). MLP16 on
+      the mover2 features of rounds 2 and 3 (2.45M positions; crates/ygoai/models/eval_mover2_r23_mlp16.json)
+      vs the round-2 net: stopped at +6.7 +/- 10.0 after 2540 games (LLR +0.66), kept as unlikely
+      to be worse. Bench checksum 77d370772eda5977 (mean depth at 3000 nodes 13.29).
+  - Then mover3 vs mover2, both MLP16 on rounds 2+3: stopped at +3.3 +/- 12.6 after 1480 games
+    (LLR -0.41). 5-fold CV (held out: round-3 pairs): mover3 0.4792 alone, 0.4789 with round 2
+    (value BCE 0.4897 / 0.4877).
+  - Deeper, mover3 on rounds 2+3 (CV result log-loss): MLP16 0.4789 (4 epochs 0.4785), 2x32
+    0.4774 (4 epochs 0.4764, better in all 5 folds), 3x32 0.4782, 2x64 0.4825 (4 epochs 0.4768:
+    bigger nets overfit after ~3 epochs), 2x64 wd 1e-3 0.4789. SPRT 2x32 (4 epochs) vs mover3
+    MLP16: stopped at -13.0 +/- 20.5 after 560 games (LLR -1.65).
 - [x] Feature sets mover3 (104: summons/attacks this turn, ready attackers, low-Level hand
       monsters, free zones, direct lethal, chain owner) and mover4 (122: effects with uses left on
       the field / in GY / in hand, set Traps and Quick-Plays, Extra Deck kinds, more battle stats).
@@ -187,7 +197,7 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       log-loss / value BCE: mover2 0.4832 / 0.4929, mover3 0.4798 / 0.4920 (better in 4 of 5
       folds), mover4 0.4800 / 0.4937 (its groups ablated: all within 0.4795-0.4800). For mover3
       the MLP16 beat h8 (0.4837), h32 (0.4809), 2x16 (0.4811), 6 epochs (0.4829); wd 1e-4 equal.
-      Data-bound: redo on the full round 3, then SPRT the mover3 net.
+      Data-bound; on the full round 3 see Round 3 above.
 - [ ] More features: LP thresholds, ...
 - [ ] Later: the learned policy/value nets and effect-text embeddings (see memory).
 
