@@ -667,7 +667,7 @@ impl LearnedEval {
     }
 
     /// The trained evaluation in use (read once): $YGOAI_EVAL's JSON file if set, the built-in
-    /// models/eval_mover2_r23_mlp16.json otherwise; none with YGOAI_EVAL=hand (the hand-written eval).
+    /// models/eval_mover2_r23os_mlp16.json otherwise; none with YGOAI_EVAL=hand (the hand-written eval).
     pub fn from_env() -> Option<&'static LearnedEval> {
         static E: std::sync::OnceLock<Option<LearnedEval>> = std::sync::OnceLock::new();
         E.get_or_init(|| match std::env::var("YGOAI_EVAL").ok().filter(|p| !p.is_empty()) {
@@ -676,18 +676,21 @@ impl LearnedEval {
                 let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("YGOAI_EVAL {path}: {e}"));
                 Some(LearnedEval::from_json(&text, &path))
             }
-            None => Some(LearnedEval::from_json(DEFAULT_EVAL, "models/eval_mover2_r23_mlp16.json")),
+            None => Some(LearnedEval::from_json(DEFAULT_EVAL, "models/eval_mover2_r23os_mlp16.json")),
         })
         .as_ref()
     }
 }
 
-/// The default evaluation (scripts/train_eval_mover.py: MLP16 on the 87 mover2 features, trained on
-/// rounds 2 and 3, runs/data/pairs500x20b_2000n.jsonl and runs/data/pairs500x20c_2000n_all.games.jsonl;
-/// vs the round-2 net, models/eval_mover2_mlp16.json, stopped at +6.7 +/- 10.0 after 2540 games.
+/// The default evaluation (scripts/train_eval_mover.py --drop-onesided: MLP16 on the 87 mover2
+/// features, trained on rounds 2 and 3, runs/data/pairs500x20b_2000n.jsonl and
+/// runs/data/pairs500x20c_2000n_all.games.jsonl, without the deck pairs where one deck won every
+/// game; SPRT H1 +21.0 +/- 14.4 at 1242 games vs the same on all pairs,
+/// models/eval_mover2_r23_mlp16.json, which vs the round-2 net, models/eval_mover2_mlp16.json,
+/// stopped at +6.7 +/- 10.0 after 2540 games.
 /// That one had SPRT +31.9 +/- 18.7 vs the 49-feature MLP16 (on runs/data/pairs500x20_2000n.jsonl),
 /// which had +28.5 +/- 17.6 vs the hand-written eval).
-const DEFAULT_EVAL: &str = include_str!("../../models/eval_mover2_r23_mlp16.json");
+const DEFAULT_EVAL: &str = include_str!("../../models/eval_mover2_r23os_mlp16.json");
 
 /// The position's value for `me` (in LP): the trained evaluation (see
 /// `LearnedEval::from_env`), or the hand-written one (alphabeta.evaluate) with YGOAI_EVAL=hand.

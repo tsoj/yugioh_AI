@@ -183,6 +183,13 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       the mover2 features of rounds 2 and 3 (2.45M positions; crates/ygoai/models/eval_mover2_r23_mlp16.json)
       vs the round-2 net: stopped at +6.7 +/- 10.0 after 2540 games (LLR +0.66), kept as unlikely
       to be worse. Bench checksum 77d370772eda5977 (mean depth at 3000 nodes 13.29).
+  - Without the one-sided deck pairs (`--drop-onesided`: 153 of 1000 pairs where one deck won all
+    20 games, 15% of the rows), default since 2026-10-17 (models/eval_mover2_r23os_mlp16.json):
+    SPRT H1, +21.0 +/- 14.4 at 1242 games (LLR +3.00) vs the same on all pairs, although its CV
+    was worse in all 5 folds (result log-loss 0.4839 vs 0.4823): the held-out losses do not
+    predict this. Bench checksum 573fe24d6e988ea6 (mean depth 13.15). Next: other data filters
+    (also drop nearly one-sided pairs, e.g. 19-1 / 18-2? weight pairs by balance?) and retest
+    mover3 and 2x32 on the filtered data.
   - Then mover3 vs mover2, both MLP16 on rounds 2+3: stopped at +3.3 +/- 12.6 after 1480 games
     (LLR -0.41). 5-fold CV (held out: round-3 pairs): mover3 0.4792 alone, 0.4789 with round 2
     (value BCE 0.4897 / 0.4877).
