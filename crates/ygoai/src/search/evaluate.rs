@@ -144,7 +144,25 @@ struct SideScan {
     turn: [f64; 7],
     /// (the attack of the monsters that can still attack this turn, for `mover3`'s lethal terms)
     ready_atk: i64,
+    /// (`mover4`'s further terms)
+    fx: [f64; 8],
     mons: Vec<(u32, i32, i32)>,
+}
+
+/// (`side_scan`: the effects one can choose to activate, by their own timing)
+const CHOSEN_EFFECTS: u32 = EFFECT_TYPE_IGNITION | EFFECT_TYPE_QUICK_O | EFFECT_TYPE_TRIGGER_O;
+
+/// Whether card `c` has an effect of the types `types` that can be activated from `location`
+/// with uses left this turn for player `p` (not whether it could be activated now).
+fn has_effect(d: &mut Duel, c: CardId, location: u32, types: u32, p: u32) -> bool {
+    for i in 0..d.card(c).field_effect.items.len() {
+        let e = d.card(c).field_effect.items[i].1;
+        let fx = d.effect(e);
+        if !fx.deleted && fx.type_ as u32 & types != 0 && fx.range as u32 & location != 0 && e.check_count_limit(d, p as u8) {
+            return true;
+        }
+    }
+    false
 }
 
 /// `SideScan` of player `p`: the queries' values without building and parsing their buffers (the
@@ -159,6 +177,7 @@ fn side_scan(d: &mut Duel, p: u32) -> SideScan {
     let (mut lv_sum, mut lv_max, mut high, mut extra, mut overlays, mut counters, mut emz) = (0u32, 0u32, 0, 0, 0, 0u32, 0);
     let count = |cs: &[(u16, [u16; 2])]| cs.iter().map(|(_, v)| v[0] as u32 + v[1] as u32).sum::<u32>();
     let (mut ready, mut ready_atk, mut free) = (0, 0i64, 5);
+    let (mut fx_field, mut fx_set) = (0u32, 0u32);
     for i in 0..d.player[pl].list_mzone.len() {
         let Some(c) = d.player[pl].list_mzone[i] else { continue };
         let pos = c.get_info_location(d).position;
@@ -178,6 +197,7 @@ fn side_scan(d: &mut Duel, p: u32) -> SideScan {
         counters += count(&d.card(c).counters);
         if pos & POS_FACEUP != 0 {
             up += 1;
+            fx_field += has_effect(d, c, LOCATION_MZONE, EFFECT_TYPE_IGNITION | EFFECT_TYPE_QUICK_O, p) as u32;
             let attacking = pos & POS_ATTACK != 0;
             best = best.max(if attacking { atk } else { def });
             if attacking {
@@ -194,9 +214,17 @@ fn side_scan(d: &mut Duel, p: u32) -> SideScan {
     let (mut down, mut n_back, mut field, mut equips) = (0, 0, false, 0);
     for i in 0..d.player[pl].list_szone.len() {
         let Some(c) = d.player[pl].list_szone[i] else { continue };
+        let facedown = c.get_info_location(d).position & POS_FACEDOWN != 0;
         if i < 5 {
             n_back += 1;
-            down += (c.get_info_location(d).position & POS_FACEDOWN != 0) as u32;
+            down += facedown as u32;
+        }
+        if facedown {
+            // (Traps and Quick-Play Spells, ready for the opponent's turn)
+            let t = c.get_type(d, None, 0, 2);
+            fx_set += (t & TYPE_TRAP != 0 || t & TYPE_QUICKPLAY != 0) as u32;
+        } else {
+            fx_field += has_effect(d, c, LOCATION_SZONE, EFFECT_TYPE_IGNITION | EFFECT_TYPE_QUICK_O, p) as u32;
         }
         field |= i == 5;
         equips += d.card(c).equiping_target.is_some() as u32;
@@ -222,6 +250,23 @@ fn side_scan(d: &mut Duel, p: u32) -> SideScan {
         }
     }
     let grave = kinds(d, |p| &p.list_grave);
+    let mut fx_hand = 0;
+    for i in 0..d.player[pl].list_hand.len() {
+        let c = d.player[pl].list_hand[i];
+        fx_hand += has_effect(d, c, LOCATION_HAND, CHOSEN_EFFECTS, p) as u32;
+    }
+    let mut fx_grave = 0;
+    for i in 0..d.player[pl].list_grave.len() {
+        let c = d.player[pl].list_grave[i];
+        fx_grave += has_effect(d, c, LOCATION_GRAVE, CHOSEN_EFFECTS, p) as u32;
+    }
+    let mut extra_kinds = [0u32; 4];
+    for i in 0..d.player[pl].list_extra.len() {
+        let t = d.player[pl].list_extra[i].get_type(d, None, 0, 2);
+        for (k, flag) in [TYPE_FUSION, TYPE_SYNCHRO, TYPE_XYZ, TYPE_LINK].into_iter().enumerate() {
+            extra_kinds[k] += (t & flag != 0) as u32;
+        }
+    }
     let removed = kinds(d, |p| &p.list_remove);
     d.querying = was;
     let lp = d.ext_get_info()[3 + pl] as i32;
@@ -270,7 +315,21 @@ fn side_scan(d: &mut Duel, p: u32) -> SideScan {
         hand_low as f64,
         free as f64,
     ];
-    SideScan { base, more, turn, ready_atk, mons }
+    // (the face-up monsters' battle stats: the second best, and the weakest attacker's ATK)
+    let mut stats: Vec<i32> = mons.iter().filter(|m| m.0 & POS_FACEUP != 0).map(|&(pos, a, df)| battle_stat(pos, a, df)).collect();
+    stats.sort_unstable_by(|a, b| b.cmp(a));
+    let weakest = mons.iter().filter(|m| m.0 & POS_FACEUP_ATTACK != 0).map(|m| m.1).min().unwrap_or(0);
+    let fx = [
+        fx_field as f64,
+        fx_grave as f64,
+        fx_hand as f64,
+        fx_set as f64,
+        (extra_kinds[0] + extra_kinds[1]) as f64,
+        (extra_kinds[2] + extra_kinds[3]) as f64,
+        stats.get(1).copied().unwrap_or(0) as f64 / 1000.0,
+        weakest as f64 / 1000.0,
+    ];
+    SideScan { base, more, turn, ready_atk, fx, mons }
 }
 
 /// The features of the mover's view (the player whose decision is pending; scripts/train_eval.py
@@ -288,10 +347,16 @@ fn side_scan(d: &mut Duel, p: u32) -> SideScan {
 /// this turn, their face-up attack position monsters that have not attacked yet and their ATK /
 /// 1000, the Level 1-4 monsters in hand (the opponent's: 0, hidden) and the free Main Monster
 /// Zones; whether each could attack directly for the other's LP (no monsters there, those ready
-/// enough), and whether the chain's last link is the mover's.
-fn mover_view(d: &mut Duel, mover: u32, prompt: Option<&Msg>, more: bool, turn: bool) -> Vec<f64> {
+/// enough), and whether the chain's last link is the mover's. With level 4 (`mover4`) then: for the
+/// mover and the opponent their face-up cards with an Ignition or Quick Effect with uses left this
+/// turn, their GY's cards with an effect to choose to activate there (Ignition, Quick, optional
+/// Trigger) with uses left, the same in hand (the opponent's: 0), their set Traps and Quick-Play
+/// Spells (0), their Extra Deck's Fusion and Synchro, and Xyz and Link Monsters (0), their face-up
+/// monsters' second best battle stat / 1000 and their weakest attacker's ATK / 1000; each side's
+/// face-up monsters that the other's strongest attacker beats.
+fn mover_view(d: &mut Duel, mover: u32, prompt: Option<&Msg>, level: u8) -> Vec<f64> {
     let (a, b) = (side_scan(d, mover), side_scan(d, 1 - mover));
-    let mut f = Vec::with_capacity(87);
+    let mut f = Vec::with_capacity(122);
     f.extend(a.base);
     f.push(dominant(&a.mons, &b.mons) as f64);
     f.extend(b.base);
@@ -302,7 +367,7 @@ fn mover_view(d: &mut Duel, mover: u32, prompt: Option<&Msg>, more: bool, turn: 
     let name = prompt.map(|m| m.name());
     f.extend(MOVER_PROMPTS.iter().map(|p| (name == Some(*p)) as u8 as f64));
     f.push(info[0].min(30) as f64 / 10.0);
-    if more {
+    if level >= 2 {
         f.extend(a.more);
         // (the opponent's hand by kind stays out, its count only: 0 here, the feature kept so the
         // datagen rows' layout holds; training drops it with --drop 67,68,69)
@@ -321,7 +386,7 @@ fn mover_view(d: &mut Duel, mover: u32, prompt: Option<&Msg>, more: bool, turn: 
         f.extend(m.iter().map(|&x| x as f64));
         f.push(d.core.current_chain.len() as f64);
     }
-    if turn {
+    if level >= 3 {
         f.extend(a.turn);
         let mut opp = b.turn;
         opp[5] = 0.0;
@@ -331,22 +396,41 @@ fn mover_view(d: &mut Duel, mover: u32, prompt: Option<&Msg>, more: bool, turn: 
         f.push((a.mons.is_empty() && b.ready_atk > 0 && b.ready_atk >= lp(mover)) as u8 as f64);
         f.push(d.core.current_chain.last().is_some_and(|l| l.triggering_controler as u32 == mover) as u8 as f64);
     }
+    if level >= 4 {
+        f.extend(a.fx);
+        // (the opponent's hand, set cards and Extra Deck stay out: 0)
+        let mut opp = b.fx;
+        opp[2..6].fill(0.0);
+        f.extend(opp);
+        // (each side's face-up monsters that the other's strongest ready attacker beats)
+        let beaten = |mine: &[(u32, i32, i32)], theirs: &[(u32, i32, i32)]| {
+            let top = theirs.iter().filter(|m| m.0 & POS_FACEUP_ATTACK != 0).map(|m| m.1).max().unwrap_or(-1);
+            mine.iter().filter(|&&(pos, a, df)| pos & POS_FACEUP != 0 && battle_stat(pos, a, df) < top).count() as f64
+        };
+        f.push(beaten(&a.mons, &b.mons));
+        f.push(beaten(&b.mons, &a.mons));
+    }
     f
 }
 
 /// The 49 features of the `mover` evaluation (see `mover_view`).
 pub fn mover_features(d: &mut Duel, mover: u32, prompt: Option<&Msg>) -> Vec<f64> {
-    mover_view(d, mover, prompt, false, false)
+    mover_view(d, mover, prompt, 1)
 }
 
 /// The 87 features of the `mover2` evaluation (see `mover_view`).
 pub fn mover_features2(d: &mut Duel, mover: u32, prompt: Option<&Msg>) -> Vec<f64> {
-    mover_view(d, mover, prompt, true, false)
+    mover_view(d, mover, prompt, 2)
 }
 
 /// The 104 features of the `mover3` evaluation (see `mover_view`).
 pub fn mover_features3(d: &mut Duel, mover: u32, prompt: Option<&Msg>) -> Vec<f64> {
-    mover_view(d, mover, prompt, true, true)
+    mover_view(d, mover, prompt, 3)
+}
+
+/// The 122 features of the `mover4` evaluation (see `mover_view`).
+pub fn mover_features4(d: &mut Duel, mover: u32, prompt: Option<&Msg>) -> Vec<f64> {
+    mover_view(d, mover, prompt, 4)
 }
 
 /// A trained evaluation (scripts/train_eval.py's export): linear on the raw features, or the
@@ -456,7 +540,7 @@ impl LearnedEval {
 
     /// The indices of the mover's and the opponent's LP / 1000 in the features (`mover`, `mover2`).
     pub fn lp_features(&self) -> Option<(usize, usize)> {
-        matches!(self.features.as_str(), "mover" | "mover2" | "mover3").then_some((0, 17))
+        matches!(self.features.as_str(), "mover" | "mover2" | "mover3" | "mover4").then_some((0, 17))
     }
 
     /// The feature set's name (`mover2`, ...).
@@ -490,6 +574,7 @@ impl LearnedEval {
             "mover" => Some(mover_features(d, mover, prompt)),
             "mover2" => Some(mover_features2(d, mover, prompt)),
             "mover3" => Some(mover_features3(d, mover, prompt)),
+            "mover4" => Some(mover_features4(d, mover, prompt)),
             _ => None,
         }
     }

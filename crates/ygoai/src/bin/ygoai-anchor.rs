@@ -33,7 +33,7 @@ fn main() {
     let (mut slopes, mut low) = (Vec::new(), Vec::new());
     for line in lines.iter().step_by(every) {
         let row: serde_json::Value = serde_json::from_str(line).expect("row");
-        let Some(x) = [eval.feature_set(), "mover3", "mover2", "mover_x", "mover", "x"].iter().find_map(|k| row.get(*k)).and_then(|v| v.as_array()) else {
+        let Some(x) = [eval.feature_set(), "mover4", "mover3", "mover2", "mover_x", "mover", "x"].iter().find_map(|k| row.get(*k)).and_then(|v| v.as_array()) else {
             continue;
         };
         // (`mover`'s 49 features are the first of `mover2`'s 87)
