@@ -90,8 +90,8 @@ pub struct BeliefSearchAgent {
     player: u32,
     items: Vec<ObsItem>,
     belief: Option<AgentBelief>,
-    /// (the last response's search: its root value and depth, `Agent::search_info`)
-    info: Option<(f64, u32)>,
+    /// (the last response's search, `Agent::search_info`)
+    info: Option<crate::game::SearchInfo>,
     /// (the search features: `resample`, `deckpick`)
     features: crate::search::Features,
     // statistics
@@ -190,7 +190,7 @@ impl BeliefSearchAgent {
                 let mut resample = guesses.filter(|_| self.features.resample).map(|g| move |d: &mut ygo_core::duel::Duel| resample(d, &g, comp, rng));
                 let (best, depth) = ab.search_decks(&decks, &core_prompt, &core_cands, &params, resample.as_mut().map(|f| f as &mut dyn FnMut(&mut ygo_core::duel::Duel)));
                 self.nodes += ab.nodes - before;
-                self.info = ab.last_value.is_finite().then_some((ab.last_value, depth as u32));
+                self.info = ab.last_value.is_finite().then_some(crate::game::SearchInfo { value: ab.last_value, depth: depth as u32, nodes: ab.nodes - before });
                 best
             }
             Search::Mcts { max_sims, c, rollout_turns, cutoff_eval } => {
@@ -265,7 +265,7 @@ impl Agent for BeliefSearchAgent {
         self.items.push(ObsItem::Response(resp.clone()));
         Ok(resp)
     }
-    fn search_info(&mut self) -> Option<(f64, u32)> {
+    fn search_info(&mut self) -> Option<crate::game::SearchInfo> {
         self.info.take()
     }
     fn end(&mut self, _result: &serde_json::Map<String, Value>) {

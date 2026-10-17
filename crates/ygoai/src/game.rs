@@ -233,13 +233,27 @@ pub struct RecordedResponse {
 }
 
 /// A searched decision's labels: the response's index in the record, the player who searched,
-/// the root value for that player (in LP) and the depth completed.
+/// the root value for that player (in LP), the depth completed and, in matches, the nodes searched
+/// and the seconds the move took on the arbiter's clock.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Label {
     pub decision: usize,
     pub player: u32,
     pub value: f64,
     pub depth: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nodes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<f64>,
+}
+
+/// A search's result as an engine reports it (a chess engine's "info score ... depth ... nodes"):
+/// the root value for the searching player (in LP), the depth completed, the nodes searched.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SearchInfo {
+    pub value: f64,
+    pub depth: u32,
+    pub nodes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -348,9 +362,8 @@ pub trait Agent {
     fn observe(&mut self, _msg: &Msg) {}
     fn respond(&mut self, prompt: &Msg, state: Option<&Snapshot>, clock: Option<(f64, f64)>) -> Result<Response, AgentError>;
     fn end(&mut self, _result: &serde_json::Map<String, Value>) {}
-    /// The last response's search, if it searched: its root value for this agent's player and
-    /// the depth completed (a chess engine's "info score ... depth ...").
-    fn search_info(&mut self) -> Option<(f64, u32)> {
+    /// The last response's search, if it searched.
+    fn search_info(&mut self) -> Option<SearchInfo> {
         None
     }
 }
@@ -557,8 +570,9 @@ pub fn play(
             }
             c.remaining += c.increment;
         }
-        if let Some((value, depth)) = info {
-            record.labels.push(Label { decision: record.responses.len(), player, value, depth });
+        if let Some(SearchInfo { value, depth, nodes }) = info {
+            let time = Some(t_move.elapsed().as_secs_f64());
+            record.labels.push(Label { decision: record.responses.len(), player, value, depth, nodes: Some(nodes), time });
         }
         record.responses.push(RecordedResponse { player, response: response.clone() });
         for obs in observers.iter_mut() {

@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::actions::Response;
-use crate::game::{Agent, AgentError, InitInfo};
+use crate::game::{Agent, AgentError, InitInfo, SearchInfo};
 use crate::messages::Msg;
 use crate::state::Snapshot;
 
@@ -87,8 +87,8 @@ pub struct EngineProcess {
     lines: Receiver<String>,
     pending: Vec<Msg>,
     pub last_think_time: f64,
-    /// (the last response's "info": the search's value and depth)
-    info: Option<(f64, u32)>,
+    /// (the last response's "info": the search's value, depth and nodes)
+    info: Option<SearchInfo>,
 }
 
 fn engine_error(name: &str, what: &str) -> AgentError {
@@ -204,10 +204,12 @@ impl Agent for EngineProcess {
         let Some(resp) = reply.get("response") else {
             return Err(engine_error(&self.name, &format!("sent {reply} instead of a response")));
         };
-        self.info = reply.get("info").and_then(|i| Some((i.get("value")?.as_f64()?, i.get("depth")?.as_u64()? as u32)));
+        self.info = reply.get("info").and_then(|i| {
+            Some(SearchInfo { value: i.get("value")?.as_f64()?, depth: i.get("depth")?.as_u64()? as u32, nodes: i.get("nodes").and_then(Value::as_u64).unwrap_or(0) })
+        });
         serde_json::from_value(resp.clone()).map_err(|e| AgentError::Failed(format!("InvalidResponse: {e}")))
     }
-    fn search_info(&mut self) -> Option<(f64, u32)> {
+    fn search_info(&mut self) -> Option<SearchInfo> {
         self.info.take()
     }
     fn end(&mut self, result: &serde_json::Map<String, Value>) {

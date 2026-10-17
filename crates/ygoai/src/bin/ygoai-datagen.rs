@@ -66,7 +66,7 @@ fn play(book: &ygoai::matchrun::Opening, game: usize, nodes: u64, sets: &[String
             let params = SearchParams { budget: None, elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2], max_nodes: Some(nodes) };
             let (best, done) = ab.search(&duel, &p, &cands, &params);
             if ab.last_value.is_finite() {
-                let label = Label { decision: record.responses.len(), player, value: ab.last_value, depth: done as u32 };
+                let label = Label { decision: record.responses.len(), player, value: ab.last_value, depth: done as u32, nodes: None, time: None };
                 rows.push(row(&mut duel, game, &p, &label, sets).unwrap());
                 labels.push(label);
             }
