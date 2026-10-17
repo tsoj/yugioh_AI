@@ -204,8 +204,13 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       reached at decision 596 never asks anything again: process_adjust ->
       adjust_self_destroy_set -> check_unique_code (Kaiju's unique procedure), memory growing ~1 GB a
       minute; the OOM killer stopped the whole datagen at 20G. run_until_prompt now gives up after
-      MAX_PROCESS_CALLS = 100000 (b01e459; normal steps < 1000). Find the position and check it
-      against the C++ core.
+      MAX_PROCESS_CALLS = 100000 (b01e459; normal steps < 1000). The looping duel (turn 7, End
+      Phase): player 1 controls Thunder King (Kaiju, unique on field), Ha-Re x2, Ni-Ni and player
+      0's Block Dragon (Rock monsters it controls are indestructible unless by battle, so also by
+      rule); every process call hints Block Dragon, i.e. a destruction it prevents is retried by each
+      adjust. The C++ destroy applies EFFECT_INDESTRUCTABLE to REASON_RULE alike, so likely upstream
+      (or a script: Block Dragon's `(r&REASON_BATTLE)==0` also covers rule destruction). Next: a
+      record of the line ($YGOAI_DEBUG_BROKEN prints the field at the cap) to replay against C++.
 - [x] The 4 mismatching games against the C++ core (found 2026-10-13, older than the recent
       changes): pair17349 game 1 decision 947, pair19366 game 2 decision 1880, pair8112 game 0
       decision 89, pair9854 game 1 decision 467 (`build/regress_pairs/`). Fixed (rust 745abcb);
