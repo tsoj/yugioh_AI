@@ -150,7 +150,7 @@ if args.output:
     if args.drop:  # (dropped inputs were 0 in training but not at inference: their weights out)
         st["0.weight"][:, [int(i) for i in args.drop.split(",")]] = 0
         sd[[int(i) for i in args.drop.split(",")]] = 1
-    json.dump({"features": "mover2" if n == 87 else "mover", "model": "mover_mlp", "mu": mu.astype(float).tolist(), "scale": sd.astype(float).tolist(),
+    json.dump({"features": {87: "mover2", 104: "mover3"}.get(n, "mover"), "model": "mover_mlp", "mu": mu.astype(float).tolist(), "scale": sd.astype(float).tolist(),
                "w1": st["0.weight"].tolist(), "b1": st["0.bias"].tolist(),
                "layers": [{"w": st[f"{2 * i}.weight"].tolist(), "b": st[f"{2 * i}.bias"].tolist()} for i in range(1, args.layers)],
                "w2": (st[f"{2 * args.layers}.weight"][0] * K).tolist(), "b2": float(st[f"{2 * args.layers}.bias"][0] * K),

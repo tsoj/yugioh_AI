@@ -3,8 +3,9 @@
 //!
 //!   ygoai-anchor MODEL.json ROWS.jsonl [--write] [--max N]
 //!
-//! ROWS: data rows (ygoai-datagen, ygoai-refeature) with the model's features under "mover2",
-//! "mover_x" or "mover" (or "x"; `mover` models read the first 49 of `mover2`'s); every row
+//! ROWS: data rows (ygoai-datagen, ygoai-refeature) with the model's features under its feature
+//! set's name, else "mover3", "mover2", "mover_x" or "mover" (or "x"; a model reads the first of
+//! a larger set's, as `mover`'s 49 are `mover2`'s first); every row
 //! whose two players both have LP_ANCHOR_MIN_LP or more counts (at most N, default 200000,
 //! spread over the file). For each, the mover's LP goes up and
 //! the opponent's down by LP_ANCHOR_STEP against the reverse; the slope is the mean change of the
@@ -32,7 +33,7 @@ fn main() {
     let (mut slopes, mut low) = (Vec::new(), Vec::new());
     for line in lines.iter().step_by(every) {
         let row: serde_json::Value = serde_json::from_str(line).expect("row");
-        let Some(x) = ["mover2", "mover_x", "mover", "x"].iter().find_map(|k| row.get(*k)).and_then(|v| v.as_array()) else {
+        let Some(x) = [eval.feature_set(), "mover3", "mover2", "mover_x", "mover", "x"].iter().find_map(|k| row.get(*k)).and_then(|v| v.as_array()) else {
             continue;
         };
         // (`mover`'s 49 features are the first of `mover2`'s 87)

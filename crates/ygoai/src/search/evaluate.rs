@@ -140,6 +140,10 @@ fn dominant(mine: &[(u32, i32, i32)], theirs: &[(u32, i32, i32)]) -> usize {
 struct SideScan {
     base: [f64; 16],
     more: [f64; 14],
+    /// (`mover3`'s further terms)
+    turn: [f64; 7],
+    /// (the attack of the monsters that can still attack this turn, for `mover3`'s lethal terms)
+    ready_atk: i64,
     mons: Vec<(u32, i32, i32)>,
 }
 
@@ -154,11 +158,19 @@ fn side_scan(d: &mut Duel, p: u32) -> SideScan {
     let (mut up, mut atk_up, mut atk_sum, mut best) = (0, 0, 0i64, 0i32);
     let (mut lv_sum, mut lv_max, mut high, mut extra, mut overlays, mut counters, mut emz) = (0u32, 0u32, 0, 0, 0, 0u32, 0);
     let count = |cs: &[(u16, [u16; 2])]| cs.iter().map(|(_, v)| v[0] as u32 + v[1] as u32).sum::<u32>();
+    let (mut ready, mut ready_atk, mut free) = (0, 0i64, 5);
     for i in 0..d.player[pl].list_mzone.len() {
         let Some(c) = d.player[pl].list_mzone[i] else { continue };
         let pos = c.get_info_location(d).position;
         let (atk, def) = (c.get_attack(d), c.get_defense(d));
         mons.push((pos, atk, def));
+        if i < 5 {
+            free -= 1;
+        }
+        if pos & POS_FACEUP_ATTACK != 0 && d.card(c).announce_count == 0 {
+            ready += 1;
+            ready_atk += atk as i64;
+        }
         if i >= 5 {
             emz += 1;
         }
@@ -202,6 +214,13 @@ fn side_scan(d: &mut Duel, p: u32) -> SideScan {
         k
     };
     let hand = kinds(d, |p| &p.list_hand);
+    let mut hand_low = 0;
+    for i in 0..d.player[pl].list_hand.len() {
+        let c = d.player[pl].list_hand[i];
+        if c.get_type(d, None, 0, 2) & TYPE_MONSTER != 0 && (1..=4).contains(&c.get_level(d)) {
+            hand_low += 1;
+        }
+    }
     let grave = kinds(d, |p| &p.list_grave);
     let removed = kinds(d, |p| &p.list_remove);
     d.querying = was;
@@ -242,7 +261,16 @@ fn side_scan(d: &mut Duel, p: u32) -> SideScan {
         counters as f64 / 10.0,
         emz as f64,
     ];
-    SideScan { base, more, mons }
+    let turn = [
+        d.core.summon_count[pl] as f64,
+        d.core.spsummon_state_count[pl] as f64 / 5.0,
+        d.core.attack_state_count[pl] as f64,
+        ready as f64,
+        ready_atk as f64 / 1000.0,
+        hand_low as f64,
+        free as f64,
+    ];
+    SideScan { base, more, turn, ready_atk, mons }
 }
 
 /// The features of the mover's view (the player whose decision is pending; scripts/train_eval.py
@@ -255,8 +283,13 @@ fn side_scan(d: &mut Duel, p: u32) -> SideScan {
 /// monsters / 10; Xyz materials, equipped cards and counters on the field; the Extra Monster
 /// Zones held), the pending prompt's options (Normal Summons, Special Summons, repositions,
 /// monster Sets, spell/trap Sets and activations of an idle command; attacks and activations of a
-/// battle command; the effects of a chain window) and the chain's length.
-fn mover_view(d: &mut Duel, mover: u32, prompt: Option<&Msg>, more: bool) -> Vec<f64> {
+/// battle command; the effects of a chain window) and the chain's length. With `turn` (`mover3`)
+/// then: for the mover and the opponent their Normal Summons, Special Summons / 5 and attacks
+/// this turn, their face-up attack position monsters that have not attacked yet and their ATK /
+/// 1000, the Level 1-4 monsters in hand (the opponent's: 0, hidden) and the free Main Monster
+/// Zones; whether each could attack directly for the other's LP (no monsters there, those ready
+/// enough), and whether the chain's last link is the mover's.
+fn mover_view(d: &mut Duel, mover: u32, prompt: Option<&Msg>, more: bool, turn: bool) -> Vec<f64> {
     let (a, b) = (side_scan(d, mover), side_scan(d, 1 - mover));
     let mut f = Vec::with_capacity(87);
     f.extend(a.base);
@@ -288,17 +321,32 @@ fn mover_view(d: &mut Duel, mover: u32, prompt: Option<&Msg>, more: bool) -> Vec
         f.extend(m.iter().map(|&x| x as f64));
         f.push(d.core.current_chain.len() as f64);
     }
+    if turn {
+        f.extend(a.turn);
+        let mut opp = b.turn;
+        opp[5] = 0.0;
+        f.extend(opp);
+        let lp = |p: u32| d.ext_get_info()[3 + p as usize] as i64;
+        f.push((b.mons.is_empty() && a.ready_atk > 0 && a.ready_atk >= lp(1 - mover)) as u8 as f64);
+        f.push((a.mons.is_empty() && b.ready_atk > 0 && b.ready_atk >= lp(mover)) as u8 as f64);
+        f.push(d.core.current_chain.last().is_some_and(|l| l.triggering_controler as u32 == mover) as u8 as f64);
+    }
     f
 }
 
 /// The 49 features of the `mover` evaluation (see `mover_view`).
 pub fn mover_features(d: &mut Duel, mover: u32, prompt: Option<&Msg>) -> Vec<f64> {
-    mover_view(d, mover, prompt, false)
+    mover_view(d, mover, prompt, false, false)
 }
 
 /// The 87 features of the `mover2` evaluation (see `mover_view`).
 pub fn mover_features2(d: &mut Duel, mover: u32, prompt: Option<&Msg>) -> Vec<f64> {
-    mover_view(d, mover, prompt, true)
+    mover_view(d, mover, prompt, true, false)
+}
+
+/// The 104 features of the `mover3` evaluation (see `mover_view`).
+pub fn mover_features3(d: &mut Duel, mover: u32, prompt: Option<&Msg>) -> Vec<f64> {
+    mover_view(d, mover, prompt, true, true)
 }
 
 /// A trained evaluation (scripts/train_eval.py's export): linear on the raw features, or the
@@ -408,7 +456,12 @@ impl LearnedEval {
 
     /// The indices of the mover's and the opponent's LP / 1000 in the features (`mover`, `mover2`).
     pub fn lp_features(&self) -> Option<(usize, usize)> {
-        (self.features == "mover" || self.features == "mover2").then_some((0, 17))
+        matches!(self.features.as_str(), "mover" | "mover2" | "mover3").then_some((0, 17))
+    }
+
+    /// The feature set's name (`mover2`, ...).
+    pub fn feature_set(&self) -> &str {
+        &self.features
     }
 
     /// The number of features the network reads.
@@ -436,6 +489,7 @@ impl LearnedEval {
         match self.features.as_str() {
             "mover" => Some(mover_features(d, mover, prompt)),
             "mover2" => Some(mover_features2(d, mover, prompt)),
+            "mover3" => Some(mover_features3(d, mover, prompt)),
             _ => None,
         }
     }
@@ -505,10 +559,9 @@ impl LearnedEval {
     }
 
     fn output(&self, d: &mut Duel, me: u32, prompt: Option<&Msg>) -> f64 {
-        if self.features == "mover" || self.features == "mover2" {
+        let mover = prompt.and_then(|m| m.player()).unwrap_or(me);
+        if let Some(x) = self.mover_x(d, mover, prompt) {
             // (the mover's value, an unconstrained MLP: plus for me, minus for the opponent)
-            let mover = prompt.and_then(|m| m.player()).unwrap_or(me);
-            let x = if self.features == "mover" { mover_features(d, mover, prompt) } else { mover_features2(d, mover, prompt) };
             let v = self.mover_output(&x);
             return if mover == me { v } else { -v };
         }

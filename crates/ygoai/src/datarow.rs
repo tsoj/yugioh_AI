@@ -18,10 +18,11 @@ use crate::actions::encode;
 use crate::game::{GameRecord, run_until_prompt};
 use crate::messages::Msg;
 use crate::observe::to_core_response;
-use crate::search::{eval_features, evaluate_at, mover_features, mover_features2, rich_features};
+use crate::search::{eval_features, evaluate_at, mover_features, mover_features2, mover_features3, rich_features};
 use crate::state::parse_location_query;
 
 /// The feature sets a row can carry:
+/// - `mover3`: the 104 features of the `mover3` evaluation (`search::mover_features3`)
 /// - `mover2`: the 87 features of the `mover2` evaluation (`search::mover_features2`)
 /// - `mover`: its first 49 (`search::mover_features`)
 /// - `eval`: the hand-written evaluation's terms for the mover (`search::eval_features`)
@@ -29,7 +30,7 @@ use crate::state::parse_location_query;
 /// - `static`: the evaluation in use (YGOAI_EVAL) for the mover
 /// - `state`: both sides as JSON, the mover first (see `side`; the true duel, hidden cards
 ///   included: not for features as they are)
-pub const FEATURE_SETS: [&str; 6] = ["mover2", "mover", "eval", "rich", "static", "state"];
+pub const FEATURE_SETS: [&str; 7] = ["mover3", "mover2", "mover", "eval", "rich", "static", "state"];
 
 pub use crate::game::Label;
 
@@ -80,6 +81,7 @@ pub fn side(d: &mut Duel, p: u32) -> Value {
 pub fn features(d: &mut Duel, prompt: &Msg, set: &str) -> Result<Value, String> {
     let me = prompt.player().ok_or("a prompt without a player")?;
     Ok(match set {
+        "mover3" => json!(mover_features3(d, me, Some(prompt))),
         "mover2" => json!(mover_features2(d, me, Some(prompt))),
         "mover" => json!(mover_features(d, me, Some(prompt))),
         "eval" => json!(eval_features(d, me).to_vec()),
