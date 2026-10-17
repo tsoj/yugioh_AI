@@ -23,11 +23,12 @@ ap.add_argument("--wd", type=float, default=0.0)
 ap.add_argument("--sigma", type=float, default=1.0, help="prior sd of the pair term (logits)")
 ap.add_argument("--nopair", action="store_true")
 ap.add_argument("--held", type=int, default=50, help="deck pairs held out for validation")
-ap.add_argument("--held-below", type=int, default=0, help="choose them among the pairs below this one (0: all)")
+ap.add_argument("--held-below", type=int, default=0, help="choose them (or the folds) among the pairs below this one (0: all)")
 ap.add_argument("--drop", default="", help="feature indices to zero, comma list")
 ap.add_argument("-o", "--output")
 ap.add_argument("--save-v", help="npz of the final v on all rows (for paired comparisons)")
 ap.add_argument("--seed", type=int, default=0, help="the training's seed (not the held-out pairs')")
+ap.add_argument("--indicator", action="store_true", help="the last column marks rows of older data whose newer features are filled in (by their means): 0 in play, folded into the export's first bias")
 ap.add_argument("--fold", help="I/N: hold out the I-th of N folds of the deck pairs instead of --held of them")
 args = ap.parse_args()
 torch.manual_seed(args.seed)
@@ -62,7 +63,7 @@ K, Kr = Ks[src[0]], np.array([Ks.get(i, 1.0) for i in range(src.max() + 1)])[src
 rng = np.random.default_rng(0)
 if args.fold:
     fi, fn = map(int, args.fold.split("/"))
-    held_pairs = set(np.array_split(rng.permutation(np.unique(pair)), fn)[fi].tolist())
+    held_pairs = set(np.array_split(rng.permutation(np.unique(pair[pair < args.held_below] if args.held_below else pair)), fn)[fi].tolist())
 else:
     held_pairs = set(rng.choice(np.unique(pair[pair < args.held_below] if args.held_below else pair), args.held, replace=False).tolist())
 is_hp = np.isin(pair, list(held_pairs))
@@ -156,6 +157,9 @@ if args.output:
     if args.drop:  # (dropped inputs were 0 in training but not at inference: their weights out)
         st["0.weight"][:, [int(i) for i in args.drop.split(",")]] = 0
         sd[[int(i) for i in args.drop.split(",")]] = 1
+    if args.indicator:  # (the indicator is 0 in play: its input (0 - mu) / sd joins the bias)
+        st["0.bias"] = st["0.bias"] + st["0.weight"][:, -1] * (0 - mu[-1]) / sd[-1]
+        st["0.weight"], mu, sd, n = st["0.weight"][:, :-1], mu[:-1], sd[:-1], n - 1
     json.dump({"features": {87: "mover2", 104: "mover3", 122: "mover4"}.get(n, "mover"), "model": "mover_mlp", "mu": mu.astype(float).tolist(), "scale": sd.astype(float).tolist(),
                "w1": st["0.weight"].tolist(), "b1": st["0.bias"].tolist(),
                "layers": [{"w": st[f"{2 * i}.weight"].tolist(), "b": st[f"{2 * i}.bias"].tolist()} for i in range(1, args.layers)],
@@ -167,7 +171,7 @@ if args.output:
     anchor = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "rust", "target", "release", "ygoai-anchor")
     if os.path.exists(anchor):
         with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
-            for row in d["x"][is_hp]:
+            for row in d["x"][is_hp][:, :n]:
                 f.write(json.dumps({"x": row.astype(float).tolist()}) + "\n")
         subprocess.run([anchor, args.output, f.name, "--write"], check=True)
         os.unlink(f.name)
