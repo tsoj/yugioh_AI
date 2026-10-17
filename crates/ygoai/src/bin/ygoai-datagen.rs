@@ -7,7 +7,8 @@
 //!
 //!   ygoai-datagen BOOK FIRST COUNT NODES OUT.jsonl [JOBS] [--features SET,SET...]
 //!
-//! (openings FIRST..FIRST+COUNT of the book, every line; games in parallel on JOBS threads)
+//! (openings FIRST..FIRST+COUNT of the book, every line; games in parallel on JOBS threads;
+//! $YGOAI_TRACE: each decision on stderr)
 
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -35,6 +36,7 @@ fn play(book: &ygoai::matchrun::Opening, game: usize, nodes: u64, sets: &[String
     duel.ocg_start_duel();
     let mut players = [Heuristic::new(1, 0), Heuristic::new(2, 1)];
     let mut abs = [AlphaBeta::default(), AlphaBeta::default()];
+    let trace = std::env::var_os("YGOAI_TRACE").is_some();
     let (mut rows, mut labels, mut prompt, mut winner): (Vec<Value>, Vec<Label>, Option<Msg>, Option<u32>) = (Vec::new(), Vec::new(), None, None);
     for _ in 0..MAX_DECISIONS {
         let Ok(step) = run_until_prompt(&mut duel, prompt.as_ref()) else { break };
@@ -53,6 +55,9 @@ fn play(book: &ygoai::matchrun::Opening, game: usize, nodes: u64, sets: &[String
         let p = step.prompt.unwrap();
         let player = p.player().unwrap();
         let cands = candidates(&p);
+        if trace {
+            eprintln!("game {game} decision {} turn {} {} ({} moves, {} messages)", record.responses.len(), duel.ext_get_info()[0], p.name(), cands.len(), step.messages.len());
+        }
         let resp = if is_hidden_prompt(&p) {
             auto_response()
         } else if is_searched(&p) && cands.len() > 1 {

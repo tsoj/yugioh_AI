@@ -192,10 +192,15 @@ pub struct Step {
     pub ended: bool,
 }
 
-/// Processes until a player has to respond or the duel ends.
+/// (`run_until_prompt`: the core's process calls before it gives up on a duel that loops without
+/// asking anything, as one found in a search did, its memory growing)
+pub const MAX_PROCESS_CALLS: usize = 100_000;
+
+/// Processes until a player has to respond or the duel ends (an error after MAX_PROCESS_CALLS
+/// process calls).
 pub fn run_until_prompt(duel: &mut Duel, pending_prompt: Option<&Msg>) -> Result<Step, GameError> {
     let mut msgs = Vec::new();
-    loop {
+    for _ in 0..MAX_PROCESS_CALLS {
         let status = duel.ocg_process() as i32;
         let batch: Vec<Msg> =
             split_messages(duel.ocg_get_message()).into_iter().map(parse).collect::<Result<_, _>>().map_err(|e| GameError(e.0))?;
@@ -213,6 +218,7 @@ pub fn run_until_prompt(duel: &mut Duel, pending_prompt: Option<&Msg>) -> Result
             return Ok(Step { messages: msgs, prompt: Some(p.clone()), ended: false });
         }
     }
+    Err(GameError(format!("no prompt after {MAX_PROCESS_CALLS} process calls")))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
