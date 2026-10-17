@@ -40,6 +40,7 @@ fn main() {
     let (mut nodes, mut searches, mut depth_sum, mut secs) = (0u64, 0u32, 0i64, 0.0);
     let mut tt = (0u64, 0u64);
     let mut broken = 0u64;
+    let mut online = [0.0f64; 3];
     let stats_path = std::env::var("YGOAI_STATS").ok();
     let mut stats = NodeStats::default();
     let skip: usize = std::env::var("YGOAI_SKIP").map_or(0, |s| s.parse().unwrap());
@@ -105,6 +106,9 @@ fn main() {
             duel.ocg_set_response(&ygoai::actions::encode(&p, &resp).unwrap());
             prompt = Some(p);
         }
+        for (a, b) in online.iter_mut().zip(ab.online_stats) {
+            *a += b;
+        }
         if let Some(st) = ab.stats.take() {
             merge(&mut stats.widths, st.widths);
             merge(&mut stats.lmr, st.lmr);
@@ -117,6 +121,15 @@ fn main() {
     }
     if let Some(path) = stats_path {
         print_stats(&stats, &path);
+    }
+    if online[0] > 0.0 {
+        println!(
+            "online: {} nodes learned from; RMS error before each step {:.3} points (the trained evaluation's {:.3}, ratio {:.4})",
+            online[0],
+            (online[1] / online[0]).sqrt(),
+            (online[2] / online[0]).sqrt(),
+            (online[1] / online[2]).sqrt()
+        );
     }
     if time_eval {
         println!("evaluation: {:.2} us per call ({eval_calls} calls)", eval_secs / eval_calls as f64 * 1e6);

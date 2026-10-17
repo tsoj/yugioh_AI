@@ -17,7 +17,7 @@ use std::time::Instant;
 use ygo_core::constants::*;
 use ygo_core::duel::Duel;
 
-use super::evaluate::{evaluate, evaluate_at};
+use super::evaluate::{LearnedEval, evaluate_at};
 use super::history::{HistoryKey, HistoryTable, counter_key};
 use super::movegen::{candidates, is_inner, is_searched};
 use super::movepick::{listed, move_key, move_kind, ordered, prompt_label};
@@ -134,6 +134,11 @@ pub struct AlphaBeta {
     /// by height: the history slots of the last two moves that caused a cutoff there (`killers`;
     /// NO_KILLER if none), cleared for each decision
     killers: Vec<[usize; 2]>,
+    /// (`online`: the evaluation the search learns on, a copy of the trained one for each decision)
+    online_eval: Option<LearnedEval>,
+    /// (`online`) over the nodes it learned from: [count, sum of the learning evaluation's squared
+    /// error before the step, the trained one's] (in points; 0 on a bound's side)
+    pub online_stats: [f64; 3],
     pub nodes: u64,
     /// transposition table lookups, and those that found the position
     pub tt_probes: u64,
@@ -157,6 +162,8 @@ impl Default for AlphaBeta {
             hash_table: TranspositionTable::default(),
             history_table: HistoryTable::default(),
             killers: vec![],
+            online_eval: None,
+            online_stats: [0.0; 3],
             nodes: 0,
             tt_probes: 0,
             tt_hits: 0,
@@ -233,6 +240,7 @@ impl AlphaBeta {
         let max_nodes = p.max_nodes.map(|n| self.nodes + n);
         let features = Features::from_env();
         self.killers.clear();
+        self.online_eval = if features.online { LearnedEval::from_env().cloned() } else { None };
         // (`passrisk`: the opponent's cards hidden at the root)
         let unknown = if features.passrisk {
             duel.ext_get_all_cards().iter().filter(|e| e[0] != us as u32 && e[5] != 0 && is_hidden(duel, e[5])).map(|e| e[5]).collect()
@@ -293,13 +301,15 @@ impl SearchState<'_> {
     /// The static evaluation for `us`, less `passrisk_lp()` for the root's player on a line with
     /// the risk (`passrisk`).
     fn evaluate_at(&self, duel: &mut Duel, us: u32, prompt: Option<&Msg>) -> f64 {
-        let v = evaluate_at(duel, us, prompt);
+        let v = match &self.tables.online_eval {
+            Some(e) => e.value(duel, us, prompt),
+            None => evaluate_at(duel, us, prompt),
+        };
         self.with_risk(v, us)
     }
 
     fn evaluate(&self, duel: &mut Duel, us: u32) -> f64 {
-        let v = evaluate(duel, us);
-        self.with_risk(v, us)
+        self.evaluate_at(duel, us, None)
     }
 
     fn with_risk(&self, v: f64, us: u32) -> f64 {
@@ -545,6 +555,10 @@ impl SearchState<'_> {
         // (futility pruning: the moves after the first whose static eval plus the margin cannot raise alpha)
         let futility_value = static_eval.filter(|_| f.futility && depth <= futility_max_depth).map(|s| s + futility_margin + futility_per_ply * depth as f64);
 
+        // (`online`: the mover's features, to learn from the node's value)
+        let (online_lr, online_lr_exp, online_min_depth, online_max_err) = online_params();
+        let online_x = if f.online && depth >= online_min_depth { self.tables.online_eval.as_ref().and_then(|e| e.mover_x(duel, us, Some(prompt))) } else { None };
+
         // move ordering: the TT move first, then (`killers`) the killer moves, then by history
         // (the rules' order among equals)
         let history_keys: Vec<HistoryKey> = moves
@@ -665,6 +679,27 @@ impl SearchState<'_> {
             let e = st.subtree.entry((label, depth.clamp(-1, 60) as i8)).or_default();
             e[0] += 1;
             e[1] += self.tables.nodes - nodes_before + 1;
+        }
+        // (`online`: a step toward the node's value, a bound unless it is exact)
+        if let Some(x) = online_x
+            && best_value.abs() < WIN / 2.0
+            && let Some(e) = &mut self.tables.online_eval
+        {
+            let bound = match node_type {
+                NodeType::PvNode => 0,
+                NodeType::CutNode => 1,
+                NodeType::AllNode => -1,
+            };
+            let target = best_value / e.lp_factor();
+            let err = e.learn(&x, target, bound, (online_lr * (depth as f64).powf(online_lr_exp)).min(1.0), online_max_err);
+            let trained = LearnedEval::from_env().map_or(0.0, |t| {
+                let e0 = t.mover_output(&x) - target;
+                if (bound > 0 && e0 >= 0.0) || (bound < 0 && e0 <= 0.0) { 0.0 } else { e0 }
+            });
+            let st = &mut self.tables.online_stats;
+            st[0] += 1.0;
+            st[1] += err * err;
+            st[2] += trained * trained;
         }
         if best_value.abs() < WIN / 2.0 {
             // (not a win or loss: those depend on the height)

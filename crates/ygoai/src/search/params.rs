@@ -109,6 +109,25 @@ pub fn rfp_params() -> (f64, f64, i32) {
     })
 }
 
+/// `online`: the share of a node's error that its step corrects (`LearnedEval::learn`'s rate) at
+/// depth d is min(1, ONLINE_LR * d^ONLINE_LR_EXP); nodes from ONLINE_MIN_DEPTH; the error (in the
+/// network's points) clamped to ONLINE_MAX_ERR; $YGOAI_ONLINE=lr,exp,min_depth,max_err to override
+pub const ONLINE_LR: f64 = 0.01;
+pub const ONLINE_LR_EXP: f64 = 1.0;
+pub const ONLINE_MIN_DEPTH: i32 = 1;
+pub const ONLINE_MAX_ERR: f64 = 20.0;
+
+pub fn online_params() -> (f64, f64, i32, f64) {
+    static P: std::sync::OnceLock<(f64, f64, i32, f64)> = std::sync::OnceLock::new();
+    *P.get_or_init(|| match std::env::var("YGOAI_ONLINE") {
+        Ok(s) => {
+            let v: Vec<&str> = s.split(',').collect();
+            (v[0].parse().unwrap(), v[1].parse().unwrap(), v[2].parse().unwrap(), v[3].parse().unwrap())
+        }
+        Err(_) => (ONLINE_LR, ONLINE_LR_EXP, ONLINE_MIN_DEPTH, ONLINE_MAX_ERR),
+    })
+}
+
 /// (`narrowext`: the nodes with at most this many moves extend their TT move)
 pub const NARROW_EXT_MAX_CHILDREN: usize = 2;
 /// (quiescence plies past the nominal depth)
@@ -153,6 +172,8 @@ pub fn passrisk_lp() -> f64 {
 /// `lmrlog`: LMR by `lmr_reduction` instead of one ply. `rfpall`: reverse futility pruning at all
 /// nodes below the root (`rfp_params`). `lmrzw`: the reduced search of LMR with a null window.
 /// `killers`: the last two moves that caused a cutoff at the same height first after the TT move.
+/// `online`: the evaluation learns during the search: a gradient step toward each node's search
+/// value as soon as it has one (`online_params`); back to the trained weights for each decision.
 /// `predict`: with a clock, the next iteration starts only if it is expected to end within the
 /// time budget (by this iteration's time and the depth's node growth, learned across searches)
 /// instead of while less than half the budget is used.
@@ -189,6 +210,7 @@ pub struct Features {
     pub rfpall: bool,
     pub lmrzw: bool,
     pub killers: bool,
+    pub online: bool,
 }
 
 impl Features {
@@ -217,6 +239,7 @@ impl Features {
                 "rfpall" => f.rfpall = true,
                 "lmrzw" => f.lmrzw = true,
                 "killers" => f.killers = true,
+                "online" => f.online = true,
                 _ => panic!("YGOAI_SEARCH: unknown feature {name}"),
             }
         }
