@@ -128,6 +128,29 @@ pub fn online_params() -> (f64, f64, i32, f64) {
     })
 }
 
+/// `nullmove`: the null move's search is NULL_R + depth / NULL_R_DIV plies less deep, at nodes
+/// from NULL_MIN_DEPTH; $YGOAI_NULLMOVE=r,div,min_depth to override
+pub const NULL_R: i32 = 3;
+pub const NULL_R_DIV: i32 = 4;
+pub const NULL_MIN_DEPTH: i32 = 3;
+
+/// (`nullmove`, for measurements: $YGOAI_NULL_VERIFY set, the nodes it cuts are searched anyway)
+pub fn null_verify() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("YGOAI_NULL_VERIFY").is_some())
+}
+
+pub fn nullmove_params() -> (i32, i32, i32) {
+    static P: std::sync::OnceLock<(i32, i32, i32)> = std::sync::OnceLock::new();
+    *P.get_or_init(|| match std::env::var("YGOAI_NULLMOVE") {
+        Ok(s) => {
+            let v: Vec<&str> = s.split(',').collect();
+            (v[0].parse().unwrap(), v[1].parse().unwrap(), v[2].parse().unwrap())
+        }
+        Err(_) => (NULL_R, NULL_R_DIV, NULL_MIN_DEPTH),
+    })
+}
+
 /// (`narrowext`: the nodes with at most this many moves extend their TT move)
 pub const NARROW_EXT_MAX_CHILDREN: usize = 2;
 /// (quiescence plies past the nominal depth)
@@ -172,6 +195,8 @@ pub fn passrisk_lp() -> f64 {
 /// `lmrlog`: LMR by `lmr_reduction` instead of one ply. `rfpall`: reverse futility pruning at all
 /// nodes below the root (`rfp_params`). `lmrzw`: the reduced search of LMR with a null window.
 /// `killers`: the last two moves that caused a cutoff at the same height first after the TT move.
+/// `nullmove`: null move pruning, the null move being the end of the phase (to the End Phase) at
+/// a main or battle phase's decision (`nullmove_params`).
 /// `online`: the evaluation learns during the search: a gradient step toward each node's search
 /// value as soon as it has one (`online_params`); back to the trained weights for each decision.
 /// `predict`: with a clock, the next iteration starts only if it is expected to end within the
@@ -211,6 +236,7 @@ pub struct Features {
     pub lmrzw: bool,
     pub killers: bool,
     pub online: bool,
+    pub nullmove: bool,
 }
 
 impl Features {
@@ -240,6 +266,7 @@ impl Features {
                 "lmrzw" => f.lmrzw = true,
                 "killers" => f.killers = true,
                 "online" => f.online = true,
+                "nullmove" => f.nullmove = true,
                 _ => panic!("YGOAI_SEARCH: unknown feature {name}"),
             }
         }

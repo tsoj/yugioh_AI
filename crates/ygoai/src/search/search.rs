@@ -139,6 +139,11 @@ pub struct AlphaBeta {
     /// (`online`) over the nodes it learned from: [count, sum of the learning evaluation's squared
     /// error before the step, the trained one's] (in points; 0 on a bound's side)
     pub online_stats: [f64; 3],
+    /// (`nullmove`: the null move searches, and those that cut the node off)
+    pub null_tries: u64,
+    pub null_cuts: u64,
+    /// (with $YGOAI_NULL_VERIFY the cut nodes are searched anyway: those below beta after all)
+    pub null_wrong: u64,
     pub nodes: u64,
     /// transposition table lookups, and those that found the position
     pub tt_probes: u64,
@@ -164,6 +169,9 @@ impl Default for AlphaBeta {
             killers: vec![],
             online_eval: None,
             online_stats: [0.0; 3],
+            null_tries: 0,
+            null_cuts: 0,
+            null_wrong: 0,
             nodes: 0,
             tt_probes: 0,
             tt_hits: 0,
@@ -247,7 +255,7 @@ impl AlphaBeta {
         } else {
             vec![]
         };
-        let mut state = SearchState { tables: self, policies, stop_time, max_nodes, features, root_depth: 0, deck_key: 0, root_player: us as u32, unknown, line_risk: false };
+        let mut state = SearchState { tables: self, policies, stop_time, max_nodes, features, root_depth: 0, deck_key: 0, root_player: us as u32, unknown, line_risk: false, in_null: false };
         let card_order = state.rules_card_order(root_prompt);
         let preference = ordered(root_prompt, turn_player, card_order.as_deref());
         let mut move_order: Vec<usize> = (0..root_moves.len()).collect();
@@ -283,6 +291,8 @@ struct SearchState<'a> {
     root_player: u32,
     unknown: Vec<u32>,
     line_risk: bool,
+    /// (`nullmove`: inside a null move's search, where no other is tried)
+    in_null: bool,
 }
 
 /// Where `do_move` arrived.
@@ -550,6 +560,36 @@ impl SearchState<'_> {
                 return Ok(static_eval);
             }
         }
+        // null move pruning (`nullmove`): ending the phase (the turn) instead of acting, searched
+        // NULL_R plies less deep with a null window at beta; still at least beta, acting would be
+        // too (in a main or battle phase doing something is rarely worse than doing nothing)
+        let (null_r, null_r_div, null_min_depth) = nullmove_params();
+        let mut null_cut = false;
+        if f.nullmove
+            && !self.in_null
+            && height > 0
+            && depth >= null_min_depth
+            && beta.is_finite()
+            && beta.abs() < WIN / 2.0
+            && matches!(prompt, Msg::SelectIdlecmd { .. } | Msg::SelectBattlecmd { .. })
+            && let Some(pass) = moves.iter().find(|c| c.kind.as_deref() == Some("to_ep")).cloned()
+            && self.evaluate_at(duel, us, Some(prompt)) >= beta
+        {
+            let r = null_r + depth / null_r_div;
+            self.in_null = true;
+            let value = self.search_move(duel, prompt, &pass, beta - NULL_WINDOW, beta, (depth - 1 - r).max(0), height + 1, false);
+            self.in_null = false;
+            let value = value?;
+            self.tables.null_tries += 1;
+            if value >= beta {
+                self.tables.null_cuts += 1;
+                if !null_verify() {
+                    return Ok(if value >= WIN / 2.0 { beta } else { value });
+                }
+                null_cut = true;
+            }
+        }
+
         let (futility_margin, futility_per_ply, futility_max_depth) = futility_params();
         let static_eval = if (f.futility && depth <= futility_max_depth) || (self.tables.stats.is_some() && depth <= 4) { Some(self.evaluate_at(duel, us, Some(prompt))) } else { None };
         // (futility pruning: the moves after the first whose static eval plus the margin cannot raise alpha)
@@ -679,6 +719,9 @@ impl SearchState<'_> {
             let e = st.subtree.entry((label, depth.clamp(-1, 60) as i8)).or_default();
             e[0] += 1;
             e[1] += self.tables.nodes - nodes_before + 1;
+        }
+        if null_cut && best_value < beta {
+            self.tables.null_wrong += 1;
         }
         // (`online`: a step toward the node's value, a bound unless it is exact)
         if let Some(x) = online_x

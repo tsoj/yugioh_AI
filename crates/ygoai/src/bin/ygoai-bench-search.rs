@@ -41,6 +41,7 @@ fn main() {
     let mut tt = (0u64, 0u64);
     let mut broken = 0u64;
     let mut online = [0.0f64; 3];
+    let mut null = (0u64, 0u64, 0u64);
     let stats_path = std::env::var("YGOAI_STATS").ok();
     let mut stats = NodeStats::default();
     let skip: usize = std::env::var("YGOAI_SKIP").map_or(0, |s| s.parse().unwrap());
@@ -106,6 +107,7 @@ fn main() {
             duel.ocg_set_response(&ygoai::actions::encode(&p, &resp).unwrap());
             prompt = Some(p);
         }
+        null = (null.0 + ab.null_tries, null.1 + ab.null_cuts, null.2 + ab.null_wrong);
         for (a, b) in online.iter_mut().zip(ab.online_stats) {
             *a += b;
         }
@@ -121,6 +123,9 @@ fn main() {
     }
     if let Some(path) = stats_path {
         print_stats(&stats, &path);
+    }
+    if null.0 > 0 {
+        println!("nullmove: {} null move searches, {} cutoffs ({} below beta in the full search)", null.0, null.1, null.2);
     }
     if online[0] > 0.0 {
         println!(
