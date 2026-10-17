@@ -1,6 +1,6 @@
 # TODO
 
-Planned work, roughly in order. SPRTs run at 30+0.3, SPRT [0, 15], with book
+Planned work, roughly in order. SPRTs run at 20+0.2 (since 2026-10-17; 30+0.3 before), SPRT [0, 10], with book
 `runs/books/match1.jsonl`, and are read by LLR. Results go to `runs/sprt/results.jsonl`.
 
 ## Next (user's order, 2026-10-16)
@@ -75,10 +75,20 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
     nodes), but the speed depends on the load: 15600 nodes/s idle, 3800 with three SPRTs running.
   - 74% of the game pairs are split (the same deck wins both); openings the engine decides would
     make SPRTs 3-4x faster.
-- [ ] Not tried yet (from the chess progression in memory): aspiration windows, null move
-      pruning, killer moves, late move pruning, internal iterative reduction, improving
-      heuristic, SEE-like pruning, singular extensions / multicut, double/negative extensions,
-      static eval correction history.
+- [ ] Not tried yet (from the chess progression in memory): aspiration windows, late move
+      pruning, internal iterative reduction, improving heuristic, SEE-like pruning, singular
+      extensions / multicut, double/negative extensions.
+- Tried 2026-10-16/17 (features in the code, off by default):
+  - `killers` (two per height, after the TT move; depth at 3000 nodes 12.84 -> 12.93), 1000
+    nodes: H0, -2.8 +/- 10.1 at 1972 games.
+  - `online` (the user's correction history: no table, one normalized gradient step of all the
+    eval's weights toward each node's search value, share min(1, lr * depth^exp), the net reset
+    per decision; error before each step ~15-16 points vs 17.2 without), 20+0.2: lr 0.003 stopped
+    at 860 games (-3.6 +/- 16.4, LLR -1.23), lr 0.01 stopped at 860 (-5.3 +/- 16.6, LLR -1.44).
+  - `nullmove` (ending the phase as the null move at main/battle decisions with static eval >=
+    beta, null window, R = NULL_R + depth / NULL_R_DIV), 20+0.2: R = 3 + d/4 (depth 13.12, 3.8% of
+    cuts wrong) H0, -24.4 +/- 19.6 at 600 games; R = 4 + d/3 (13.21, 5.1%) H0, -0.8 +/- 8.7 at
+    3224 games.
 - [x] Predictive stopping (`predict`, default since 2026-10-14 without a pass: +3.8 +/- 11.7,
       LLR -0.35 at 1760 games): the next iteration only if it is expected to end within the
       budget. It uses about 25% more of the budget than the old rule (start while under half).
@@ -167,7 +177,18 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       response ("info"), and ygoai-match's records carry them as `labels`; ygoai-refeature reads
       such records (the game number is the line). The labels are the engine's view (its
       reconstruction), the features the true duel's, as in the datagen.
-- [ ] More features: normal summon used, LP thresholds, ...
+- [ ] Round 3 (running): datagen with the round-2 net on runs/books/pairs500x20_c.jsonl (lines
+      11000-11499 of match1, 20 games per pair), into runs/data/pairs500x20c_2000n*.jsonl (games 0-3862
+      in the first file, the OOM kill below; the rest in _p2 and _p3, the missing ids to fill in).
+- [x] Feature sets mover3 (104: summons/attacks this turn, ready attackers, low-Level hand
+      monsters, free zones, direct lethal, chain owner) and mover4 (122: effects with uses left on
+      the field / in GY / in hand, set Traps and Quick-Plays, Extra Deck kinds, more battle stats).
+      5-fold CV over deck pairs on 3800 round-3 games (MLP16, `--fold I/5`), held-out result
+      log-loss / value BCE: mover2 0.4832 / 0.4929, mover3 0.4798 / 0.4920 (better in 4 of 5
+      folds), mover4 0.4800 / 0.4937 (its groups ablated: all within 0.4795-0.4800). For mover3
+      the MLP16 beat h8 (0.4837), h32 (0.4809), 2x16 (0.4811), 6 epochs (0.4829); wd 1e-4 equal.
+      Data-bound: redo on the full round 3, then SPRT the mover3 net.
+- [ ] More features: LP thresholds, ...
 - [ ] Later: the learned policy/value nets and effect-text embeddings (see memory).
 
 ## Engine and core correctness
@@ -179,6 +200,12 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       plays the game in 51 s (its search goes elsewhere), so the slow check is still there. Find
       the position (old binary: `scratchpad/datagen-bin`) and bound or speed up the check.
 
+- [ ] A Kaiju loop: in round 3's game 2898 (pairs500x20_c.jsonl, 2000 nodes) a duel the search
+      reached at decision 596 never asks anything again: process_adjust ->
+      adjust_self_destroy_set -> check_unique_code (Kaiju's unique procedure), memory growing ~1 GB a
+      minute; the OOM killer stopped the whole datagen at 20G. run_until_prompt now gives up after
+      MAX_PROCESS_CALLS = 100000 (b01e459; normal steps < 1000). Find the position and check it
+      against the C++ core.
 - [x] The 4 mismatching games against the C++ core (found 2026-10-13, older than the recent
       changes): pair17349 game 1 decision 947, pair19366 game 2 decision 1880, pair8112 game 0
       decision 89, pair9854 game 1 decision 467 (`build/regress_pairs/`). Fixed (rust 745abcb);

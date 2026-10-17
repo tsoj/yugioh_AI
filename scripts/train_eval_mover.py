@@ -28,6 +28,7 @@ ap.add_argument("--drop", default="", help="feature indices to zero, comma list"
 ap.add_argument("-o", "--output")
 ap.add_argument("--save-v", help="npz of the final v on all rows (for paired comparisons)")
 ap.add_argument("--seed", type=int, default=0, help="the training's seed (not the held-out pairs')")
+ap.add_argument("--fold", help="I/N: hold out the I-th of N folds of the deck pairs instead of --held of them")
 args = ap.parse_args()
 torch.manual_seed(args.seed)
 dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -59,7 +60,11 @@ Ks = {s_: fit_k(value[src == s_], result[src == s_]) for s_ in np.unique(src)}
 K, Kr = Ks[src[0]], np.array([Ks.get(i, 1.0) for i in range(src.max() + 1)])[src]
 
 rng = np.random.default_rng(0)
-held_pairs = set(rng.choice(np.unique(pair[pair < args.held_below] if args.held_below else pair), args.held, replace=False).tolist())
+if args.fold:
+    fi, fn = map(int, args.fold.split("/"))
+    held_pairs = set(np.array_split(rng.permutation(np.unique(pair)), fn)[fi].tolist())
+else:
+    held_pairs = set(rng.choice(np.unique(pair[pair < args.held_below] if args.held_below else pair), args.held, replace=False).tolist())
 is_hp = np.isin(pair, list(held_pairs))
 is_vin = ~is_hp & (k >= 18)
 is_tr = ~is_hp & ~is_vin
