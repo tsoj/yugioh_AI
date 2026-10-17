@@ -29,7 +29,9 @@ ap.add_argument("-o", "--output")
 ap.add_argument("--save-v", help="npz of the final v on all rows (for paired comparisons)")
 ap.add_argument("--seed", type=int, default=0, help="the training's seed (not the held-out pairs')")
 ap.add_argument("--indicator", action="store_true", help="the last column marks rows of older data whose newer features are filled in (by their means): 0 in play, folded into the export's first bias")
-ap.add_argument("--drop-onesided", action="store_true", help="leave out of training the deck pairs where one deck won every game (held-out pairs stay)")
+ap.add_argument("--drop-onesided", action="store_true", help="leave out of training the deck pairs where one deck won every game (held-out pairs stay); --min-wins 1")
+ap.add_argument("--min-wins", type=int, default=0, help="leave out of training the deck pairs where a deck won fewer games than this (held-out pairs stay)")
+ap.add_argument("--balance-wins", action="store_true", help="weight each training game so that both decks of a pair have as much weight in won games: a game the pair's winner of W of its games won counts min(W, L) / W (a one-sided pair: 0)")
 ap.add_argument("--fold",help="I/N: hold out the I-th of N folds of the deck pairs instead of --held of them")
 args = ap.parse_args()
 torch.manual_seed(args.seed)
@@ -70,23 +72,33 @@ else:
 is_hp = np.isin(pair, list(held_pairs))
 is_vin = ~is_hp & (k >= 18)
 is_tr = ~is_hp & ~is_vin
-if args.drop_onesided:
-    # (the pair's first deck sits in seat k % 2; a draw counts as neither deck winning)
+W = np.ones(len(X), np.float32)
+min_wins = max(args.min_wins, 1 if args.drop_onesided else 0)
+if min_wins or args.balance_wins:
+    # (the pair's first deck sits in seat k % 2; per game: 0 or 1 the deck that won, 2 a draw)
     won = np.where(result == 0, 2, (np.where(result > 0, player, 1 - player) != k % 2).astype(np.int64))
-    by_pair = {}
-    for p_, w_ in zip(pair, won):
-        by_pair.setdefault(p_, set()).add(w_)
-    onesided = np.array([q for q, ws in by_pair.items() if ws in ({0}, {1})])
-    is_os = np.isin(pair, onesided)
-    print(f"--drop-onesided: {len(onesided)} of {len(by_pair)} pairs, {int((is_tr & is_os).sum())} training rows dropped")
-    is_vin &= ~is_os
-    is_tr &= ~is_os
+    games_of = {}
+    for g_, p_, w_ in zip(game, pair, won):
+        games_of.setdefault(p_, {})[g_] = w_
+    wins = {q: (sum(w == 0 for w in gs.values()), sum(w == 1 for w in gs.values())) for q, gs in games_of.items()}
+    if min_wins:
+        dropped = np.array([q for q, (w0, w1) in wins.items() if min(w0, w1) < min_wins])
+        is_os = np.isin(pair, dropped)
+        print(f"--min-wins {min_wins}: {len(dropped)} of {len(wins)} pairs, {int((is_tr & is_os).sum())} training rows dropped")
+        is_vin &= ~is_os
+        is_tr &= ~is_os
+    if args.balance_wins:
+        w0 = np.array([wins[q][0] for q in pair], np.float32); w1 = np.array([wins[q][1] for q in pair], np.float32)
+        lo = np.minimum(w0, w1)
+        W = np.where(won == 2, 1.0, lo / np.maximum(np.where(won == 0, w0, w1), 1)).astype(np.float32)
+        print(f"--balance-wins: training rows' weight {W[is_tr].sum():.0f} of {is_tr.sum()}")
 mu, sd = X[is_tr].mean(0), X[is_tr].std(0) + 1e-6
 Z = torch.tensor((X - mu) / sd, device=dev)
 Yr = torch.tensor((result + 1) / 2, dtype=torch.float32, device=dev)
 Yv = torch.tensor(1 / (1 + np.exp(-np.clip(value / Kr, -50, 50))), dtype=torch.float32, device=dev)
 PS = torch.tensor(ps, device=dev); SG = torch.tensor(sgn, device=dev)
 dec = torch.tensor(result != 0, device=dev)
+Wt = torch.tensor(W, device=dev)
 
 n = X.shape[1]
 if args.model == "linear":
@@ -104,10 +116,15 @@ bce = torch.nn.functional.binary_cross_entropy_with_logits
 def v_of(idx):
     return net(Z[idx]).squeeze(-1)
 
-def loss_of(idx, use_a=True):
+def loss_of(idx, use_a=True, weighted=False):
     v = v_of(idx)
     lr_ = SG[idx] * a[PS[idx]] + v if (use_a and not args.nopair) else v
     m = dec[idx]
+    if weighted:
+        w = Wt[idx]
+        l_res = (bce(lr_[m], Yr[idx][m], reduction="none") * w[m]).sum() / w[m].sum().clamp_min(1e-9) if m.any() else torch.zeros((), device=dev)
+        l_val = (bce(v, Yv[idx], reduction="none") * w).sum() / w.sum().clamp_min(1e-9)
+        return l_res, l_val
     l_res = bce(lr_[m], Yr[idx][m]) if m.any() else torch.zeros((), device=dev)
     l_val = bce(v, Yv[idx])
     return l_res, l_val
@@ -154,7 +171,7 @@ for ep in range(args.epochs):
     perm = tr_idx[torch.randperm(N, device=dev)]
     for i in range(0, N, B):
         b = perm[i:i + B]
-        l_res, l_val = loss_of(b)
+        l_res, l_val = loss_of(b, weighted=args.balance_wins)
         loss = (1 - args.lam) * l_res + args.lam * l_val + (a ** 2).sum() / (2 * args.sigma ** 2) / N
         opt.zero_grad(); loss.backward(); opt.step()
     if ep % 3 == 2 or ep == args.epochs - 1:
