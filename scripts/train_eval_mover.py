@@ -29,7 +29,8 @@ ap.add_argument("-o", "--output")
 ap.add_argument("--save-v", help="npz of the final v on all rows (for paired comparisons)")
 ap.add_argument("--seed", type=int, default=0, help="the training's seed (not the held-out pairs')")
 ap.add_argument("--indicator", action="store_true", help="the last column marks rows of older data whose newer features are filled in (by their means): 0 in play, folded into the export's first bias")
-ap.add_argument("--fold", help="I/N: hold out the I-th of N folds of the deck pairs instead of --held of them")
+ap.add_argument("--drop-onesided", action="store_true", help="leave out of training the deck pairs where one deck won every game (held-out pairs stay)")
+ap.add_argument("--fold",help="I/N: hold out the I-th of N folds of the deck pairs instead of --held of them")
 args = ap.parse_args()
 torch.manual_seed(args.seed)
 dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -69,6 +70,17 @@ else:
 is_hp = np.isin(pair, list(held_pairs))
 is_vin = ~is_hp & (k >= 18)
 is_tr = ~is_hp & ~is_vin
+if args.drop_onesided:
+    # (the pair's first deck sits in seat k % 2; a draw counts as neither deck winning)
+    won = np.where(result == 0, 2, (np.where(result > 0, player, 1 - player) != k % 2).astype(np.int64))
+    by_pair = {}
+    for p_, w_ in zip(pair, won):
+        by_pair.setdefault(p_, set()).add(w_)
+    onesided = np.array([q for q, ws in by_pair.items() if ws in ({0}, {1})])
+    is_os = np.isin(pair, onesided)
+    print(f"--drop-onesided: {len(onesided)} of {len(by_pair)} pairs, {int((is_tr & is_os).sum())} training rows dropped")
+    is_vin &= ~is_os
+    is_tr &= ~is_os
 mu, sd = X[is_tr].mean(0), X[is_tr].std(0) + 1e-6
 Z = torch.tensor((X - mu) / sd, device=dev)
 Yr = torch.tensor((result + 1) / 2, dtype=torch.float32, device=dev)
