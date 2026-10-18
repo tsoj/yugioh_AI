@@ -120,6 +120,15 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       still writes those feature sets). mover3 without one-sided pairs, NPS-adjusted 200 nodes
       (`ygoai-match --nps-nodes`): H0, -1.1 +/- 8.9 at 3182 games (it searched ~4% slower); at
       20+0.2 +5.0 at 620 games (stopped): not merged.
+- [x] SPSA of the search parameters on positions (`ygoai-spsa`, 2026-10-18): fishtest's/OpenBench's
+      update rule, theta+ vs theta- on the same batch of 64 positions (one random searched decision
+      per game, true state, shuffled across 4000 games); loss = regret of the 1000-node search's
+      move under a 2000-node-depth reference with exact values per root move + 0.1 * value error.
+      Run 1 (3000 iterations, ~2.7 h): validation loss 538 -> ~500 (regret 438 -> ~400 LP, value
+      error unchanged); root card width 3 -> 5, futility margins 583 -> 547 and 233 -> 228 LP,
+      the rest unchanged. SPRT at 20+0.2 H1, +17.8 +/- 12.8 at 1484 games: merged (bench checksum
+      fb0d2430d4f8e25f). Next: more iterations / other parameters (time management, history decay,
+      the move ordering), a deeper reference.
 - [x] Futility pruning again (Stockfish's parent-node form): the moves after the first at depth
       <= 3 whose static eval + 45 + 4 * depth cannot raise alpha (margins measured with the mover2
       eval: the 99th percentile of the gap over the moves that raised alpha, 49/52/55/72 at depth

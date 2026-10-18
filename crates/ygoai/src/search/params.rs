@@ -8,9 +8,10 @@ pub const MAX_DEPTH: i32 = 100;
 pub const DEPTH_NO_CLOCK: i32 = 2;
 /// (per node, after ordering)
 pub const MAX_CHILDREN: usize = 12;
-/// (a one-card selection: the rules' first choices only, below the root and at the root)
+/// (a one-card selection: the rules' first choices only, below the root and at the root; the root's
+/// width 3 -> 5 by SPSA run 1, see FUTILITY_MARGIN)
 pub const CARD_WIDTH: usize = 3;
-pub const ROOT_CARD_WIDTH: usize = 3;
+pub const ROOT_CARD_WIDTH: usize = 5;
 
 // time management
 /// (the next iteration starts only if it is expected to end within the time budget: by this
@@ -52,10 +53,12 @@ pub const LMR_MIN_MOVE_COUNTER: usize = 2;
 /// nodes (mean depth 9.65 -> 12.37); SPRT vs lmr,predict H1, +19.4 +/- 13.5 at 1364 games. The
 /// measured 99th percentile of alpha minus the static eval over the later moves that raised
 /// alpha was 49, 52, 55, 72 points at depth 1-4: a margin about ten times larger (SPRT stopped
-/// near zero))
+/// near zero). Then SPSA run 1 (ygoai-spsa, 1000 nodes vs a 2000-node reference, 3000
+/// iterations; validation loss 538 -> ~500): margins 583.4 -> 546.6 and 233.4 -> 228.1 LP, root
+/// card width 3 -> 5; SPRT at 20+0.2 H1, +17.8 +/- 12.8 at 1484 games, 2026-10-18)
 pub const FUTILITY_MAX_DEPTH: i32 = 8;
-pub const FUTILITY_MARGIN: f64 = 5.0 * 116.68036281706055;
-pub const FUTILITY_MARGIN_PER_PLY: f64 = 2.0 * 116.68036281706055;
+pub const FUTILITY_MARGIN: f64 = 546.633177069564;
+pub const FUTILITY_MARGIN_PER_PLY: f64 = 228.1061522305487;
 
 // The search features that failed their SPRTs and their parameters were removed on 2026-10-18
 // (pvs, rfp, rfpall, conthist, qsearch, narrowext, killers, nullmove, online, lmrlog, resample,
