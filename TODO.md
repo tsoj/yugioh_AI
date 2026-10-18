@@ -115,6 +115,11 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       the search's trace). lmr (with a null window), futility and the predictive iteration start
       are always on ($YGOAI_SEARCH is gone). The features' results stay in this file; their code
       in the git history before the cleanup commit. Bench checksum unchanged (573fe24d6e988ea6).
+      The evaluation too: only mover2 MLPs load (the hand-written eval, YGOAI_EVAL=hand, the linear
+      and antisymmetric models and nets on mover/mover3/mover4/rich features are gone; datagen
+      still writes those feature sets). mover3 without one-sided pairs, NPS-adjusted 200 nodes
+      (`ygoai-match --nps-nodes`): H0, -1.1 +/- 8.9 at 3182 games (it searched ~4% slower); at
+      20+0.2 +5.0 at 620 games (stopped): not merged.
 - [x] Futility pruning again (Stockfish's parent-node form): the moves after the first at depth
       <= 3 whose static eval + 45 + 4 * depth cannot raise alpha (margins measured with the mover2
       eval: the 99th percentile of the gap over the moves that raised alpha, 49/52/55/72 at depth

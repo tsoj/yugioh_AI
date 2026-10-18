@@ -3,9 +3,8 @@
 //!
 //!   ygoai-anchor MODEL.json ROWS.jsonl [--write] [--max N]
 //!
-//! ROWS: data rows (ygoai-datagen, ygoai-refeature) with the model's features under its feature
-//! set's name, else "mover3", "mover2", "mover_x" or "mover" (or "x"; a model reads the first of
-//! a larger set's, as `mover`'s 49 are `mover2`'s first); every row
+//! ROWS: data rows (ygoai-datagen, ygoai-refeature) with the model's `mover2` features (or a
+//! larger set's whose first 87 they are: "mover3", "mover4"); every row
 //! whose two players both have LP_ANCHOR_MIN_LP or more counts (at most N, default 200000,
 //! spread over the file). For each, the mover's LP goes up and
 //! the opponent's down by LP_ANCHOR_STEP against the reverse; the slope is the mean change of the
@@ -25,7 +24,7 @@ fn main() {
     let max: usize = args.iter().position(|a| a == "--max").map_or(200_000, |i| args[i + 1].parse().unwrap());
     let text = std::fs::read_to_string(model_path).expect("model file");
     let eval = LearnedEval::from_json(&text, model_path);
-    let (me, opp) = eval.lp_features().expect("an LP anchor needs a mover or mover2 model");
+    let (me, opp) = eval.lp_features();
 
     let rows = std::fs::read_to_string(rows_path).expect("rows file");
     let lines: Vec<&str> = rows.lines().filter(|l| !l.trim().is_empty()).collect();
@@ -33,10 +32,10 @@ fn main() {
     let (mut slopes, mut low) = (Vec::new(), Vec::new());
     for line in lines.iter().step_by(every) {
         let row: serde_json::Value = serde_json::from_str(line).expect("row");
-        let Some(x) = [eval.feature_set(), "mover4", "mover3", "mover2", "mover_x", "mover", "x"].iter().find_map(|k| row.get(*k)).and_then(|v| v.as_array()) else {
+        let Some(x) = [eval.feature_set(), "mover4", "mover3"].iter().find_map(|k| row.get(*k)).and_then(|v| v.as_array()) else {
             continue;
         };
-        // (`mover`'s 49 features are the first of `mover2`'s 87)
+        // (`mover2`'s 87 features are the first of `mover3`'s and `mover4`'s)
         let x: Vec<f64> = x.iter().take(eval.n_features()).map(|v| v.as_f64().unwrap()).collect();
         let (lp_me, lp_opp) = (x[me] * 1000.0, x[opp] * 1000.0);
         let step = LP_ANCHOR_STEP / 1000.0;

@@ -9,15 +9,6 @@ use ygo_core::types::CardId;
 use crate::messages::Msg;
 use crate::state::parse_location_query;
 
-// evaluation weights (in LP, as all values)
-pub const W_LP: f64 = 1.0;
-pub const W_MONSTER: f64 = 430.0;
-/// (a face-up monster stronger than everything on the other side)
-pub const W_DOMINANT: f64 = 1760.0;
-pub const W_HAND: f64 = 910.0;
-pub const W_BACKROW: f64 = 510.0;
-/// (two cards or fewer left to draw)
-pub const W_DECK_OUT: f64 = 2000.0;
 
 const MZONE_QUERY: u32 = QUERY_POSITION | QUERY_ATTACK | QUERY_DEFENSE;
 
@@ -64,9 +55,6 @@ pub fn eval_features(d: &mut Duel, me: u32) -> [f64; 6] {
     }
     f
 }
-
-/// The evaluation's weights, in the order of `eval_features`.
-pub const EVAL_WEIGHTS: [f64; 6] = [W_LP, W_MONSTER, W_DOMINANT, W_HAND, W_BACKROW, W_DECK_OUT];
 
 /// One player's side for the rich features (scripts/train_eval.py side_features): LP/1000, hand,
 /// deck/10, grave/10, banished/10, extra/10, monsters, face-up ones, face-up attackers, face-down
@@ -433,13 +421,18 @@ pub fn mover_features4(d: &mut Duel, mover: u32, prompt: Option<&Msg>) -> Vec<f6
     mover_view(d, mover, prompt, 4)
 }
 
-/// A trained evaluation (scripts/train_eval.py's export): linear on the raw features, or the
-/// antisymmetric MLP v(z) = g(z) - g(-z), g(z) = w2 . relu(w1 z + b1), z the features divided by
-/// `scale`. Its value is in LP: the network's output times its `lp_anchor`'s factor (see
-/// `LpAnchor`; without one, in the network's own points, with a warning).
+/// The trained evaluation (scripts/train_eval_mover.py's export): an MLP on the 87 `mover2`
+/// features of the view of the player to move, z = (x - mu) / scale, hidden layers relu(w h + b),
+/// output w2 . h + b2 for the mover (negated for the other player). Its value is in LP: the
+/// network's output times its `lp_anchor`'s factor (see `LpAnchor`; without one, in the network's
+/// own points, with a warning). Nets on other feature sets are not loaded (the other evaluations
+/// were removed on 2026-10-18: the hand-written one, linear and antisymmetric models, the `mover`,
+/// `mover3`, `mover4` and `rich` feature sets; datagen still writes those features).
 #[derive(serde::Deserialize, Clone)]
 pub struct LearnedEval {
     features: String,
+    /// (`model` and `weights`, of the removed model types: only in `weights_hash`, so that the
+    /// existing anchors stay valid)
     model: String,
     scale: Vec<f64>,
     #[serde(default)]
@@ -450,12 +443,12 @@ pub struct LearnedEval {
     b1: Vec<f64>,
     #[serde(default)]
     w2: Vec<f64>,
-    /// (`mover`: the features' mean, subtracted before `scale` divides; the output's bias)
+    /// (the features' mean, subtracted before `scale` divides; the output's bias)
     #[serde(default)]
     mu: Vec<f64>,
     #[serde(default)]
     b2: f64,
-    /// (`mover`: hidden layers after the first, each relu(w h + b); `w2` reads the last)
+    /// (hidden layers after the first, each relu(w h + b); `w2` reads the last)
     #[serde(default)]
     layers: Vec<Layer>,
     #[serde(default)]
@@ -499,6 +492,7 @@ impl LearnedEval {
     /// The evaluation of a model file's text; `name` for the warnings.
     pub fn from_json(text: &str, name: &str) -> LearnedEval {
         let mut e: LearnedEval = serde_json::from_str(text).unwrap_or_else(|err| panic!("eval {name}: {err}"));
+        assert!(e.features == "mover2" && e.mu.len() == e.scale.len(), "eval {name}: a {} net; only mover2 MLPs are evaluated", e.features);
         e.lp_factor = 1.0;
         match &e.lp_anchor {
             None => eprintln!("warning: eval {name} has no LP anchor (run ygoai-anchor): its values are in the network's own points, the search's margins are in LP"),
@@ -538,9 +532,9 @@ impl LearnedEval {
         format!("{h:016x}")
     }
 
-    /// The indices of the mover's and the opponent's LP / 1000 in the features (`mover`, `mover2`).
-    pub fn lp_features(&self) -> Option<(usize, usize)> {
-        matches!(self.features.as_str(), "mover" | "mover2" | "mover3" | "mover4").then_some((0, 17))
+    /// The indices of the mover's and the opponent's LP / 1000 in the features.
+    pub fn lp_features(&self) -> (usize, usize) {
+        (0, 17)
     }
 
     /// The feature set's name (`mover2`, ...).
@@ -553,7 +547,7 @@ impl LearnedEval {
         self.scale.len()
     }
 
-    /// The network's output (its own points) for the mover's features `x` (`mover`, `mover2`).
+    /// The network's output (its own points) for the mover's features `x`.
     pub fn mover_output(&self, x: &[f64]) -> f64 {
         let z: Vec<f64> = x.iter().zip(&self.mu).zip(&self.scale).map(|((a, m), s)| (a - m) / s).collect();
         let mut h = dense_relu(&self.w1, &self.b1, &z);
@@ -568,57 +562,25 @@ impl LearnedEval {
         self.lp_factor
     }
 
-    /// The features of the mover's view that the network reads (`mover`, `mover2`; else None).
-    pub fn mover_x(&self, d: &mut Duel, mover: u32, prompt: Option<&Msg>) -> Option<Vec<f64>> {
-        match self.features.as_str() {
-            "mover" => Some(mover_features(d, mover, prompt)),
-            "mover2" => Some(mover_features2(d, mover, prompt)),
-            "mover3" => Some(mover_features3(d, mover, prompt)),
-            "mover4" => Some(mover_features4(d, mover, prompt)),
-            _ => None,
-        }
-    }
-
+    /// The position's value for `me` (in LP): the mover's value, plus for me and minus for the
+    /// opponent.
     pub fn value(&self, d: &mut Duel, me: u32, prompt: Option<&Msg>) -> f64 {
-        self.lp_factor * self.output(d, me, prompt)
-    }
-
-    fn output(&self, d: &mut Duel, me: u32, prompt: Option<&Msg>) -> f64 {
         let mover = prompt.and_then(|m| m.player()).unwrap_or(me);
-        if let Some(x) = self.mover_x(d, mover, prompt) {
-            // (the mover's value, an unconstrained MLP: plus for me, minus for the opponent)
-            let v = self.mover_output(&x);
-            return if mover == me { v } else { -v };
-        }
-        let x = if self.features == "rich" { rich_features(d, me) } else { eval_features(d, me).to_vec() };
-        if self.model == "linear" {
-            return x.iter().zip(&self.weights).map(|(a, w)| a * w).sum();
-        }
-        let z: Vec<f64> = x.iter().zip(&self.scale).map(|(a, s)| a / s).collect();
-        let g = |sign: f64| -> f64 {
-            self.w1
-                .iter()
-                .zip(&self.b1)
-                .zip(&self.w2)
-                .map(|((row, b), w2)| w2 * (row.iter().zip(&z).map(|(w, x)| w * sign * x).sum::<f64>() + b).max(0.0))
-                .sum()
-        };
-        g(1.0) - g(-1.0)
+        let v = self.mover_output(&mover_features2(d, mover, prompt));
+        self.lp_factor * if mover == me { v } else { -v }
     }
 
     /// The trained evaluation in use (read once): $YGOAI_EVAL's JSON file if set, the built-in
-    /// models/eval_mover2_r23os_mlp16.json otherwise; none with YGOAI_EVAL=hand (the hand-written eval).
-    pub fn from_env() -> Option<&'static LearnedEval> {
-        static E: std::sync::OnceLock<Option<LearnedEval>> = std::sync::OnceLock::new();
+    /// models/eval_mover2_r23os_mlp16.json otherwise.
+    pub fn from_env() -> &'static LearnedEval {
+        static E: std::sync::OnceLock<LearnedEval> = std::sync::OnceLock::new();
         E.get_or_init(|| match std::env::var("YGOAI_EVAL").ok().filter(|p| !p.is_empty()) {
-            Some(p) if p == "hand" => None,
             Some(path) => {
                 let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("YGOAI_EVAL {path}: {e}"));
-                Some(LearnedEval::from_json(&text, &path))
+                LearnedEval::from_json(&text, &path)
             }
-            None => Some(LearnedEval::from_json(DEFAULT_EVAL, "models/eval_mover2_r23os_mlp16.json")),
+            None => LearnedEval::from_json(DEFAULT_EVAL, "models/eval_mover2_r23os_mlp16.json"),
         })
-        .as_ref()
     }
 }
 
@@ -632,50 +594,13 @@ impl LearnedEval {
 /// which had +28.5 +/- 17.6 vs the hand-written eval).
 const DEFAULT_EVAL: &str = include_str!("../../models/eval_mover2_r23os_mlp16.json");
 
-/// The position's value for `me` (in LP): the trained evaluation (see
-/// `LearnedEval::from_env`), or the hand-written one (alphabeta.evaluate) with YGOAI_EVAL=hand.
+/// The position's value for `me` (in LP): the trained evaluation (`LearnedEval::from_env`).
 pub fn evaluate(d: &mut Duel, me: u32) -> f64 {
     evaluate_at(d, me, None)
 }
 
-/// `evaluate` with the pending prompt, if any (a trained evaluation of the mover's view values
-/// the position for the player who decides it).
+/// `evaluate` with the pending prompt, if any (the evaluation of the mover's view values the
+/// position for the player who decides it).
 pub fn evaluate_at(d: &mut Duel, me: u32, prompt: Option<&Msg>) -> f64 {
-    if let Some(e) = LearnedEval::from_env() {
-        return e.value(d, me, prompt);
-    }
-    let info = d.ext_get_info();
-    let lp = [info[3] as i32, info[4] as i32];
-    let mons: Vec<Vec<(u32, i32, i32)>> = [me, 1 - me]
-        .iter()
-        .map(|&p| {
-            parse_location_query(&query(d, p, LOCATION_MZONE, MZONE_QUERY))
-                .into_iter()
-                .flatten()
-                .map(|c| (c.position.unwrap_or(0), c.attack.unwrap_or(0), c.defense.unwrap_or(0)))
-                .collect()
-        })
-        .collect();
-    let (me_i, opp_i) = (me as usize, 1 - me as usize);
-    let mut value = W_LP * (lp[me_i] - lp[opp_i]) as f64 + W_MONSTER * (mons[0].len() as f64 - mons[1].len() as f64);
-    for (s, p) in [(0usize, me), (1, 1 - me)] {
-        let sign = if s == 0 { 1.0 } else { -1.0 };
-        let best_other = mons[1 - s].iter().map(|&(pos, a, df)| battle_stat(pos, a, df)).max().unwrap_or(-1);
-        for &(pos, a, _) in &mons[s] {
-            if pos & POS_FACEUP_ATTACK != 0 && a > best_other {
-                value += sign * W_DOMINANT;
-            }
-        }
-        value += sign * W_HAND * d.ocg_query_count(p as u8, LOCATION_HAND) as f64;
-        let backrow = parse_location_query(&query(d, p, LOCATION_SZONE, QUERY_POSITION))
-            .into_iter()
-            .flatten()
-            .filter(|c| c.position.unwrap_or(0) & POS_FACEDOWN != 0)
-            .count();
-        value += sign * W_BACKROW * backrow as f64;
-        if d.ocg_query_count(p as u8, LOCATION_DECK) <= 2 {
-            value -= sign * W_DECK_OUT;
-        }
-    }
-    value
+    LearnedEval::from_env().value(d, me, prompt)
 }

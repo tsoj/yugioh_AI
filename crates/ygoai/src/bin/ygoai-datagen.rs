@@ -21,7 +21,7 @@ use ygoai::heuristic::Heuristic;
 use ygoai::matchrun::load_book_head;
 use ygoai::messages::Msg;
 use ygoai::observe::{auto_response, is_hidden_prompt};
-use ygoai::search::{AlphaBeta, LearnedEval, SearchParams, candidates, is_searched};
+use ygoai::search::{AlphaBeta, SearchParams, candidates, is_searched};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -30,7 +30,7 @@ const MAX_DECISIONS: usize = 3000;
 
 fn play(book: &ygoai::matchrun::Opening, game: usize, nodes: u64, sets: &[String]) -> (Vec<Value>, GameData) {
     let mut record = new_record(&book.decks, book.seed, &DuelConfig::default());
-    let eval = if LearnedEval::from_env().is_some() { std::env::var("YGOAI_EVAL").unwrap_or_else(|_| "built-in".into()) } else { "hand".into() };
+    let eval = std::env::var("YGOAI_EVAL").unwrap_or_else(|_| "built-in".into());
     record.agents = vec![format!("alphabeta {nodes} nodes, eval {eval}"); 2];
     let mut duel = record.setup(None).unwrap();
     duel.ocg_start_duel();
