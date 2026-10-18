@@ -100,8 +100,9 @@ impl Default for AlphaBeta {
 /// What a search is given besides the duel: time (`budget` in seconds for this decision, None
 /// for a fixed depth; `elapsed` already spent on it; the clock's remaining seconds), the select
 /// hint before a card selection and the seeds of the rules' two players. `max_nodes`: a fixed
-/// number of nodes instead (deepening until it is used up; deterministic). `exact_root`: every
-/// root move searched with the full window (exact values for all of them, at a cost: references).
+/// number of nodes instead (deepening until it is used up; deterministic). `depth`: the last
+/// iteration (at most; without a budget or node limit: DEPTH_NO_CLOCK). `exact_root`: every root
+/// move searched with the full window (exact values for all of them, at a cost: references).
 #[derive(Default)]
 pub struct SearchParams {
     pub budget: Option<f64>,
@@ -110,6 +111,7 @@ pub struct SearchParams {
     pub hint: Option<u64>,
     pub seeds: [u32; 2],
     pub max_nodes: Option<u64>,
+    pub depth: Option<i32>,
     pub exact_root: bool,
 }
 
@@ -155,8 +157,8 @@ impl AlphaBeta {
         if matches!(root_prompt, Msg::SelectCard { min: 1, max: 1, .. }) {
             move_order.truncate(state.tables.tune.root_card_width);
         }
-        let fixed_depth = p.budget.is_none() && p.max_nodes.is_none();
-        state.iterative_deepening(duel, root_prompt, root_moves, move_order, start_time, p.budget, fixed_depth, p.exact_root)
+        let max_depth = p.depth.unwrap_or(if p.budget.is_none() && p.max_nodes.is_none() { DEPTH_NO_CLOCK } else { MAX_DEPTH });
+        state.iterative_deepening(duel, root_prompt, root_moves, move_order, start_time, p.budget, max_depth, p.exact_root)
     }
 }
 
@@ -209,7 +211,7 @@ impl SearchState<'_> {
         mut move_order: Vec<usize>,
         start_time: Instant,
         budget: Option<f64>,
-        fixed_depth: bool,
+        max_depth: i32,
         exact_root: bool,
     ) -> (usize, i32) {
         let (mut best_move, mut completed_depth) = (move_order[0], 0);
@@ -217,7 +219,6 @@ impl SearchState<'_> {
         self.tables.last_root_values = vec![None; moves.len()];
         // (the last completed iteration's nodes and seconds)
         let (mut last_nodes, mut last_secs) = (0u64, 0.0);
-        let max_depth = if fixed_depth { DEPTH_NO_CLOCK } else { MAX_DEPTH };
         // (the root's moves are searched on a copy of it: it stays as it is)
         let mut root_duel = duel.clone();
         for depth in 1..=max_depth {

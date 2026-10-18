@@ -6,8 +6,8 @@
 //!
 //! The positions: from each game of the files one searched decision at random (true state: the
 //! tuned values are numbers, nothing of the hidden cards reaches play), the games shuffled. Each
-//! position has a reference: a search with REF nodes, every root move with the full window (an
-//! exact value each). A search under test has NODES nodes; its loss is the regret of the move it
+//! position has a reference: every root move searched with the full window (an exact value each)
+//! to the depth that a search of REF nodes completes. A search under test has NODES nodes; its loss is the regret of the move it
 //! chose by the reference's values, plus VALUE_WEIGHT times its root value's distance to the
 //! reference's best (both clamped to CLAMP LP). Searches start from fresh tables (so the history's
 //! decay and the time management are not tuned here).
@@ -44,6 +44,8 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 const MAX_CANDIDATES: usize = 16;
 /// (the reference searches every root move, also cards beyond the root's width)
 const REF_ROOT_WIDTH: usize = 64;
+/// (the reference's exact search stops at this many times its nodes, at the depth it completed)
+const REF_EXACT_NODES_FACTOR: u64 = 50;
 /// (positions whose reference values all lie within this many LP: no move choice to learn from)
 const MIN_SPREAD: f64 = 1.0;
 
@@ -232,19 +234,20 @@ impl Position {
     }
 }
 
-/// A search of the position with `tune` and `nodes` (fresh tables): (chosen move, root value).
-fn search(p: &Position, tune: Tune, nodes: u64, exact_root: bool) -> (usize, f64, Vec<Option<f64>>) {
+/// A search of the position with `tune` (fresh tables), `nodes` and at most `depth` plies: (chosen
+/// move, root value, the root moves' values, the depth completed).
+fn search(p: &Position, tune: Tune, nodes: u64, depth: Option<i32>, exact_root: bool) -> (usize, f64, Vec<Option<f64>>, i32) {
     let mut ab = AlphaBeta::default();
     ab.tune = tune;
     ab.prepare();
-    let params = SearchParams { budget: None, elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2], max_nodes: Some(nodes), exact_root };
-    let (best, _) = ab.search(&p.duel, &p.prompt, &p.cands, &params);
-    (best, ab.last_value, std::mem::take(&mut ab.last_root_values))
+    let params = SearchParams { budget: None, elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2], max_nodes: Some(nodes), depth, exact_root };
+    let (best, done) = ab.search(&p.duel, &p.prompt, &p.cands, &params);
+    (best, ab.last_value, std::mem::take(&mut ab.last_root_values), done)
 }
 
 /// A position's loss under `tune`: [loss, regret, value error].
 fn loss(p: &Position, tune: Tune, a: &LossCfg) -> [f64; 3] {
-    let (chosen, value, _) = search(p, tune, a.nodes, false);
+    let (chosen, value, _, _) = search(p, tune, a.nodes, None, false);
     let best = p.best();
     let regret = (best - p.values[chosen]).min(a.clamp);
     let verr = if value.is_finite() { (value - best).abs().min(a.clamp) } else { a.clamp };
@@ -272,8 +275,10 @@ fn reference(record: &GameRecord, viewer: bool, game_seed: u64, ref_nodes: u64) 
     let mut rng = PyRandom::new(game_seed as i128);
     let k = eligible[rng.randrange(eligible.len())];
     let pos = position_at(record, viewer, k, vec![])?;
+    // (the depth a search of ref_nodes completes, then every root move with the full window to it)
     let tune = Tune { root_card_width: REF_ROOT_WIDTH, ..Tune::default() };
-    let (_, _, values) = search(&pos, tune, ref_nodes, true);
+    let (_, _, _, depth) = search(&pos, tune, ref_nodes, None, false);
+    let (_, _, values, _) = search(&pos, tune, REF_EXACT_NODES_FACTOR * ref_nodes, Some(depth.max(1)), true);
     let values: Vec<f64> = values.into_iter().collect::<Option<_>>()?;
     let spread = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max) - values.iter().cloned().fold(f64::INFINITY, f64::min);
     (spread >= MIN_SPREAD).then_some((k, Position { values, ..pos }))

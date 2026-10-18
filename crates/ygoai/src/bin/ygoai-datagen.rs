@@ -63,7 +63,7 @@ fn play(book: &ygoai::matchrun::Opening, game: usize, nodes: u64, sets: &[String
         } else if is_searched(&p) && cands.len() > 1 {
             let ab = &mut abs[player as usize];
             ab.prepare();
-            let params = SearchParams { budget: None, elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2], max_nodes: Some(nodes), exact_root: false };
+            let params = SearchParams { budget: None, elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2], max_nodes: Some(nodes), depth: None, exact_root: false };
             let (best, done) = ab.search(&duel, &p, &cands, &params);
             if ab.last_value.is_finite() {
                 let label = Label { decision: record.responses.len(), player, value: ab.last_value, depth: done as u32, nodes: None, time: None, search_time: None };

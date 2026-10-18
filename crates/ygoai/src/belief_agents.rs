@@ -207,7 +207,7 @@ impl BeliefSearchAgent {
                 let seeds = [self.rng.getrandbits(32) as u32, self.rng.getrandbits(32) as u32];
                 ab.prepare();
                 let before = ab.nodes;
-                let params = SearchParams { budget, elapsed, clock_remaining: remaining, hint, seeds, max_nodes, exact_root: false };
+                let params = SearchParams { budget, elapsed, clock_remaining: remaining, hint, seeds, max_nodes, depth: None, exact_root: false };
                 let t_search = Instant::now();
                 let (best, depth) = ab.search(&duel.d, &core_prompt, &core_cands, &params);
                 self.nodes += ab.nodes - before;
