@@ -41,8 +41,6 @@ use ygoai::search::{AlphaBeta, SearchParams, Tune, candidates, is_searched};
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-/// (as the agent: the root's moves are at most this many)
-const MAX_CANDIDATES: usize = 16;
 /// (the reference searches every root move, also cards beyond the root's width)
 const REF_ROOT_WIDTH: usize = 64;
 /// (the reference's exact search stops at this many times its nodes, at the depth it completed)
@@ -220,8 +218,7 @@ fn searchable(p: &Msg) -> Option<Vec<Response>> {
     if is_hidden_prompt(p) || !is_searched(p) {
         return None;
     }
-    let mut c = candidates(p);
-    c.truncate(MAX_CANDIDATES);
+    let c = candidates(p);
     (c.len() > 1).then_some(c)
 }
 

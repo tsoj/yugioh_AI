@@ -226,6 +226,18 @@ pub fn has_trigger(code: u32) -> bool {
     memo(&CACHE, code, || script_text(code).contains("EFFECT_TYPE_TRIGGER_"))
 }
 
+/// Whether the zone a card is placed in can matter with this card in the duel: a Link or Pendulum
+/// card, or a script that reads columns, sequences, linked or disabled zones or Pendulum Zones.
+pub fn zone_sensitive(code: u32) -> bool {
+    static CACHE: OnceLock<Mutex<HashMap<u32, bool>>> = OnceLock::new();
+    memo(&CACHE, code, || {
+        let link_or_pendulum = card_db().cards.get(&code).is_some_and(|c| c.type_ & (ygo_core::constants::TYPE_LINK | ygo_core::constants::TYPE_PENDULUM) != 0);
+        link_or_pendulum
+            || re(r"GetColumnGroup|IsColumn|GetColumnZone|IsInMainMZone|IsSequence|LinkedZone|LinkedGroup|IsLinked|SelectDisableField|EFFECT_DISABLE_FIELD|EFFECT_USE_EXTRA_MZONE|CheckAdjacent|adjacent|LOCATION_PZONE")
+                .is_match(&script_text(code))
+    })
+}
+
 /// Whether the card cannot be Normal Summoned or Set by its own script.
 pub fn unsummonable(code: u32) -> bool {
     static CACHE: OnceLock<Mutex<HashMap<u32, bool>>> = OnceLock::new();

@@ -16,6 +16,7 @@ use crate::belief::agent::AgentBelief;
 use crate::belief::completion::{Completion, CorpusCompletion, VanillaCompletion, card};
 use crate::belief::neural::NeuralCompletion;
 use crate::belief::tracker::Need;
+use crate::belief::script_index::zone_sensitive;
 use crate::game::{Agent, AgentError, InitInfo, ObsItem};
 use crate::heuristic::Heuristic;
 use crate::messages::Msg;
@@ -27,7 +28,6 @@ use crate::state::{LOCATIONS, Snapshot, viewer_view};
 
 /// public facts an approximate reconstruction may get wrong to be searched on
 pub const MAX_APPROX_DIFFS: usize = 4;
-pub const MAX_CANDIDATES: usize = 16;
 /// alphabeta's budget per searched decision: (remaining - the reserve) / MOVES_TO_GO + the clock's mean gain
 /// between two searches (measured: the increments of the decisions in between, hidden ones too,
 /// less what they and the searched decision's own overhead took; before any, CLOCK_GAIN_PRIOR
@@ -113,6 +113,10 @@ pub struct BeliefSearchAgent {
     clock_after_search: Option<f64>,
     /// (the game's slowest reconstruction's seconds)
     slowest_reconstruction: f64,
+    /// (whether this agent's deck has a card for which zones matter, `zone_sensitive`)
+    own_zones: bool,
+    /// (the last search's values by root move, see `AlphaBeta::last_root_values`)
+    root_values: Vec<Option<f64>>,
     // statistics
     pub searches: usize,
     pub failures: usize,
@@ -145,6 +149,8 @@ impl BeliefSearchAgent {
             clock_gains: (0.0, 0.0),
             clock_after_search: None,
             slowest_reconstruction: 0.0,
+            own_zones: false,
+            root_values: Vec::new(),
             searches: 0,
             failures: 0,
             nodes: 0,
@@ -156,6 +162,31 @@ impl BeliefSearchAgent {
     pub fn set_last_response(&mut self, r: Response) {
         if let Some(ObsItem::Response(last)) = self.items.last_mut() {
             *last = r;
+        }
+    }
+
+    /// Appends a root search to the file `path` as a JSON line (`YGOAI_ROOT_LOG`, a measurement):
+    /// the decision type, its candidates, the chosen one (0: the rules' answer, null: no search),
+    /// its value minus the rules' answer's (a lower bound if that one failed low), whether a card
+    /// for which zones matter is in this agent's deck or visible, and the seconds.
+    fn log_root(&self, path: &std::ffi::OsStr, prompt: &Msg, state: Option<&Snapshot>, n: usize, chosen: Option<usize>, secs: f64) {
+        use std::io::Write;
+        let visible = state.is_some_and(|s| {
+            s.players.iter().any(|p| {
+                [&p.hand, &p.mzone, &p.szone, &p.grave, &p.removed, &p.extra]
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .any(|c| c.code.is_some_and(|code| code != 0 && zone_sensitive(code)))
+            })
+        });
+        let gap = chosen.and_then(|k| Some(self.root_values.get(k).copied()?? - self.root_values.first().copied()??));
+        let line = serde_json::json!({
+            "kind": prompt.name(), "n": n, "chosen": chosen, "gap": gap,
+            "zones": self.own_zones || visible, "secs": secs, "player": self.player,
+        });
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = f.write_all(format!("{line}\n").as_bytes()); // (one write: lines of parallel games stay whole)
         }
     }
 
@@ -212,6 +243,7 @@ impl BeliefSearchAgent {
                 let (best, depth) = ab.search(&duel.d, &core_prompt, &core_cands, &params);
                 self.nodes += ab.nodes - before;
                 let (nodes, secs) = (ab.nodes - before, t_search.elapsed().as_secs_f64());
+                self.root_values = ab.last_root_values.clone();
                 self.info = ab.last_value.is_finite().then_some(crate::game::SearchInfo { value: ab.last_value, depth: depth as u32, nodes, secs });
                 best
             }
@@ -261,6 +293,7 @@ impl Agent for BeliefSearchAgent {
         self.items.clear();
         self.belief = Some(AgentBelief::new(player, init.clone(), self.completion));
         (self.clock_gains, self.clock_after_search, self.slowest_reconstruction) = ((0.0, 0.0), None, 0.0);
+        self.own_zones = init.deck.main.iter().chain(&init.deck.extra).any(|&c| zone_sensitive(c));
         Ok(())
     }
     fn observe(&mut self, msg: &Msg) {
@@ -271,8 +304,7 @@ impl Agent for BeliefSearchAgent {
         self.items.push(ObsItem::Prompt(prompt.clone(), state.cloned()));
         self.info = None;
         // (every decision: the rules' answer and alternatives, see `root_candidates`)
-        let mut cands = root_candidates(prompt, &self.fallback, state);
-        cands.truncate(MAX_CANDIDATES);
+        let cands = root_candidates(prompt, &self.fallback, state);
         let mut resp = None;
         // (with no more than the reserve and TIME_BUFFER on the clock, the rules' player answers)
         if cands.len() > 1 && clock.is_none_or(|(remaining, _)| remaining > TIME_BUFFER + self.reserve()) {
@@ -281,7 +313,12 @@ impl Agent for BeliefSearchAgent {
                 self.clock_gains.0 += remaining - after;
                 self.clock_gains.1 += 1.0;
             }
-            resp = self.search(prompt, state, &cands, clock).map(|k| cands[k].clone());
+            self.root_values.clear();
+            let k = self.search(prompt, state, &cands, clock);
+            if let Some(path) = std::env::var_os("YGOAI_ROOT_LOG") {
+                self.log_root(&path, prompt, state, cands.len(), k, t0.elapsed().as_secs_f64());
+            }
+            resp = k.map(|k| cands[k].clone());
             self.clock_after_search = clock.map(|(remaining, _)| remaining - t0.elapsed().as_secs_f64());
         }
         let resp = match resp {

@@ -149,6 +149,17 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       checksum unchanged, fb0d2430d4f8e25f: the bench has only the old types). Next: places
       rarely matter (Links, Pendulum Zones, columns): measure how often a place search changes the
       rules' choice, and gate it on Link/Pendulum/column cards in the duel.
+  - Measured (`YGOAI_ROOT_LOG=path`: a JSON line per root search, 200 games at 10+0.1, 42965
+    searches): places 16% of the root's search time; the search took another zone than the rules
+    in 17.6% (gap > 200 LP: 6.6%), as often in duels without a Link/Pendulum/column card
+    (`zone_sensitive`; 90% of the place decisions have one, mostly Links in the Extra Deck: a gate
+    on that would gate nothing). Places answered by the rules: SPRT at 10+0.1 stopped at 1940 games
+    (+1.3 +/- 11.4, LLR -1.11): not merged. Open: the Extra Monster Zone choice vs noise.
+- [x] The root's 16-candidate cap removed (2026-10-19): it cut in the listed order, so an idle
+      decision with 16+ options (2.8%) lost its activations and Battle/End Phase, a card selection
+      of 16+ cards (1.6%) the rules' first cards. SPRT at 500 nodes stopped at 1040 games (+0.3 +/-
+      8.4, LLR -2.53): merged anyway as a fix (user). ygoai-spsa's references of positions with 16+
+      moves change: recompute them.
 - [x] Futility pruning again (Stockfish's parent-node form): the moves after the first at depth
       <= 3 whose static eval + 45 + 4 * depth cannot raise alpha (margins measured with the mover2
       eval: the 99th percentile of the gap over the moves that raised alpha, 49/52/55/72 at depth
