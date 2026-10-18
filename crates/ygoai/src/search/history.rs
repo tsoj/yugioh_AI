@@ -1,7 +1,7 @@
 //! The history heuristic: a score per move slot (`movepick::move_key`) that cutoffs raise and the
 //! moves tried before a cutoff lower.
 
-use super::params::{HIST_BITS, HIST_DECAY};
+use super::params::HIST_BITS;
 
 pub struct HistoryTable {
     table: Vec<f64>,
@@ -29,10 +29,10 @@ impl HistoryTable {
         }
     }
 
-    /// (per decision: older searches count less)
-    pub fn decay(&mut self) {
+    /// (per decision: older searches count less, by the factor `decay`)
+    pub fn decay(&mut self, decay: f64) {
         for h in self.table.iter_mut() {
-            *h *= HIST_DECAY;
+            *h *= decay;
         }
     }
 }

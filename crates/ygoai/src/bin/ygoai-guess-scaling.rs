@@ -42,7 +42,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 fn search(duel: &Duel, prompt: &ygoai::messages::Msg, cands: &[ygoai::actions::Response], nodes: u64) -> (usize, i32) {
     let mut ab = AlphaBeta::default();
     ab.prepare();
-    let params = SearchParams { budget: None, elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2], max_nodes: Some(nodes) };
+    let params = SearchParams { budget: None, elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2], max_nodes: Some(nodes), exact_root: false };
     ab.search(duel, prompt, cands, &params)
 }
 

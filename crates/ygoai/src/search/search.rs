@@ -67,8 +67,13 @@ pub struct AlphaBeta {
     pub broken: u64,
     /// (if set, statistics of the expanded nodes, see `NodeStats`)
     pub stats: Option<NodeStats>,
+    /// the parameters ($YGOAI_TUNE, or set by a tuner)
+    pub tune: Tune,
     /// the root value of the last search's last completed iteration (NaN if none completed)
     pub last_value: f64,
+    /// by root move: its value in that iteration (exact only for the best, or with
+    /// `SearchParams::exact_root`; None: not searched, as a card beyond the root's width)
+    pub last_root_values: Vec<Option<f64>>,
     /// by depth: [sum of ln(nodes of the iteration / nodes of the one before), weight], kept
     /// across searches (when to start another iteration)
     growth: Vec<[f64; 2]>,
@@ -84,7 +89,9 @@ impl Default for AlphaBeta {
             tt_hits: 0,
             broken: 0,
             stats: None,
+            tune: Tune::from_env(),
             last_value: f64::NAN,
+            last_root_values: Vec::new(),
             growth: vec![[GROWTH_PRIOR.ln() * GROWTH_PRIOR_WEIGHT, GROWTH_PRIOR_WEIGHT]; MAX_DEPTH as usize + 2],
         }
     }
@@ -93,7 +100,8 @@ impl Default for AlphaBeta {
 /// What a search is given besides the duel: time (`budget` in seconds for this decision, None
 /// for a fixed depth; `elapsed` already spent on it; the clock's remaining seconds), the select
 /// hint before a card selection and the seeds of the rules' two players. `max_nodes`: a fixed
-/// number of nodes instead (deepening until it is used up; deterministic).
+/// number of nodes instead (deepening until it is used up; deterministic). `exact_root`: every
+/// root move searched with the full window (exact values for all of them, at a cost: references).
 #[derive(Default)]
 pub struct SearchParams {
     pub budget: Option<f64>,
@@ -102,6 +110,7 @@ pub struct SearchParams {
     pub hint: Option<u64>,
     pub seeds: [u32; 2],
     pub max_nodes: Option<u64>,
+    pub exact_root: bool,
 }
 
 impl AlphaBeta {
@@ -125,7 +134,7 @@ impl AlphaBeta {
     /// The tables for a new decision.
     pub fn prepare(&mut self) {
         self.hash_table.new_generation();
-        self.history_table.decay();
+        self.history_table.decay(self.tune.hist_decay);
     }
 
     /// The best of `root_moves` (responses to the duel's pending prompt `root_prompt`) and the
@@ -144,10 +153,10 @@ impl AlphaBeta {
         let mut move_order: Vec<usize> = (0..root_moves.len()).collect();
         move_order.sort_by_key(|&k| preference.iter().position(|c| *c == root_moves[k]).unwrap_or(preference.len()));
         if matches!(root_prompt, Msg::SelectCard { min: 1, max: 1, .. }) {
-            move_order.truncate(ROOT_CARD_WIDTH);
+            move_order.truncate(state.tables.tune.root_card_width);
         }
         let fixed_depth = p.budget.is_none() && p.max_nodes.is_none();
-        state.iterative_deepening(duel, root_prompt, root_moves, move_order, start_time, p.budget, fixed_depth)
+        state.iterative_deepening(duel, root_prompt, root_moves, move_order, start_time, p.budget, fixed_depth, p.exact_root)
     }
 }
 
@@ -201,9 +210,11 @@ impl SearchState<'_> {
         start_time: Instant,
         budget: Option<f64>,
         fixed_depth: bool,
+        exact_root: bool,
     ) -> (usize, i32) {
         let (mut best_move, mut completed_depth) = (move_order[0], 0);
         self.tables.last_value = f64::NAN;
+        self.tables.last_root_values = vec![None; moves.len()];
         // (the last completed iteration's nodes and seconds)
         let (mut last_nodes, mut last_secs) = (0u64, 0.0);
         let max_depth = if fixed_depth { DEPTH_NO_CLOCK } else { MAX_DEPTH };
@@ -222,7 +233,8 @@ impl SearchState<'_> {
             let (mut alpha, mut iteration_best) = (f64::NEG_INFINITY, None);
             let mut aborted = false;
             for &m in &move_order {
-                match self.search_move(&mut root_duel, prompt, &moves[m], alpha, f64::INFINITY, depth - 1, 1, false) {
+                let lower = if exact_root { f64::NEG_INFINITY } else { alpha };
+                match self.search_move(&mut root_duel, prompt, &moves[m], lower, f64::INFINITY, depth - 1, 1, false) {
                     Ok(value) => {
                         values[m] = Some(value);
                         if value > alpha {
@@ -262,6 +274,7 @@ impl SearchState<'_> {
             (last_nodes, last_secs) = (self.tables.nodes - iteration_nodes, iteration_secs);
             (best_move, completed_depth) = (b, depth);
             self.tables.last_value = values[b].unwrap();
+            self.tables.last_root_values = values.clone();
             // (the next iteration: the best first; cut-off moves keep their bound's order)
             move_order.sort_by(|&a, &b| values[b].unwrap().partial_cmp(&values[a].unwrap()).unwrap_or(std::cmp::Ordering::Equal));
             if values[best_move].unwrap().abs() >= WIN / 2.0 {
@@ -284,7 +297,7 @@ impl SearchState<'_> {
         let card_order = self.rules_card_order(prompt);
         let mut moves = ordered(prompt, duel.ext_get_info()[1], card_order.as_deref());
         if matches!(prompt, Msg::SelectCard { min: 1, max: 1, .. }) {
-            moves.truncate(CARD_WIDTH);
+            moves.truncate(self.tables.tune.card_width);
         }
 
         // transposition table: update alpha, beta or return immediately
@@ -311,9 +324,10 @@ impl SearchState<'_> {
             }
         }
 
-        let static_eval = if depth <= FUTILITY_MAX_DEPTH || (self.tables.stats.is_some() && depth <= 4) { Some(evaluate_at(duel, us, Some(prompt))) } else { None };
+        let t = self.tables.tune;
+        let static_eval = if depth <= t.futility_max_depth || (self.tables.stats.is_some() && depth <= 4) { Some(evaluate_at(duel, us, Some(prompt))) } else { None };
         // (futility pruning: the moves after the first whose static eval plus the margin cannot raise alpha)
-        let futility_value = static_eval.filter(|_| depth <= FUTILITY_MAX_DEPTH).map(|s| s + FUTILITY_MARGIN + FUTILITY_MARGIN_PER_PLY * depth as f64);
+        let futility_value = static_eval.filter(|_| depth <= t.futility_max_depth).map(|s| s + t.futility_margin + t.futility_margin_per_ply * depth as f64);
 
         // move ordering: the TT move first, then by history (the rules' order among equals)
         let history_keys: Vec<usize> = moves.iter().map(|m| move_key(prompt, m)).collect();
@@ -324,7 +338,7 @@ impl SearchState<'_> {
                 .partial_cmp(&((Some(b) != tt_move), -history.get(history_keys[b])))
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        move_order.truncate(MAX_CHILDREN);
+        move_order.truncate(t.max_children);
 
         let mut node_type = NodeType::AllNode;
         let (mut best_value, mut best_move) = (f64::NEG_INFINITY, move_order[0]);
@@ -351,12 +365,12 @@ impl SearchState<'_> {
             let new_depth = depth - 1;
             let mut value = None;
 
-            // late move reduction: a late move, unlikely the best by the move ordering, one ply
-            // less with a null window (it only has to show that it does not raise alpha); the full
+            // late move reduction: a late move, unlikely the best by the move ordering, searched
+            // `lmr_reduction` plies less with a null window (it only has to show that it does not raise alpha); the full
             // depth and window after all if it raises alpha
-            if depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNTER {
+            if depth >= t.lmr_min_depth && i >= t.lmr_min_move_counter {
                 let reduced_beta = if alpha.is_finite() { alpha + NULL_WINDOW } else { beta };
-                let reduced = self.search_move(duel, prompt, mv, alpha, reduced_beta, (new_depth - 1).max(0), height + 1, false)?;
+                let reduced = self.search_move(duel, prompt, mv, alpha, reduced_beta, (new_depth - t.lmr_reduction).max(0), height + 1, false)?;
                 if reduced <= alpha {
                     value = Some(reduced);
                 }

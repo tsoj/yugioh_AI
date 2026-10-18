@@ -61,3 +61,115 @@ pub const FUTILITY_MARGIN_PER_PLY: f64 = 2.0 * 116.68036281706055;
 // (pvs, rfp, rfpall, conthist, qsearch, narrowext, killers, nullmove, online, lmrlog, resample,
 // deckpick, passrisk, and searching the decisions inside a move: unselect, tribute, multicard,
 // sum, position, place): see TODO.md and the git history before that.
+
+/// The search parameters that can be set at run time (for tuning, `ygoai-spsa`): by default the
+/// constants above; $YGOAI_TUNE as "name=value,..." overrides some (read once).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Tune {
+    pub max_children: usize,
+    pub card_width: usize,
+    pub root_card_width: usize,
+    pub lmr_min_depth: i32,
+    pub lmr_min_move_counter: usize,
+    pub lmr_reduction: i32,
+    pub futility_max_depth: i32,
+    pub futility_margin: f64,
+    pub futility_margin_per_ply: f64,
+    pub hist_decay: f64,
+}
+
+impl Default for Tune {
+    fn default() -> Self {
+        Tune {
+            max_children: MAX_CHILDREN,
+            card_width: CARD_WIDTH,
+            root_card_width: ROOT_CARD_WIDTH,
+            lmr_min_depth: LMR_MIN_DEPTH,
+            lmr_min_move_counter: LMR_MIN_MOVE_COUNTER,
+            lmr_reduction: 1,
+            futility_max_depth: FUTILITY_MAX_DEPTH,
+            futility_margin: FUTILITY_MARGIN,
+            futility_margin_per_ply: FUTILITY_MARGIN_PER_PLY,
+            hist_decay: HIST_DECAY,
+        }
+    }
+}
+
+impl Tune {
+    /// The parameters' names, in a fixed order.
+    pub const NAMES: [&'static str; 10] = [
+        "max_children",
+        "card_width",
+        "root_card_width",
+        "lmr_min_depth",
+        "lmr_min_move_counter",
+        "lmr_reduction",
+        "futility_max_depth",
+        "futility_margin",
+        "futility_margin_per_ply",
+        "hist_decay",
+    ];
+
+    /// The parameter `name`'s value (as a number).
+    pub fn get(&self, name: &str) -> Option<f64> {
+        Some(match name {
+            "max_children" => self.max_children as f64,
+            "card_width" => self.card_width as f64,
+            "root_card_width" => self.root_card_width as f64,
+            "lmr_min_depth" => self.lmr_min_depth as f64,
+            "lmr_min_move_counter" => self.lmr_min_move_counter as f64,
+            "lmr_reduction" => self.lmr_reduction as f64,
+            "futility_max_depth" => self.futility_max_depth as f64,
+            "futility_margin" => self.futility_margin,
+            "futility_margin_per_ply" => self.futility_margin_per_ply,
+            "hist_decay" => self.hist_decay,
+            _ => return None,
+        })
+    }
+
+    /// Sets the parameter `name` (an integer one to the nearest integer); false for an unknown name.
+    pub fn set(&mut self, name: &str, v: f64) -> bool {
+        let n = v.round().max(0.0);
+        match name {
+            "max_children" => self.max_children = (n as usize).max(1),
+            "card_width" => self.card_width = (n as usize).max(1),
+            "root_card_width" => self.root_card_width = (n as usize).max(1),
+            "lmr_min_depth" => self.lmr_min_depth = n as i32,
+            "lmr_min_move_counter" => self.lmr_min_move_counter = n as usize,
+            "lmr_reduction" => self.lmr_reduction = n as i32,
+            "futility_max_depth" => self.futility_max_depth = n as i32,
+            "futility_margin" => self.futility_margin = v,
+            "futility_margin_per_ply" => self.futility_margin_per_ply = v,
+            "hist_decay" => self.hist_decay = v.clamp(0.0, 1.0),
+            _ => return false,
+        }
+        true
+    }
+
+    /// The defaults with "name=value,..." applied.
+    pub fn parse(list: &str) -> Result<Tune, String> {
+        let mut t = Tune::default();
+        for item in list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            let (name, value) = item.split_once('=').ok_or_else(|| format!("expected name=value: {item}"))?;
+            let v: f64 = value.trim().parse().map_err(|_| format!("bad value: {item}"))?;
+            if !t.set(name.trim(), v) {
+                return Err(format!("unknown parameter {name}"));
+            }
+        }
+        Ok(t)
+    }
+
+    /// "name=value,..." of all the parameters.
+    pub fn to_list(&self) -> String {
+        Tune::NAMES.iter().map(|n| format!("{n}={}", self.get(n).unwrap())).collect::<Vec<_>>().join(",")
+    }
+
+    /// The defaults with $YGOAI_TUNE applied (read once).
+    pub fn from_env() -> Tune {
+        static T: std::sync::OnceLock<Tune> = std::sync::OnceLock::new();
+        *T.get_or_init(|| match std::env::var("YGOAI_TUNE") {
+            Ok(s) => Tune::parse(&s).unwrap_or_else(|e| panic!("YGOAI_TUNE: {e}")),
+            Err(_) => Tune::default(),
+        })
+    }
+}
