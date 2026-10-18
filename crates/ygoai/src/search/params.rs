@@ -12,6 +12,13 @@ pub const MAX_CHILDREN: usize = 12;
 /// width 3 -> 5 by SPSA run 1, see FUTILITY_MARGIN)
 pub const CARD_WIDTH: usize = 3;
 pub const ROOT_CARD_WIDTH: usize = 5;
+/// (the root's other decisions, `root_candidates`: at most this many choices of several cards,
+/// tributes, sums, places, orders or counters, the subsets among the rules' first
+/// ROOT_COMBO_CARDS cards or places; a sum's search for valid selections stops after SUM_STEPS;
+/// SPRT at 20+0.2 H1, +11.5 +/- 9.2 at 2836 games, 2026-10-18)
+pub const ROOT_COMBO_WIDTH: usize = 5;
+pub const ROOT_COMBO_CARDS: usize = 6;
+pub const SUM_STEPS: usize = 20_000;
 
 // time management
 /// (the next iteration starts only if it is expected to end within the time budget: by this

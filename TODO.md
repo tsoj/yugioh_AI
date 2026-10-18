@@ -133,10 +133,22 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       lmr_reduction, lmr_reduction_per_move (new, from 0), futility_*, hist_exponent (new),
       hist_malus (new); 1000 nodes vs a 4000-node reference, refs ~20 min, 3000 iterations ~1.6 h):
       no gain. Final lmr_reduction 1.24, per move 0.03, the rest near the defaults; on all 4500
-      positions (`--compare`) +9.3 +/- 6.9 loss vs the defaults (592.7): not merged, no SPRT.
+      positions (`--compare`) +9.3 +/- 6.9 loss vs the defaults (592.7); SPRT stopped at 240 games
+      (+0.0 +/- 34.2, LLR -0.17): not merged.
       One validation position can move the mean by 16 (regret clamp 8000 / 500): the validation
       now prints the paired difference with its standard error; batches take the same number of
       positions from each worker (the iteration waited for the unluckiest one, ~75% CPU).
+- [x] Every decision searched at the root (`root_candidates`, 2026-10-18): besides the searched
+      types, several cards (subsets of the rules' first 6), select/unselect (the rules' first 5 +
+      finish), tributes (the rules' answer, then the least valuable minimal sets), sums, places and
+      opponent's zones, counters, card/chain orders (permutations, the given order first): the
+      rules' answer first, at most 5 (ROOT_COMBO_WIDTH); positions, numbers, races and attributes:
+      all; card names and rock-paper-scissors stay with the rules. Inside the tree the rules answer
+      as before. In 32 test games per side: 330 place, 111 position, 7 multi-card, 2 order
+      searches. SPRT at 20+0.2 vs 120eb1b: H1, +11.5 +/- 9.2 at 2836 games: merged (bench
+      checksum unchanged, fb0d2430d4f8e25f: the bench has only the old types). Next: places
+      rarely matter (Links, Pendulum Zones, columns): measure how often a place search changes the
+      rules' choice, and gate it on Link/Pendulum/column cards in the duel.
 - [x] Futility pruning again (Stockfish's parent-node form): the moves after the first at depth
       <= 3 whose static eval + 45 + 4 * depth cannot raise alpha (margins measured with the mover2
       eval: the 99th percentile of the gap over the moves that raised alpha, 49/52/55/72 at depth
