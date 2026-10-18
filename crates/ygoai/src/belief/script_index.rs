@@ -271,6 +271,32 @@ fn global_registration() -> &'static Regex {
     R.get_or_init(|| re(r"Effect\.GlobalEffect\(|GlobalCheck\("))
 }
 
+/// A call of one of the `global_helpers` (the helper's name: group 1; None without helpers). (A
+/// call ends at its name's parenthesis and none starts inside another's name, so one regex finds
+/// each helper that a separate one per helper would.)
+fn global_helper_calls() -> Option<&'static Regex> {
+    static R: OnceLock<Option<Regex>> = OnceLock::new();
+    R.get_or_init(|| {
+        let helpers = global_helpers();
+        (!helpers.is_empty()).then(|| re(&format!(r"\b({})\s*\(", helpers.iter().map(|h| regex::escape(h)).collect::<Vec<_>>().join("|"))))
+    })
+    .as_ref()
+}
+
+/// Builds the whole-corpus scans and regexes once per process (before the clock runs: an engine
+/// process plays one game, and each scan reads every script).
+pub fn warm_up() {
+    value_checks();
+    constants();
+    proc_cards("summon");
+    proc_cards("mset");
+    discard_set_proc_cards();
+    set_proc_tribute_cards(0);
+    win_condition_codes();
+    global_registration();
+    global_helper_calls();
+}
+
 /// Functions of the shared scripts that register a duel-wide effect once per duel for whichever
 /// card calls them first, by the last part of their name.
 fn global_helpers() -> &'static BTreeSet<String> {
@@ -301,9 +327,9 @@ pub fn global_keys(code: u32) -> BTreeSet<GlobalKey> {
         if global_registration().is_match(&text) {
             out.insert(GlobalKey::Code(code));
         }
-        for h in global_helpers() {
-            if re(&format!(r"\b{}\s*\(", regex::escape(h))).is_match(&text) {
-                out.insert(GlobalKey::Helper(h.clone()));
+        if let Some(calls) = global_helper_calls() {
+            for c in calls.captures_iter(&text) {
+                out.insert(GlobalKey::Helper(c[1].to_string()));
             }
         }
         out
@@ -324,4 +350,20 @@ pub fn races(code: u32) -> u64 {
         }
         out
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn global_helper_calls_match_one_regex_per_helper() {
+        let scripts = corpus_scripts();
+        for p in scripts.iter().step_by((scripts.len() / 3000).max(1)) {
+            let Some(text) = read(p) else { continue };
+            let one: BTreeSet<String> = global_helper_calls().map_or_else(BTreeSet::new, |r| r.captures_iter(&text).map(|c| c[1].to_string()).collect());
+            let each: BTreeSet<String> = global_helpers().iter().filter(|h| re(&format!(r"\b{}\s*\(", regex::escape(h))).is_match(&text)).cloned().collect();
+            assert_eq!(one, each, "{}", p.display());
+        }
+    }
 }

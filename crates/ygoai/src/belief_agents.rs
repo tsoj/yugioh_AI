@@ -23,16 +23,22 @@ use crate::messages::Msg;
 use crate::observe::to_core_response;
 use crate::pyrandom::PyRandom;
 use crate::rduel::RDuel;
-use crate::search::{AlphaBeta, SearchParams, candidates_in, deckpick_decks, is_searched};
+use crate::search::{AlphaBeta, SearchParams, TIME_BUFFER, candidates_in, deckpick_decks, hard_limit, is_searched};
 use crate::state::{LOCATIONS, Snapshot, viewer_view};
 
 /// public facts an approximate reconstruction may get wrong to be searched on
 pub const MAX_APPROX_DIFFS: usize = 4;
-/// seconds left below which it plays by the rules (also 3 increments)
-pub const MIN_SEARCH_TIME: f64 = 2.0;
 pub const MAX_CANDIDATES: usize = 16;
-/// alphabeta's budget per searched decision: remaining / MOVES_TO_GO + increment
+/// alphabeta's budget per searched decision: (remaining - the reserve) / MOVES_TO_GO + the clock's mean gain
+/// between two searches (measured: the increments of the decisions in between, hidden ones too,
+/// less what they and the searched decision's own overhead took; before any, CLOCK_GAIN_PRIOR
+/// searches' worth of one increment each)
 pub const MOVES_TO_GO: f64 = 20.0;
+pub const CLOCK_GAIN_PRIOR: f64 = 2.0;
+/// (the reconstruction before a search cannot be stopped, and a slow one can take several times a
+/// short clock's increment: the reserve is this many of the game's slowest reconstruction. A search
+/// only with more than TIME_BUFFER past the reserve on the clock, and the budget does not count it)
+pub const RESERVE_RECONSTRUCTIONS: f64 = 2.0;
 
 /// What searches the reconstructed duel.
 pub enum Search {
@@ -67,6 +73,14 @@ fn env_num(name: &str) -> Option<u64> {
 
 /// The deck completion by name (vanilla, corpus, neural; neural without the models: corpus).
 pub fn completion(name: &str) -> Result<Option<&'static dyn Completion>, String> {
+    // (what the belief replay and the completions load on first use: loaded before the clock runs;
+    // the neural completion takes the corpus completion's cards for what its model cannot supply)
+    crate::belief::script_index::warm_up();
+    crate::belief::completion::monster_sset_codes();
+    VanillaCompletion::get();
+    if name != "vanilla" {
+        let _ = CorpusCompletion::get();
+    }
     Ok(match name {
         "vanilla" => None,
         "corpus" => Some(CorpusCompletion::get()?),
@@ -94,6 +108,12 @@ pub struct BeliefSearchAgent {
     info: Option<crate::game::SearchInfo>,
     /// (the search features: `resample`, `deckpick`)
     features: crate::search::Features,
+    /// (the clock's gains between searches: their sum and number; the clock after the last
+    /// search, as far as this agent measured it)
+    clock_gains: (f64, f64),
+    clock_after_search: Option<f64>,
+    /// (the game's slowest reconstruction's seconds)
+    slowest_reconstruction: f64,
     // statistics
     pub searches: usize,
     pub failures: usize,
@@ -123,6 +143,9 @@ impl BeliefSearchAgent {
             belief: None,
             info: None,
             features: crate::search::Features::from_env(),
+            clock_gains: (0.0, 0.0),
+            clock_after_search: None,
+            slowest_reconstruction: 0.0,
             searches: 0,
             failures: 0,
             nodes: 0,
@@ -137,8 +160,15 @@ impl BeliefSearchAgent {
         }
     }
 
+    fn reserve(&self) -> f64 {
+        RESERVE_RECONSTRUCTIONS * self.slowest_reconstruction
+    }
+
     fn budget(&self, clock: Option<(f64, f64)>) -> Option<f64> {
-        clock.map(|(remaining, inc)| remaining / MOVES_TO_GO + inc)
+        clock.map(|(remaining, inc)| {
+            let gain = (self.clock_gains.0 + CLOCK_GAIN_PRIOR * inc) / (self.clock_gains.1 + CLOCK_GAIN_PRIOR);
+            ((remaining - self.reserve()).max(0.0) / MOVES_TO_GO + gain).max(0.0)
+        })
     }
 
     /// The index of the candidate to play, from a search of the reconstruction (None: no
@@ -146,7 +176,9 @@ impl BeliefSearchAgent {
     fn search(&mut self, prompt: &Msg, state: Option<&Snapshot>, cands: &[Response], clock: Option<(f64, f64)>) -> Option<usize> {
         let t0 = Instant::now();
         let budget = self.budget(clock);
-        let (r, duel) = self.belief.as_mut()?.reconstruct(&self.items, None);
+        // (a reconstruction past the search's hard limit gives up: the rules' player answers)
+        let timeout = clock.zip(budget).map(|((remaining, _), b)| std::time::Duration::from_secs_f64(hard_limit(b, remaining)));
+        let (r, duel) = self.belief.as_mut()?.reconstruct(&self.items, timeout);
         let Some(mut duel) = duel else {
             self.failures += 1;
             return None;
@@ -164,6 +196,7 @@ impl BeliefSearchAgent {
         let core_cands: Vec<Response> = cands.iter().map(|c| to_core_response(&core_prompt, self.player, c).ok()).collect::<Option<_>>()?;
         let hint = self.fallback.hint.take(); // (the select hint: the search answers this selection)
         let elapsed = t0.elapsed().as_secs_f64();
+        self.slowest_reconstruction = self.slowest_reconstruction.max(elapsed);
         let remaining = clock.map_or(0.0, |c| c.0);
         // (new guesses for each iteration: only of a consistent reconstruction)
         let guesses = if (self.features.resample || self.features.deckpick) && !r.approximate { self.belief.as_ref().and_then(|b| b.guesses()).filter(|g| !g.cards.is_empty()) } else { None };
@@ -238,6 +271,7 @@ impl Agent for BeliefSearchAgent {
         self.fallback.player = player;
         self.items.clear();
         self.belief = Some(AgentBelief::new(player, init.clone(), self.completion));
+        (self.clock_gains, self.clock_after_search, self.slowest_reconstruction) = ((0.0, 0.0), None, 0.0);
         Ok(())
     }
     fn observe(&mut self, msg: &Msg) {
@@ -255,8 +289,15 @@ impl Agent for BeliefSearchAgent {
         let mut cands = if is_searched(prompt) { candidates_in(prompt, order.as_deref()) } else { vec![] };
         cands.truncate(MAX_CANDIDATES);
         let mut resp = None;
-        if cands.len() > 1 && clock.is_none_or(|(remaining, inc)| remaining > MIN_SEARCH_TIME.max(3.0 * inc)) {
+        // (with no more than the reserve and TIME_BUFFER on the clock, the rules' player answers)
+        if cands.len() > 1 && clock.is_none_or(|(remaining, _)| remaining > TIME_BUFFER + self.reserve()) {
+            let t0 = Instant::now();
+            if let (Some((remaining, _)), Some(after)) = (clock, self.clock_after_search) {
+                self.clock_gains.0 += remaining - after;
+                self.clock_gains.1 += 1.0;
+            }
             resp = self.search(prompt, state, &cands, clock).map(|k| cands[k].clone());
+            self.clock_after_search = clock.map(|(remaining, _)| remaining - t0.elapsed().as_secs_f64());
         }
         let resp = match resp {
             Some(r) => r,

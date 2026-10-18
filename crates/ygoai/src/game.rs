@@ -481,6 +481,8 @@ pub fn play(
     let mut prompt: Option<Msg> = None;
     let (mut decisions, mut turns, mut retries) = (0usize, 0u32, 0u32);
     let t0 = Instant::now();
+    // (seconds each player's decisions took on the arbiter's clock, in the result as "time")
+    let mut time_used = [0.0f64; 2];
     let mut result: Option<serde_json::Map<String, Value>> = None;
     let mut last_player: Option<u32> = None;
     while result.is_none() {
@@ -550,6 +552,8 @@ pub fn play(
             let info = if is_hidden_prompt(&p) { None } else { agents[player as usize].search_info() };
             Ok((response, raw, info))
         })();
+        let t_used = t_move.elapsed().as_secs_f64();
+        time_used[player as usize] += t_used;
         let (response, raw, info) = match answered {
             Ok(x) => x,
             Err(AgentError::Forfeit(reason)) => {
@@ -563,7 +567,7 @@ pub fn play(
         };
         if let Some(clocks) = opts.clocks.as_mut() {
             let c = &mut clocks[player as usize];
-            c.remaining -= t_move.elapsed().as_secs_f64();
+            c.remaining -= t_used;
             if c.remaining < 0.0 {
                 result = Some(result_of(Some(1 - player), json!("time_forfeit")));
                 break;
@@ -571,7 +575,7 @@ pub fn play(
             c.remaining += c.increment;
         }
         if let Some(SearchInfo { value, depth, nodes }) = info {
-            let time = Some(t_move.elapsed().as_secs_f64());
+            let time = Some(t_used);
             record.labels.push(Label { decision: record.responses.len(), player, value, depth, nodes: Some(nodes), time });
         }
         record.responses.push(RecordedResponse { player, response: response.clone() });
@@ -588,6 +592,7 @@ pub fn play(
     result.insert("decisions".into(), json!(decisions));
     result.insert("retries".into(), json!(retries));
     result.insert("script_errors".into(), json!(duel.logs.iter().filter(|l| l.0 == 0).count()));
+    result.insert("time".into(), json!(time_used));
     record.result = result.clone();
     for agent in agents.iter_mut() {
         agent.end(&result);

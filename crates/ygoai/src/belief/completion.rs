@@ -243,6 +243,8 @@ pub struct CorpusCompletion {
     n: usize,
     /// rows by code (each code's rows in index order)
     rows: HashMap<i64, Vec<usize>>,
+    /// rows by deck (in index order)
+    deck_rows: Vec<Vec<usize>>,
     top_k: usize,
 }
 
@@ -269,7 +271,11 @@ impl CorpusCompletion {
         for (i, &c) in code.iter().enumerate() {
             rows.entry(c).or_default().push(i);
         }
-        Ok(CorpusCompletion { deck, code, count, extra, n, rows, top_k: 20 })
+        let mut deck_rows: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for (i, &d) in deck.iter().enumerate() {
+            deck_rows[d as usize].push(i);
+        }
+        Ok(CorpusCompletion { deck, code, count, extra, n, rows, deck_rows, top_k: 20 })
     }
 
     /// The default index, loaded once per process.
@@ -286,6 +292,30 @@ impl CorpusCompletion {
             }
         }
         scores
+    }
+
+    /// The top_k decks by score (np.argsort(-scores, kind="stable")[:top_k]: by score descending,
+    /// then index).
+    fn best_decks(&self, scores: &[f32]) -> Vec<usize> {
+        let by_rank = |&a: &usize, &b: &usize| scores[b].partial_cmp(&scores[a]).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(&b));
+        let mut order: Vec<usize> = (0..self.n).collect();
+        if order.len() > self.top_k {
+            order.select_nth_unstable_by(self.top_k, by_rank);
+            order.truncate(self.top_k);
+        }
+        order.sort_by(by_rank);
+        order
+    }
+
+    /// Each card's weight in the `best` decks: (its deck's score + 1) * its count.
+    fn weights_of(&self, best: &[usize], scores: &[f32]) -> BTreeMap<(u32, bool), f64> {
+        let mut weights: BTreeMap<(u32, bool), f64> = BTreeMap::new();
+        for &d in best {
+            for &i in &self.deck_rows[d] {
+                *weights.entry((self.code[i] as u32, self.extra[i])).or_default() += ((scores[d] + 1.0) as f64) * self.count[i] as f64;
+            }
+        }
+        weights
     }
 
     fn fill_kind(&self, weights: &BTreeMap<(u32, bool), f64>, known: &BTreeMap<u32, u32>, n: usize, extra: bool, skip: &dyn Fn(u32) -> bool) -> Vec<u32> {
@@ -340,20 +370,9 @@ impl Completion for CorpusCompletion {
             let mut rng = PyRandom::new(crc32(r.as_bytes()) as i128);
             rng.sample(&(0..self.n).collect::<Vec<_>>(), self.top_k)
         } else {
-            // (np.argsort(-scores, kind="stable")[:top_k])
-            let mut order: Vec<usize> = (0..self.n).collect();
-            order.sort_by(|&a, &b| (-scores[a]).partial_cmp(&-scores[b]).unwrap_or(std::cmp::Ordering::Equal));
-            order.truncate(self.top_k);
-            order
+            self.best_decks(&scores)
         };
-        let best_set: HashSet<usize> = best.iter().copied().collect();
-        let mut weights: BTreeMap<(u32, bool), f64> = BTreeMap::new();
-        for i in 0..self.deck.len() {
-            let d = self.deck[i] as usize;
-            if best_set.contains(&d) {
-                *weights.entry((self.code[i] as u32, self.extra[i])).or_default() += ((scores[d] + 1.0) as f64) * self.count[i] as f64;
-            }
-        }
+        let weights = self.weights_of(&best, &scores);
         // (no guess adds a duel-wide effect that no known card has brought into the game)
         let have: BTreeSet<GlobalKey> = present.iter().chain(known_main).chain(known_extra).flat_map(|&c| global_keys(canonical_code(c))).collect();
         let adds = |code: u32| !global_keys(code).is_subset(&have);
@@ -371,4 +390,44 @@ pub fn crc32(data: &[u8]) -> u32 {
         }
     }
     !c
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The deck ranking and weights as the first version computed them (a full stable sort, every
+    /// row against a set of the best decks).
+    fn weights_reference(c: &CorpusCompletion, scores: &[f32]) -> BTreeMap<(u32, bool), f64> {
+        let mut order: Vec<usize> = (0..c.n).collect();
+        order.sort_by(|&a, &b| (-scores[a]).partial_cmp(&-scores[b]).unwrap_or(std::cmp::Ordering::Equal));
+        order.truncate(c.top_k);
+        let best_set: HashSet<usize> = order.into_iter().collect();
+        let mut weights = BTreeMap::new();
+        for i in 0..c.deck.len() {
+            let d = c.deck[i] as usize;
+            if best_set.contains(&d) {
+                *weights.entry((c.code[i] as u32, c.extra[i])).or_default() += ((scores[d] + 1.0) as f64) * c.count[i] as f64;
+            }
+        }
+        weights
+    }
+
+    #[test]
+    fn corpus_weights_match_reference() {
+        let Ok(c) = CorpusCompletion::get() else { return };
+        let mut rng = PyRandom::new(1);
+        for _ in 0..300 {
+            // (the cards of a random corpus deck, some of them)
+            let d = rng.randrange(c.n);
+            let mut known: BTreeMap<u32, u32> = BTreeMap::new();
+            for &i in &c.deck_rows[d] {
+                if rng.randrange(3) == 0 {
+                    known.insert(canonical_code(c.code[i] as u32), 1 + rng.randrange(c.count[i].max(1) as usize) as u32);
+                }
+            }
+            let scores = c.scores(&known);
+            assert_eq!(c.weights_of(&c.best_decks(&scores), &scores), weights_reference(c, &scores));
+        }
+    }
 }

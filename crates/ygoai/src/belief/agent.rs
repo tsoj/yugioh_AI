@@ -96,7 +96,7 @@ impl AgentBelief {
         }
         let prev = self.prev.take();
         let (mut br, mut duel, inherited) = self.attempt(items, prev.as_ref());
-        if inherited && (duel.is_none() || br.approximate) {
+        if inherited && (duel.is_none() || br.approximate) && !self.deadline.is_some_and(|d| std::time::Instant::now() > d) {
             self.retries += 1;
             (br, duel, _) = self.attempt(items, None);
         }

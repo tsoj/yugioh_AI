@@ -94,6 +94,22 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       budget. It uses about 25% more of the budget than the old rule (start while under half).
 - [ ] Time management: node-based scaling of the soft bound, best-move stability, eval stability;
       the split between early and late moves (`MOVES_TO_GO` = 20).
+- [x] Clock handling (2026-10-18, taken without a pass: 20+0.2 stopped at 460 games, -10.6 +/-
+      22.8, LLR -1.16; uses ~48 s of the clock per game vs 42, depth 12.51 vs 12.26): no
+      MIN_SEARCH_TIME (2 s) floor any more, under which the rules' player answered (at 1+0.01 that
+      was ~90% of the moves). The budget is (remaining - reserve) / MOVES_TO_GO + the clock's
+      measured mean gain between two searches (the in-between decisions' increments less their
+      overhead) instead of one increment; the reserve is 2x the game's slowest reconstruction; the
+      hard limit is at most half the clock and TIME_BUFFER (50 ms) before its end; the
+      reconstruction has that deadline too (checked before each restart, the approximate pass and
+      the second attempt). 1+0.01 self-play: ~100 searched moves per game (~190 nodes), 1 time
+      forfeit in 960 games (single hypothesis builds of ~0.2 s are not interruptible).
+      Overhead outside the search 6.4 -> 3.3 ms per decision (16 parallel games): corpus, regexes
+      and whole-corpus script scans load at "isready" (each game is a new engine process); the
+      corpus completion indexes rows by deck; one regex for all global helpers. Left: the replay
+      per decision (~38%), the deck model (~30%, only on new reveals), HiGHS (~12%).
+- [ ] `learn_matches_finite_differences` (online learning) fails since the default net of 309a717:
+      step / gradient ratios differ by ~1% at ~5e-12 (finite-difference precision).
 - [x] Futility pruning again (Stockfish's parent-node form): the moves after the first at depth
       <= 3 whose static eval + 45 + 4 * depth cannot raise alpha (margins measured with the mover2
       eval: the 99th percentile of the gap over the moves that raised alpha, 49/52/55/72 at depth

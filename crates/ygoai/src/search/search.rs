@@ -244,7 +244,7 @@ impl AlphaBeta {
         let us = root_prompt.player().unwrap_or(0) as usize;
         policies[us].hint = p.hint;
         let turn_player = duel.ext_get_info()[1];
-        let stop_time = p.budget.map(|b| start_time + std::time::Duration::from_secs_f64(b.max((HARD_FACTOR * b).min(HARD_SHARE * p.clock_remaining))));
+        let stop_time = p.budget.map(|b| start_time + std::time::Duration::from_secs_f64(hard_limit(b, p.clock_remaining)));
         let max_nodes = p.max_nodes.map(|n| self.nodes + n);
         let features = Features::from_env();
         self.killers.clear();

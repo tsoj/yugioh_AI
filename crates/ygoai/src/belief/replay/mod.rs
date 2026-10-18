@@ -1260,6 +1260,9 @@ impl BeliefReplay {
 
     /// The best effort when no consistent reconstruction exists (see the Python docstring).
     pub fn lenient_run(&mut self) -> Option<RDuel> {
+        if self.timed_out() {
+            return None;
+        }
         self.reset();
         if self.hypothesis.is_none() && self.build_hypothesis().is_err() {
             return None;
@@ -1284,11 +1287,20 @@ impl BeliefReplay {
         Some(duel)
     }
 
+    /// Whether the whole reconstruction's deadline has passed.
+    pub fn timed_out(&self) -> bool {
+        self.deadline.is_some_and(|d| std::time::Instant::now() > d)
+    }
+
     /// The attempts with restarts (_run).
     pub fn run_attempts(&mut self) -> R<RDuel> {
         let mut last: Option<Box<Divergence>> = None;
         for _ in 0..=self.max_restarts {
             self.reset();
+            // (a hypothesis takes long to build: not past the deadline)
+            if self.timed_out() {
+                return Err(RErr::Other("timeout".into()));
+            }
             if self.hypothesis.is_none() {
                 match self.build_hypothesis() {
                     Ok(_) => {}
