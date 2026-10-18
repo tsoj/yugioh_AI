@@ -579,66 +579,6 @@ impl LearnedEval {
         }
     }
 
-    /// One normalized gradient step of all the weights (not `mu` and `scale`) toward `target`
-    /// (points) for the mover's features `x`: the step that moves the output by `rate` times the
-    /// error to first order (rate / |gradient|^2 times the gradient of 1/2 err^2), err = the output
-    /// minus the target clamped to +/- `max_err`. `bound`: 0 an exact target, 1 a lower bound and
-    /// -1 an upper bound (no step if the output is on its side). Returns the error before the
-    /// step (0 on the bound's side).
-    pub fn learn(&mut self, x: &[f64], target: f64, bound: i8, rate: f64, max_err: f64) -> f64 {
-        // (forward, keeping each layer's input and pre-activation)
-        let z: Vec<f64> = x.iter().zip(&self.mu).zip(&self.scale).map(|((a, m), s)| (a - m) / s).collect();
-        let affine = |w: &[Vec<f64>], b: &[f64], x: &[f64]| -> Vec<f64> { w.iter().zip(b).map(|(row, b)| row.iter().zip(x).map(|(w, x)| w * x).sum::<f64>() + b).collect() };
-        let mut inputs = vec![z];
-        let mut pre = vec![affine(&self.w1, &self.b1, &inputs[0])];
-        for l in &self.layers {
-            let h: Vec<f64> = pre.last().unwrap().iter().map(|a| a.max(0.0)).collect();
-            pre.push(affine(&l.w, &l.b, &h));
-            inputs.push(h);
-        }
-        let h: Vec<f64> = pre.last().unwrap().iter().map(|a| a.max(0.0)).collect();
-        let out = self.b2 + self.w2.iter().zip(&h).map(|(w, x)| w * x).sum::<f64>();
-        let err = out - target;
-        if (bound > 0 && err >= 0.0) || (bound < 0 && err <= 0.0) {
-            return 0.0;
-        }
-        // (backward: the output's gradient at each layer's pre-activations, by the weights before the step)
-        let n = self.layers.len();
-        let mut deltas = vec![vec![]; n + 1];
-        deltas[n] = self.w2.iter().zip(&pre[n]).map(|(w, a)| if *a > 0.0 { *w } else { 0.0 }).collect();
-        for li in (1..=n).rev() {
-            let mut d = vec![0.0; inputs[li].len()];
-            for (row, dj) in self.layers[li - 1].w.iter().zip(&deltas[li]) {
-                for (dk, wjk) in d.iter_mut().zip(row) {
-                    *dk += dj * wjk;
-                }
-            }
-            deltas[li - 1] = d.iter().zip(&pre[li - 1]).map(|(d, a)| if *a > 0.0 { *d } else { 0.0 }).collect();
-        }
-        let sq = |v: &[f64]| v.iter().map(|a| a * a).sum::<f64>();
-        let norm2 = sq(&h) + 1.0 + deltas.iter().zip(&inputs).map(|(d, x)| sq(d) * (sq(x) + 1.0)).sum::<f64>();
-        let step = rate * err.clamp(-max_err, max_err) / norm2;
-        for (w, x) in self.w2.iter_mut().zip(&h) {
-            *w -= step * x;
-        }
-        self.b2 -= step;
-        for (li, (delta, input)) in deltas.iter().zip(&inputs).enumerate() {
-            let (w, b) = if li == 0 {
-                (&mut self.w1, &mut self.b1)
-            } else {
-                let l = &mut self.layers[li - 1];
-                (&mut l.w, &mut l.b)
-            };
-            for ((row, bj), dj) in w.iter_mut().zip(b.iter_mut()).zip(delta) {
-                for (wjk, xk) in row.iter_mut().zip(input) {
-                    *wjk -= step * dj * xk;
-                }
-                *bj -= step * dj;
-            }
-        }
-        err
-    }
-
     pub fn value(&self, d: &mut Duel, me: u32, prompt: Option<&Msg>) -> f64 {
         self.lp_factor * self.output(d, me, prompt)
     }
@@ -738,50 +678,4 @@ pub fn evaluate_at(d: &mut Duel, me: u32, prompt: Option<&Msg>) -> f64 {
         }
     }
     value
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// `learn`'s step against finite differences: each weight moves in proportion to
-    /// d(output)/d(weight), and the output by about -rate * err.
-    #[test]
-    fn learn_matches_finite_differences() {
-        let mut e = LearnedEval::from_json(DEFAULT_EVAL, "default");
-        // (a second hidden layer, to cover the backward pass through `layers`)
-        let n = e.w2.len();
-        e.layers.push(Layer { w: (0..n).map(|j| (0..n).map(|k| ((j * 7 + k * 3) % 11) as f64 / 11.0 - 0.4).collect()).collect(), b: vec![0.1; n] });
-        let x: Vec<f64> = e.mu.iter().zip(&e.scale).enumerate().map(|(i, (m, s))| m + s * (((i * 13) % 7) as f64 / 3.0 - 1.0)).collect();
-        let (rate, target) = (1e-3, e.mover_output(&x) - 3.0);
-        let mut stepped = e.clone();
-        let err = stepped.learn(&x, target, 0, rate, 100.0);
-        let moved_out = stepped.mover_output(&x) - e.mover_output(&x);
-        assert!((moved_out + rate * err).abs() < 1e-3 * rate * err.abs(), "output moved {moved_out}, expected {}", -rate * err);
-        let h = 1e-6;
-        let mut ratio = None;
-        let mut check = |get: &dyn Fn(&mut LearnedEval) -> &mut f64| {
-            let mut plus = e.clone();
-            *get(&mut plus) += h;
-            let grad = (plus.mover_output(&x) - e.mover_output(&x)) / h;
-            let moved = *get(&mut stepped.clone()) - *get(&mut e.clone());
-            if grad.abs() > 1e-3 {
-                let r = moved / grad;
-                let r0 = *ratio.get_or_insert(r);
-                assert!((r - r0).abs() < 1e-3 * r0.abs(), "step / gradient {r} vs {r0}");
-            } else {
-                assert!(moved.abs() < 1e-6, "moved {moved} with gradient {grad}");
-            }
-        };
-        check(&|m| &mut m.b2);
-        for j in 0..n {
-            check(&|m| &mut m.w2[j]);
-            check(&|m| &mut m.b1[j]);
-            check(&|m| &mut m.layers[0].b[j]);
-            check(&|m| &mut m.layers[0].w[j][(j + 1) % n]);
-            for k in [0, 5, 17, 40] {
-                check(&|m| &mut m.w1[j][k]);
-            }
-        }
-    }
 }

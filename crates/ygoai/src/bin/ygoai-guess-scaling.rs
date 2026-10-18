@@ -22,8 +22,18 @@ use ygoai::matchrun::load_book_head;
 use ygoai::observe::{auto_response, is_hidden_prompt};
 use ygoai::pyrandom::PyRandom;
 use ygoai::rduel::RDuel;
-use ygoai::search::{AlphaBeta, SearchParams, candidates, is_hidden, is_searched};
+use ygoai::search::{AlphaBeta, SearchParams, candidates, is_searched};
 use ygo_core::duel::Duel;
+
+/// Whether a card is hidden from the other player (not face-up, not in a graveyard or among
+/// materials).
+fn is_hidden(d: &ygo_core::duel::Duel, cid: u32) -> bool {
+    use ygo_core::constants::*;
+    d.card_by_id(cid).is_some_and(|c| {
+        let x = d.card(c);
+        x.current.location as u32 & (LOCATION_GRAVE | LOCATION_OVERLAY) == 0 && x.overlay_target.is_none() && x.is_position(POS_FACEUP) == 0
+    })
+}
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;

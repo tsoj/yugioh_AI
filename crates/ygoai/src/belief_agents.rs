@@ -15,7 +15,6 @@ use crate::actions::Response;
 use crate::belief::agent::AgentBelief;
 use crate::belief::completion::{Completion, CorpusCompletion, VanillaCompletion, card};
 use crate::belief::neural::NeuralCompletion;
-use crate::belief::guesses::resample;
 use crate::belief::tracker::Need;
 use crate::game::{Agent, AgentError, InitInfo, ObsItem};
 use crate::heuristic::Heuristic;
@@ -23,7 +22,7 @@ use crate::messages::Msg;
 use crate::observe::to_core_response;
 use crate::pyrandom::PyRandom;
 use crate::rduel::RDuel;
-use crate::search::{AlphaBeta, SearchParams, TIME_BUFFER, candidates_in, deckpick_decks, hard_limit, is_searched};
+use crate::search::{AlphaBeta, SearchParams, TIME_BUFFER, candidates, hard_limit, is_searched};
 use crate::state::{LOCATIONS, Snapshot, viewer_view};
 
 /// public facts an approximate reconstruction may get wrong to be searched on
@@ -106,8 +105,6 @@ pub struct BeliefSearchAgent {
     belief: Option<AgentBelief>,
     /// (the last response's search, `Agent::search_info`)
     info: Option<crate::game::SearchInfo>,
-    /// (the search features: `resample`, `deckpick`)
-    features: crate::search::Features,
     /// (the arbiter's node limit per decision, before $YGOAI_SEARCH_NODES)
     node_limit: Option<u64>,
     /// (the clock's gains between searches: their sum and number; the clock after the last
@@ -144,7 +141,6 @@ impl BeliefSearchAgent {
             items: Vec::new(),
             belief: None,
             info: None,
-            features: crate::search::Features::from_env(),
             node_limit: None,
             clock_gains: (0.0, 0.0),
             clock_after_search: None,
@@ -201,8 +197,6 @@ impl BeliefSearchAgent {
         let elapsed = t0.elapsed().as_secs_f64();
         self.slowest_reconstruction = self.slowest_reconstruction.max(elapsed);
         let remaining = clock.map_or(0.0, |c| c.0);
-        // (new guesses for each iteration: only of a consistent reconstruction)
-        let guesses = if (self.features.resample || self.features.deckpick) && !r.approximate { self.belief.as_ref().and_then(|b| b.guesses()).filter(|g| !g.cards.is_empty()) } else { None };
         if matches!(self.search, Search::AlphaBetaNaive { .. }) {
             naive_hidden_cards(&mut duel, self.player, self.completion, &mut self.rng);
         }
@@ -214,19 +208,8 @@ impl BeliefSearchAgent {
                 ab.prepare();
                 let before = ab.nodes;
                 let params = SearchParams { budget, elapsed, clock_remaining: remaining, hint, seeds, max_nodes };
-                let (comp, rng) = (self.completion.unwrap_or(VanillaCompletion::get()), &mut self.rng);
-                // (deckpick: the reconstruction's guess and new ones)
-                let mut decks = vec![duel.d.clone()];
-                if let Some(g) = guesses.as_ref().filter(|_| self.features.deckpick) {
-                    for _ in 1..deckpick_decks() {
-                        let mut d = duel.d.clone();
-                        resample(&mut d, g, comp, rng);
-                        decks.push(d);
-                    }
-                }
-                let mut resample = guesses.filter(|_| self.features.resample).map(|g| move |d: &mut ygo_core::duel::Duel| resample(d, &g, comp, rng));
                 let t_search = Instant::now();
-                let (best, depth) = ab.search_decks(&decks, &core_prompt, &core_cands, &params, resample.as_mut().map(|f| f as &mut dyn FnMut(&mut ygo_core::duel::Duel)));
+                let (best, depth) = ab.search(&duel.d, &core_prompt, &core_cands, &params);
                 self.nodes += ab.nodes - before;
                 let (nodes, secs) = (ab.nodes - before, t_search.elapsed().as_secs_f64());
                 self.info = ab.last_value.is_finite().then_some(crate::game::SearchInfo { value: ab.last_value, depth: depth as u32, nodes, secs });
@@ -287,12 +270,7 @@ impl Agent for BeliefSearchAgent {
     fn respond(&mut self, prompt: &Msg, state: Option<&Snapshot>, clock: Option<(f64, f64)>) -> Result<Response, AgentError> {
         self.items.push(ObsItem::Prompt(prompt.clone(), state.cloned()));
         self.info = None;
-        // (a card selection's candidates by the rules' order of its cards: the search keeps the first)
-        let order = match prompt {
-            Msg::SelectCard { cards, .. } | Msg::SelectUnselectCard { select_cards: cards, .. } => Some(self.fallback.card_order(cards)),
-            _ => None,
-        };
-        let mut cands = if is_searched(prompt) { candidates_in(prompt, order.as_deref()) } else { vec![] };
+        let mut cands = if is_searched(prompt) { candidates(prompt) } else { vec![] };
         cands.truncate(MAX_CANDIDATES);
         let mut resp = None;
         // (with no more than the reserve and TIME_BUFFER on the clock, the rules' player answers)

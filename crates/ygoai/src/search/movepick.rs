@@ -1,6 +1,6 @@
 //! Move ordering: the rules' preference among a decision's moves, and the history slot of a move.
 
-use super::movegen::{candidates, candidates_in};
+use super::movegen::candidates;
 use super::params::HIST_BITS;
 use crate::actions::Response;
 use crate::heuristic::db_attack;
@@ -56,7 +56,6 @@ pub fn ordered(m: &Msg, turn_player: u32, card_order: Option<&[usize]>) -> Vec<R
         Msg::SelectCard { min: 1, max: 1, .. } if card_order.is_some() => {
             return card_order.unwrap().iter().filter(|&&i| i < cands.len()).map(|&i| cands[i].clone()).collect();
         }
-        Msg::SelectCard { .. } | Msg::SelectUnselectCard { .. } => return candidates_in(m, card_order),
         Msg::SelectIdlecmd { summonable, .. } => cands.sort_by_key(|c| {
             let kind = c.kind.as_deref().unwrap_or("");
             (idle_order(kind), if kind == "summon" { -db_attack(summonable[k(c)].code) } else { 0 })
@@ -83,11 +82,6 @@ fn type_id(m: &Msg) -> u128 {
         Msg::SelectYesno { .. } => 5,
         Msg::SelectOption { .. } => 6,
         Msg::SelectCard { .. } => 7,
-        Msg::SelectUnselectCard { .. } => 8,
-        Msg::SelectTribute { .. } => 9,
-        Msg::SelectSum { .. } => 10,
-        Msg::SelectPosition { .. } => 11,
-        Msg::SelectPlace { .. } => 12,
         _ => 0,
     }
 }
@@ -103,11 +97,6 @@ pub fn prompt_label(m: &Msg) -> &'static str {
         Msg::SelectOption { .. } => "option",
         Msg::SelectCard { min: 1, max: 1, .. } => "card1",
         Msg::SelectCard { .. } => "cards",
-        Msg::SelectUnselectCard { .. } => "unselect",
-        Msg::SelectTribute { .. } => "tribute",
-        Msg::SelectSum { .. } => "sum",
-        Msg::SelectPosition { .. } => "position",
-        Msg::SelectPlace { .. } => "place",
         _ => "other",
     }
 }
@@ -116,9 +105,7 @@ pub fn prompt_label(m: &Msg) -> &'static str {
 /// candidates.
 pub(super) fn listed(m: &Msg, cands: usize) -> usize {
     match m {
-        Msg::SelectCard { cards, .. } | Msg::SelectTribute { cards, .. } => cards.len(),
-        Msg::SelectSum { cards, must_cards, .. } => cards.len() + must_cards.len(),
-        Msg::SelectUnselectCard { select_cards, .. } => select_cards.len() + 1,
+        Msg::SelectCard { cards, .. } => cards.len(),
         _ => cands,
     }
 }
@@ -175,27 +162,9 @@ pub fn move_key(m: &Msg, c: &Response) -> usize {
         }
     } else if let Some(ind) = &c.indices {
         kind = 1;
-        let cards = match m {
-            Msg::SelectCard { cards, .. } | Msg::SelectTribute { cards, .. } | Msg::SelectSum { cards, .. } => Some(cards),
-            _ => None,
-        };
-        if let Some(cards) = cards {
-            if ind.len() == 1 {
-                code = cards.get(ind[0] as usize).map_or(0, |e| e.code as u128);
-            } else {
-                // (several cards: the codes in any order)
-                code = ind.iter().filter_map(|&i| cards.get(i as usize)).fold(0u128, |a, e| a.wrapping_add((e.code as u128).wrapping_mul(0x9E37_79B9)));
-                kind = 1 + ind.len() as u128;
-            }
+        if let (Msg::SelectCard { cards, .. }, [i]) = (m, ind.as_slice()) {
+            code = cards.get(*i as usize).map_or(0, |e| e.code as u128);
         }
-    } else if let (Msg::SelectUnselectCard { select_cards, .. }, Some(i)) = (m, c.index) {
-        (kind, code) = (1, select_cards.get(i as usize).map_or(0, |e| e.code as u128));
-    } else if c.finish == Some(true) {
-        kind = 2;
-    } else if let Some(p) = c.position {
-        kind = p as u128;
-    } else if let Some(pl) = c.places.as_ref().and_then(|p| p.first()) {
-        kind = (pl[1] * 16 + pl[2]) as u128;
     } else if let Some(i) = c.index {
         kind = (1 + i) as u128;
     }

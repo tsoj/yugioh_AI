@@ -1,4 +1,4 @@
-//! The search's parameters and its optional features ($YGOAI_SEARCH).
+//! The search's parameters.
 
 /// (values are in LP: the learned eval's by its LP anchor)
 pub const WIN: f64 = 10_000_000.0;
@@ -11,19 +11,12 @@ pub const MAX_CHILDREN: usize = 12;
 /// (a one-card selection: the rules' first choices only, below the root and at the root)
 pub const CARD_WIDTH: usize = 3;
 pub const ROOT_CARD_WIDTH: usize = 3;
-/// (the searched decisions inside a move, each a feature: how many of the rules' first choices)
-pub const UNSELECT_WIDTH: usize = 3;
-pub const TRIBUTE_WIDTH: usize = 4;
-pub const MULTI_CARDS: usize = 4;
-pub const MULTI_WIDTH: usize = 6;
-pub const SUM_WIDTH: usize = 4;
-pub const SUM_STEPS: usize = 5000;
 
 // time management
-/// (without `predict`: a new iteration starts while less than this share of the budget is used)
-pub const NEXT_ITERATION_SHARE: f64 = 0.5;
-/// (`predict`: the prior of each depth's node growth from the previous iteration, its weight in
-/// iterations, and the most weight the observed growths keep, so that the table follows the game)
+/// (the next iteration starts only if it is expected to end within the time budget: by this
+/// iteration's time and the depth's node growth from the previous iteration, learned across
+/// searches. The prior of that growth, its weight in iterations, and the most weight the observed
+/// growths keep, so that the table follows the game)
 pub const GROWTH_PRIOR: f64 = 1.6;
 pub const GROWTH_PRIOR_WEIGHT: f64 = 4.0;
 pub const GROWTH_MAX_WEIGHT: f64 = 200.0;
@@ -44,17 +37,14 @@ pub fn hard_limit(budget: f64, remaining: f64) -> f64 {
 pub const MAX_AUTO_STEPS: usize = 300;
 pub const TT_BITS: u32 = 16;
 pub const HIST_BITS: u32 = 14;
-/// (continuation history entries: (previous move, move) pairs)
-pub const CONT_BITS: u32 = 16;
-/// (the history tables' decay per decision)
+/// (the history table's decay per decision)
 pub const HIST_DECAY: f64 = 0.5;
 
 /// (the null window's width, 1 LP: the smallest step of a value)
 pub const NULL_WINDOW: f64 = 1.0;
-/// (reverse futility pruning at null-window nodes up to this depth, by this margin per ply)
-pub const RFP_MAX_DEPTH: i32 = 2;
-pub const RFP_MARGIN_MULTIPLIER: f64 = 1400.0;
-/// (late move reductions from this depth on, for the moves after the first LMR_MIN_MOVE_COUNTER)
+/// (late move reductions by one ply from this depth on, for the moves after the first
+/// LMR_MIN_MOVE_COUNTER, with a null window: SPRT H1 +19.1 +/- 14.9 at 1204 games, 2026-10-13; the
+/// null window +11.1 +/- 8.8 at 3074 games at 1000 nodes, 2026-10-16)
 pub const LMR_MIN_DEPTH: i32 = 2;
 pub const LMR_MIN_MOVE_COUNTER: usize = 2;
 /// (futility pruning up to this depth, margin FUTILITY_MARGIN + FUTILITY_MARGIN_PER_PLY * depth:
@@ -66,225 +56,8 @@ pub const LMR_MIN_MOVE_COUNTER: usize = 2;
 pub const FUTILITY_MAX_DEPTH: i32 = 8;
 pub const FUTILITY_MARGIN: f64 = 5.0 * 116.68036281706055;
 pub const FUTILITY_MARGIN_PER_PLY: f64 = 2.0 * 116.68036281706055;
-/// The futility parameters (FUTILITY_MARGIN, FUTILITY_MARGIN_PER_PLY, FUTILITY_MAX_DEPTH), or
-/// $YGOAI_FUTILITY as "margin,per_ply,max_depth" (in LP; read once).
-pub fn futility_params() -> (f64, f64, i32) {
-    static P: std::sync::OnceLock<(f64, f64, i32)> = std::sync::OnceLock::new();
-    *P.get_or_init(|| match std::env::var("YGOAI_FUTILITY") {
-        Ok(s) => {
-            let v: Vec<&str> = s.split(',').collect();
-            (v[0].parse().unwrap(), v[1].parse().unwrap(), v[2].parse().unwrap())
-        }
-        Err(_) => (FUTILITY_MARGIN, FUTILITY_MARGIN_PER_PLY, FUTILITY_MAX_DEPTH),
-    })
-}
-/// (`lmrlog`: the reduction of a late move, max(1, round(LMR_ADDITION + ln(depth) * ln(move
-/// number) / LMR_DIVISOR)), Nalwald's form; $YGOAI_LMR as "addition,divisor" to override)
-pub const LMR_ADDITION: f64 = 0.5;
-pub const LMR_DIVISOR: f64 = 2.0;
 
-pub fn lmr_params() -> (f64, f64) {
-    static P: std::sync::OnceLock<(f64, f64)> = std::sync::OnceLock::new();
-    *P.get_or_init(|| match std::env::var("YGOAI_LMR") {
-        Ok(s) => {
-            let v: Vec<&str> = s.split(',').collect();
-            (v[0].parse().unwrap(), v[1].parse().unwrap())
-        }
-        Err(_) => (LMR_ADDITION, LMR_DIVISOR),
-    })
-}
-
-/// The late move reduction at `depth` of the move with index `i` (`lmrlog`).
-pub fn lmr_reduction(depth: i32, i: usize) -> i32 {
-    let (add, div) = lmr_params();
-    ((add + (depth as f64).ln() * ((i + 1) as f64).ln() / div).round() as i32).max(1)
-}
-
-/// (`rfpall`: reverse futility pruning at all nodes below the root, margin RFP_MARGIN +
-/// RFP_MARGIN_PER_PLY * depth up to RFP_ALL_MAX_DEPTH, as futility's; $YGOAI_RFP as
-/// "margin,per_ply,max_depth" in LP to override)
-pub const RFP_MARGIN: f64 = FUTILITY_MARGIN;
-pub const RFP_MARGIN_PER_PLY: f64 = FUTILITY_MARGIN_PER_PLY;
-pub const RFP_ALL_MAX_DEPTH: i32 = FUTILITY_MAX_DEPTH;
-
-pub fn rfp_params() -> (f64, f64, i32) {
-    static P: std::sync::OnceLock<(f64, f64, i32)> = std::sync::OnceLock::new();
-    *P.get_or_init(|| match std::env::var("YGOAI_RFP") {
-        Ok(s) => {
-            let v: Vec<&str> = s.split(',').collect();
-            (v[0].parse().unwrap(), v[1].parse().unwrap(), v[2].parse().unwrap())
-        }
-        Err(_) => (RFP_MARGIN, RFP_MARGIN_PER_PLY, RFP_ALL_MAX_DEPTH),
-    })
-}
-
-/// `online`: the share of a node's error that its step corrects (`LearnedEval::learn`'s rate) at
-/// depth d is min(1, ONLINE_LR * d^ONLINE_LR_EXP); nodes from ONLINE_MIN_DEPTH; the error (in the
-/// network's points) clamped to ONLINE_MAX_ERR; $YGOAI_ONLINE=lr,exp,min_depth,max_err to override
-pub const ONLINE_LR: f64 = 0.01;
-pub const ONLINE_LR_EXP: f64 = 1.0;
-pub const ONLINE_MIN_DEPTH: i32 = 1;
-pub const ONLINE_MAX_ERR: f64 = 20.0;
-
-pub fn online_params() -> (f64, f64, i32, f64) {
-    static P: std::sync::OnceLock<(f64, f64, i32, f64)> = std::sync::OnceLock::new();
-    *P.get_or_init(|| match std::env::var("YGOAI_ONLINE") {
-        Ok(s) => {
-            let v: Vec<&str> = s.split(',').collect();
-            (v[0].parse().unwrap(), v[1].parse().unwrap(), v[2].parse().unwrap(), v[3].parse().unwrap())
-        }
-        Err(_) => (ONLINE_LR, ONLINE_LR_EXP, ONLINE_MIN_DEPTH, ONLINE_MAX_ERR),
-    })
-}
-
-/// `nullmove`: the null move's search is NULL_R + depth / NULL_R_DIV plies less deep, at nodes
-/// from NULL_MIN_DEPTH; $YGOAI_NULLMOVE=r,div,min_depth to override
-pub const NULL_R: i32 = 3;
-pub const NULL_R_DIV: i32 = 4;
-pub const NULL_MIN_DEPTH: i32 = 3;
-
-/// (`nullmove`, for measurements: $YGOAI_NULL_VERIFY set, the nodes it cuts are searched anyway)
-pub fn null_verify() -> bool {
-    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var_os("YGOAI_NULL_VERIFY").is_some())
-}
-
-pub fn nullmove_params() -> (i32, i32, i32) {
-    static P: std::sync::OnceLock<(i32, i32, i32)> = std::sync::OnceLock::new();
-    *P.get_or_init(|| match std::env::var("YGOAI_NULLMOVE") {
-        Ok(s) => {
-            let v: Vec<&str> = s.split(',').collect();
-            (v[0].parse().unwrap(), v[1].parse().unwrap(), v[2].parse().unwrap())
-        }
-        Err(_) => (NULL_R, NULL_R_DIV, NULL_MIN_DEPTH),
-    })
-}
-
-/// (`narrowext`: the nodes with at most this many moves extend their TT move)
-pub const NARROW_EXT_MAX_CHILDREN: usize = 2;
-/// (quiescence plies past the nominal depth)
-pub const MAX_QUIESCE_PLY: i32 = 6;
-
-/// `deckpick`: the decks the opponent picks from (the reconstruction's guess and draws of new
-/// guesses), $YGOAI_DECKPICK to override
-pub const DECKPICK_DECKS: usize = 3;
-
-pub fn deckpick_decks() -> usize {
-    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *N.get_or_init(|| std::env::var("YGOAI_DECKPICK").ok().and_then(|s| s.parse().ok()).unwrap_or(DECKPICK_DECKS).max(1))
-}
-
-/// `deckpick`: how much less deep the decks after the first are searched (again at the full depth
-/// if they are worse), $YGOAI_DECKPICK_R to override
-pub const DECKPICK_REDUCTION: i32 = 0;
-
-pub fn deckpick_reduction() -> i32 {
-    static R: std::sync::OnceLock<i32> = std::sync::OnceLock::new();
-    *R.get_or_init(|| std::env::var("YGOAI_DECKPICK_R").ok().and_then(|s| s.parse().ok()).unwrap_or(DECKPICK_REDUCTION).max(0))
-}
-
-/// `passrisk`: what a line with the opponent passing on the root player's chain link while holding
-/// cards it does not know costs the root's player (LP; once per line), $YGOAI_PASSRISK to override
-pub const PASSRISK_LP: f64 = 500.0;
-
-pub fn passrisk_lp() -> f64 {
-    static R: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
-    *R.get_or_init(|| std::env::var("YGOAI_PASSRISK").ok().and_then(|s| s.parse().ok()).unwrap_or(PASSRISK_LP))
-}
-
-/// Search features, each off unless named in $YGOAI_SEARCH (a comma list; unset: DEFAULT_FEATURES):
-/// `pvs`, `rfp` (reverse futility pruning at null-window nodes; with pvs), `futility` (futility
-/// pruning up to FUTILITY_MAX_DEPTH), `lmr`, `conthist` (continuation history), `qsearch`
-/// (battle and chain decisions past the depth).
-/// Decisions inside a move that the search can make instead of the rules' player (each the rules'
-/// first few choices): `unselect` (card by card selections, e.g. most materials), `tribute`,
-/// `multicard` (selections of several cards), `sum` (selections by a sum: Synchro and Ritual
-/// materials), `position`, `place` (the zone).
-/// `narrowext`: at a node with only one or two moves, the TT move is searched a ply deeper.
-/// `lmrlog`: LMR by `lmr_reduction` instead of one ply. `rfpall`: reverse futility pruning at all
-/// nodes below the root (`rfp_params`). `lmrzw`: the reduced search of LMR with a null window.
-/// `killers`: the last two moves that caused a cutoff at the same height first after the TT move.
-/// `nullmove`: null move pruning, the null move being the end of the phase (to the End Phase) at
-/// a main or battle phase's decision (`nullmove_params`).
-/// `online`: the evaluation learns during the search: a gradient step toward each node's search
-/// value as soon as it has one (`online_params`); back to the trained weights for each decision.
-/// `predict`: with a clock, the next iteration starts only if it is expected to end within the
-/// time budget (by this iteration's time and the depth's node growth, learned across searches)
-/// instead of while less than half the budget is used.
-/// The features that passed their SPRTs (LMR: +19.1 +/- 14.9, LLR +3.01, 1204 games, 2026-10-13),
-/// and `predict`, taken without a pass (+3.8 +/- 11.7, LLR -0.35 at 1760 games, 2026-10-14) for
-/// the room it leaves the time management; `futility` (+19.4 +/- 13.5, LLR +3.03, 1364 games,
-/// 2026-10-16); `lmrzw` (+11.1 +/- 8.8, LLR +3.05, 3074 games at 1000 nodes, 2026-10-16). (The node-budget search, `lmr_noresearch`, `rfp_kind`
-/// and `pv_ext` were removed after failing their tests: git history before the search/ split.)
-pub const DEFAULT_FEATURES: &str = "lmr,predict,futility,lmrzw";
-
-#[derive(Clone, Copy, Default, Debug)]
-pub struct Features {
-    pub pvs: bool,
-    pub rfp: bool,
-    pub futility: bool,
-    pub lmr: bool,
-    pub conthist: bool,
-    pub qsearch: bool,
-    pub unselect: bool,
-    pub tribute: bool,
-    pub multicard: bool,
-    pub sum: bool,
-    pub position: bool,
-    pub place: bool,
-    pub predict: bool,
-    pub narrowext: bool,
-    /// (a belief agent: new guesses of the opponent's hidden cards for each iteration)
-    pub resample: bool,
-    /// (a belief agent: the opponent picks among DECKPICK_DECKS guesses after the root's move)
-    pub deckpick: bool,
-    /// (lines with the opponent passing on our chain link while holding unknown cards: less for us)
-    pub passrisk: bool,
-    pub lmrlog: bool,
-    pub rfpall: bool,
-    pub lmrzw: bool,
-    pub killers: bool,
-    pub online: bool,
-    pub nullmove: bool,
-}
-
-impl Features {
-    pub fn parse(list: &str) -> Features {
-        let mut f = Features::default();
-        for name in list.split(',').map(str::trim).filter(|n| !n.is_empty()) {
-            match name {
-                "pvs" => f.pvs = true,
-                "rfp" => f.rfp = true,
-                "futility" => f.futility = true,
-                "lmr" => f.lmr = true,
-                "conthist" => f.conthist = true,
-                "qsearch" => f.qsearch = true,
-                "unselect" => f.unselect = true,
-                "tribute" => f.tribute = true,
-                "multicard" => f.multicard = true,
-                "sum" => f.sum = true,
-                "position" => f.position = true,
-                "place" => f.place = true,
-                "predict" => f.predict = true,
-                "narrowext" => f.narrowext = true,
-                "resample" => f.resample = true,
-                "deckpick" => f.deckpick = true,
-                "passrisk" => f.passrisk = true,
-                "lmrlog" => f.lmrlog = true,
-                "rfpall" => f.rfpall = true,
-                "lmrzw" => f.lmrzw = true,
-                "killers" => f.killers = true,
-                "online" => f.online = true,
-                "nullmove" => f.nullmove = true,
-                _ => panic!("YGOAI_SEARCH: unknown feature {name}"),
-            }
-        }
-        f
-    }
-
-    /// The features of $YGOAI_SEARCH, DEFAULT_FEATURES when it is unset (read once).
-    pub fn from_env() -> Features {
-        static F: std::sync::OnceLock<Features> = std::sync::OnceLock::new();
-        *F.get_or_init(|| Features::parse(&std::env::var("YGOAI_SEARCH").unwrap_or_else(|_| DEFAULT_FEATURES.to_string())))
-    }
-}
+// The search features that failed their SPRTs and their parameters were removed on 2026-10-18
+// (pvs, rfp, rfpall, conthist, qsearch, narrowext, killers, nullmove, online, lmrlog, resample,
+// deckpick, passrisk, and searching the decisions inside a move: unselect, tribute, multicard,
+// sum, position, place): see TODO.md and the git history before that.

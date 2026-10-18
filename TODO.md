@@ -108,8 +108,13 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       and whole-corpus script scans load at "isready" (each game is a new engine process); the
       corpus completion indexes rows by deck; one regex for all global helpers. Left: the replay
       per decision (~38%), the deck model (~30%, only on new reveals), HiGHS (~12%).
-- [ ] `learn_matches_finite_differences` (online learning) fails since the default net of 309a717:
-      step / gradient ratios differ by ~1% at ~5e-12 (finite-difference precision).
+- [x] Search cleanup (2026-10-18): every feature not on by default removed, with its parameters,
+      environment variables and tests: pvs, rfp, rfpall, conthist, qsearch, narrowext, killers,
+      nullmove, online, lmrlog, resample, deckpick, passrisk, and searching the decisions inside a
+      move (unselect, tribute, multicard, sum, position, place); `ygoai-tree-compare` (it needed
+      the search's trace). lmr (with a null window), futility and the predictive iteration start
+      are always on ($YGOAI_SEARCH is gone). The features' results stay in this file; their code
+      in the git history before the cleanup commit. Bench checksum unchanged (573fe24d6e988ea6).
 - [x] Futility pruning again (Stockfish's parent-node form): the moves after the first at depth
       <= 3 whose static eval + 45 + 4 * depth cannot raise alpha (margins measured with the mover2
       eval: the 99th percentile of the gap over the moves that raised alpha, 49/52/55/72 at depth
