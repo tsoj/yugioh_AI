@@ -233,8 +233,8 @@ pub struct RecordedResponse {
 }
 
 /// A searched decision's labels: the response's index in the record, the player who searched,
-/// the root value for that player (in LP), the depth completed and, in matches, the nodes searched
-/// and the seconds the move took on the arbiter's clock.
+/// the root value for that player (in LP), the depth completed and, in matches, the nodes searched,
+/// the seconds the move took on the arbiter's clock and the search's own seconds (the engine's).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Label {
     pub decision: usize,
@@ -245,15 +245,19 @@ pub struct Label {
     pub nodes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_time: Option<f64>,
 }
 
 /// A search's result as an engine reports it (a chess engine's "info score ... depth ... nodes"):
-/// the root value for the searching player (in LP), the depth completed, the nodes searched.
+/// the root value for the searching player (in LP), the depth completed, the nodes searched and
+/// the search's seconds (without what came before it, e.g. the reconstruction; 0: not reported).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SearchInfo {
     pub value: f64,
     pub depth: u32,
     pub nodes: u64,
+    pub secs: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -366,6 +370,8 @@ pub trait Agent {
     fn search_info(&mut self) -> Option<SearchInfo> {
         None
     }
+    /// The nodes the searches of the following decisions may use (None: the agent's own limit).
+    fn set_node_limit(&mut self, _nodes: Option<u64>) {}
 }
 
 /// Receives the god-view event stream of a duel.
@@ -574,9 +580,9 @@ pub fn play(
             }
             c.remaining += c.increment;
         }
-        if let Some(SearchInfo { value, depth, nodes }) = info {
-            let time = Some(t_used);
-            record.labels.push(Label { decision: record.responses.len(), player, value, depth, nodes: Some(nodes), time });
+        if let Some(SearchInfo { value, depth, nodes, secs }) = info {
+            let (time, search_time) = (Some(t_used), (secs > 0.0).then_some(secs));
+            record.labels.push(Label { decision: record.responses.len(), player, value, depth, nodes: Some(nodes), time, search_time });
         }
         record.responses.push(RecordedResponse { player, response: response.clone() });
         for obs in observers.iter_mut() {

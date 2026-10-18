@@ -87,8 +87,10 @@ pub struct EngineProcess {
     lines: Receiver<String>,
     pending: Vec<Msg>,
     pub last_think_time: f64,
-    /// (the last response's "info": the search's value, depth and nodes)
+    /// (the last response's "info": the search's value, depth, nodes and seconds)
     info: Option<SearchInfo>,
+    /// (sent with each prompt as "nodes": the engine's node limit for that decision)
+    node_limit: Option<u64>,
 }
 
 fn engine_error(name: &str, what: &str) -> AgentError {
@@ -118,7 +120,7 @@ impl EngineProcess {
                 }
             }
         });
-        let mut e = EngineProcess { name: name.into(), child, stdin, lines, pending: Vec::new(), last_think_time: 0.0, info: None };
+        let mut e = EngineProcess { name: name.into(), child, stdin, lines, pending: Vec::new(), last_think_time: 0.0, info: None, node_limit: None };
         e.send(&json!({"type": "isready"}))?;
         match e.lines.recv_timeout(Duration::from_secs_f64(READY_TIMEOUT)) {
             Ok(line) => {
@@ -198,6 +200,9 @@ impl Agent for EngineProcess {
         if let Some((remaining, increment)) = clock {
             msg["clock"] = json!({"remaining": remaining, "increment": increment});
         }
+        if let Some(n) = self.node_limit {
+            msg["nodes"] = json!(n);
+        }
         self.send(&msg)?;
         let reply = self.recv(clock.map(|(remaining, _)| remaining + CLOCK_GRACE))?;
         self.last_think_time = t0.elapsed().as_secs_f64();
@@ -205,12 +210,20 @@ impl Agent for EngineProcess {
             return Err(engine_error(&self.name, &format!("sent {reply} instead of a response")));
         };
         self.info = reply.get("info").and_then(|i| {
-            Some(SearchInfo { value: i.get("value")?.as_f64()?, depth: i.get("depth")?.as_u64()? as u32, nodes: i.get("nodes").and_then(Value::as_u64).unwrap_or(0) })
+            Some(SearchInfo {
+                value: i.get("value")?.as_f64()?,
+                depth: i.get("depth")?.as_u64()? as u32,
+                nodes: i.get("nodes").and_then(Value::as_u64).unwrap_or(0),
+                secs: i.get("secs").and_then(Value::as_f64).unwrap_or(0.0),
+            })
         });
         serde_json::from_value(resp.clone()).map_err(|e| AgentError::Failed(format!("InvalidResponse: {e}")))
     }
     fn search_info(&mut self) -> Option<SearchInfo> {
         self.info.take()
+    }
+    fn set_node_limit(&mut self, nodes: Option<u64>) {
+        self.node_limit = nodes;
     }
     fn end(&mut self, result: &serde_json::Map<String, Value>) {
         let msg = json!({"type": "end", "obs": std::mem::take(&mut self.pending), "result": result});

@@ -1,7 +1,8 @@
 //! An agent as an engine process on stdio (protocol.py's `serve`): JSON lines from the arbiter
 //! ("isready", "init", "prompt", "end", "quit"), a response line per prompt (with "info": the
-//! search's value, depth and nodes, if it searched). A new game ("init")
-//! gets a new agent, except the first one, which "isready" created and warmed up.
+//! search's value, depth, nodes and seconds, if it searched). A prompt's "nodes" is the node limit
+//! for that decision. A new game ("init") gets a new agent, except the first one, which "isready"
+//! created and warmed up.
 
 use std::io::{BufRead, Write};
 
@@ -68,11 +69,12 @@ pub fn serve(mut factory: impl FnMut() -> Result<Box<dyn Agent>, String>) -> Res
                     a.observe(&o);
                 }
                 let clock = msg.get("clock").filter(|c| !c.is_null()).map(|c| (c["remaining"].as_f64().unwrap_or(0.0), c["increment"].as_f64().unwrap_or(0.0)));
+                a.set_node_limit(msg.get("nodes").and_then(Value::as_u64));
                 let prompt: Msg = field(&msg, "prompt")?;
                 let state: Option<Snapshot> = field(&msg, "state")?;
                 let resp = a.respond(&prompt, state.as_ref(), clock).map_err(|e| format!("{e:?}"))?;
                 match a.search_info() {
-                    Some(i) => send(&json!({"response": resp, "info": {"value": i.value, "depth": i.depth, "nodes": i.nodes}}))?,
+                    Some(i) => send(&json!({"response": resp, "info": {"value": i.value, "depth": i.depth, "nodes": i.nodes, "secs": i.secs}}))?,
                     None => send(&json!({"response": resp}))?,
                 }
             }

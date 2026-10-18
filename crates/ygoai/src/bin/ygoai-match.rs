@@ -7,6 +7,10 @@
 //! Openings come from a book (scripts/make_match_book.py); every opening is played twice, the
 //! engines swapping seats. Engines are commands speaking the engine protocol (ygoai/protocol.py)
 //! or built-in Rust agents (builtin:random).
+//!
+//! `--nps-nodes N` (NPS-adjusted node limit): the second engine (the base) searches N nodes per
+//! decision, the first N times the ratio of their nodes per second, measured over the match's
+//! searches (`matchrun::NpsNodes`): a fixed-node test that charges a slower engine for its speed.
 
 use std::io::Write;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -15,7 +19,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Instant;
 
-use ygoai::matchrun::{EngineSpec, MatchStats, Opening, load_book_lines, play_opening, sprt_bounds};
+use ygoai::matchrun::{EngineSpec, MatchStats, NpsNodes, Opening, load_book_lines, play_opening, sprt_bounds};
 
 struct Args {
     engines: Vec<EngineSpec>,
@@ -31,13 +35,14 @@ struct Args {
     book_min: i64,
     shuffle: Option<u64>,
     pool: usize,
+    nps_nodes: Option<u64>,
 }
 
 fn usage(msg: &str) -> ! {
     eprintln!("ygoai-match: {msg}");
     eprintln!(
         "usage: ygoai-match --engine NAME=COMMAND --engine NAME=COMMAND --book BOOK [-n N] [--tc BASE+INC] \
-         [--sprt ELO0 ELO1] [--alpha A] [--beta B] [-c J] [--records PATH] [--book-min N] [--shuffle SEED] [--pool N] [--max-turns N]"
+         [--sprt ELO0 ELO1] [--alpha A] [--beta B] [-c J] [--records PATH] [--book-min N] [--shuffle SEED] [--pool N] [--max-turns N] [--nps-nodes N]"
     );
     std::process::exit(2)
 }
@@ -72,6 +77,7 @@ fn parse_args() -> Args {
         book_min: 2,
         shuffle: None,
         pool: usize::MAX,
+        nps_nodes: None,
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -106,6 +112,7 @@ fn parse_args() -> Args {
             "--book-min" => a.book_min = num(next(&mut i, &arg), &arg) as i64,
             // (only the book's first N lines: the eval's training pairs come from later ones)
             "--pool" => a.pool = num(next(&mut i, &arg), &arg) as usize,
+            "--nps-nodes" => a.nps_nodes = Some(num(next(&mut i, &arg), &arg) as u64),
             "--shuffle" => a.shuffle = Some(next(&mut i, &arg).parse().unwrap_or_else(|_| usage("--shuffle takes an integer seed"))),
             // (accepted for scripts/match.py's command lines: only random openings use them)
             "--seed" | "--mirror-prob" => {
@@ -141,6 +148,16 @@ fn main() {
     openings.truncate(args.openings);
     let (a, b) = (args.engines[0].clone(), args.engines[1].clone());
     println!("{} vs {}: {} openings x 2 games", a.name, b.name, openings.len());
+    let nps = args.nps_nodes.map(|n| Arc::new(NpsNodes::new(n)));
+    if let Some(n) = args.nps_nodes {
+        println!("NPS-adjusted node limit: {} searches {n} nodes per decision, {} {n} times their speed ratio", b.name, a.name);
+    }
+    let nps_line = |nps: &Option<Arc<NpsNodes>>| {
+        nps.as_ref().map_or(String::new(), |p| {
+            let [x, y] = p.nps();
+            format!("  nps {x:.0} / {y:.0}, nodes {} / {}", p.limit(0), p.limit(1))
+        })
+    };
     let mut out = args.records.as_ref().map(|p| std::fs::File::create(p).unwrap_or_else(|e| usage(&format!("records: {e}"))));
     let (lo, hi) = args.sprt.map(|_| sprt_bounds(args.alpha, args.beta)).unwrap_or((0.0, 0.0));
     let openings = Arc::new(openings);
@@ -149,13 +166,13 @@ fn main() {
     let (tx, rx) = mpsc::channel();
     let n = openings.len();
     for _ in 0..args.concurrency.min(n).max(1) {
-        let (openings, next_task, stop, tx, a, b) = (openings.clone(), next_task.clone(), stop.clone(), tx.clone(), a.clone(), b.clone());
+        let (openings, next_task, stop, tx, a, b, nps) = (openings.clone(), next_task.clone(), stop.clone(), tx.clone(), a.clone(), b.clone(), nps.clone());
         let (tc, max_turns) = (args.tc, args.max_turns);
         std::thread::spawn(move || {
             while !stop.load(Ordering::Relaxed) {
                 let i = next_task.fetch_add(1, Ordering::Relaxed);
                 let Some(opening) = openings.get(i) else { break };
-                let res = catch_unwind(AssertUnwindSafe(|| play_opening(opening, &a, &b, tc, max_turns)))
+                let res = catch_unwind(AssertUnwindSafe(|| play_opening(opening, &a, &b, tc, max_turns, nps.as_deref())))
                     .unwrap_or_else(|p| Err(format!("crash: {}", p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default())));
                 if tx.send((opening.seed, res)).is_err() {
                     break;
@@ -185,7 +202,7 @@ fn main() {
             let _ = f.flush();
         }
         if i % 10 == 0 || i == n {
-            println!("[{:6.0}s] {}", t0.elapsed().as_secs_f64(), stats.summary(args.sprt));
+            println!("[{:6.0}s] {}{}", t0.elapsed().as_secs_f64(), stats.summary(args.sprt), nps_line(&nps));
         }
         if let Some((e0, e1)) = args.sprt {
             let llr = stats.llr(e0, e1);
@@ -200,7 +217,7 @@ fn main() {
         }
         let _ = std::io::stdout().flush();
     }
-    println!("final: {} errors: {errors}", stats.summary(args.sprt));
+    println!("final: {} errors: {errors}{}", stats.summary(args.sprt), nps_line(&nps));
     let _ = std::io::stdout().flush();
     // (games still running are abandoned, as the Python arbiter does; their engines end with
     // this process)

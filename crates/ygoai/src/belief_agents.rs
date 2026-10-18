@@ -108,6 +108,8 @@ pub struct BeliefSearchAgent {
     info: Option<crate::game::SearchInfo>,
     /// (the search features: `resample`, `deckpick`)
     features: crate::search::Features,
+    /// (the arbiter's node limit per decision, before $YGOAI_SEARCH_NODES)
+    node_limit: Option<u64>,
     /// (the clock's gains between searches: their sum and number; the clock after the last
     /// search, as far as this agent measured it)
     clock_gains: (f64, f64),
@@ -143,6 +145,7 @@ impl BeliefSearchAgent {
             belief: None,
             info: None,
             features: crate::search::Features::from_env(),
+            node_limit: None,
             clock_gains: (0.0, 0.0),
             clock_after_search: None,
             slowest_reconstruction: 0.0,
@@ -205,11 +208,12 @@ impl BeliefSearchAgent {
         }
         Some(match &mut self.search {
             Search::AlphaBeta { ab, max_nodes } | Search::AlphaBetaNaive { ab, max_nodes } => {
+                let max_nodes = self.node_limit.or(*max_nodes);
                 let budget = if max_nodes.is_some() { None } else { budget };
                 let seeds = [self.rng.getrandbits(32) as u32, self.rng.getrandbits(32) as u32];
                 ab.prepare();
                 let before = ab.nodes;
-                let params = SearchParams { budget, elapsed, clock_remaining: remaining, hint, seeds, max_nodes: *max_nodes };
+                let params = SearchParams { budget, elapsed, clock_remaining: remaining, hint, seeds, max_nodes };
                 let (comp, rng) = (self.completion.unwrap_or(VanillaCompletion::get()), &mut self.rng);
                 // (deckpick: the reconstruction's guess and new ones)
                 let mut decks = vec![duel.d.clone()];
@@ -221,9 +225,11 @@ impl BeliefSearchAgent {
                     }
                 }
                 let mut resample = guesses.filter(|_| self.features.resample).map(|g| move |d: &mut ygo_core::duel::Duel| resample(d, &g, comp, rng));
+                let t_search = Instant::now();
                 let (best, depth) = ab.search_decks(&decks, &core_prompt, &core_cands, &params, resample.as_mut().map(|f| f as &mut dyn FnMut(&mut ygo_core::duel::Duel)));
                 self.nodes += ab.nodes - before;
-                self.info = ab.last_value.is_finite().then_some(crate::game::SearchInfo { value: ab.last_value, depth: depth as u32, nodes: ab.nodes - before });
+                let (nodes, secs) = (ab.nodes - before, t_search.elapsed().as_secs_f64());
+                self.info = ab.last_value.is_finite().then_some(crate::game::SearchInfo { value: ab.last_value, depth: depth as u32, nodes, secs });
                 best
             }
             Search::Mcts { max_sims, c, rollout_turns, cutoff_eval } => {
@@ -308,6 +314,9 @@ impl Agent for BeliefSearchAgent {
     }
     fn search_info(&mut self) -> Option<crate::game::SearchInfo> {
         self.info.take()
+    }
+    fn set_node_limit(&mut self, nodes: Option<u64>) {
+        self.node_limit = nodes;
     }
     fn end(&mut self, _result: &serde_json::Map<String, Value>) {
         if std::env::var_os("YGOAI_AGENT_STATS").is_some() {
