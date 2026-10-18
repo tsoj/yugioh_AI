@@ -160,6 +160,8 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       of 16+ cards (1.6%) the rules' first cards. SPRT at 500 nodes stopped at 1040 games (+0.3 +/-
       8.4, LLR -2.53): merged anyway as a fix (user). ygoai-spsa's references of positions with 16+
       moves change: recompute them.
+- [x] No cap on the children below the root (MAX_CHILDREN 12 -> 1000, `YGOAI_TUNE=max_children=1000`,
+      2026-10-19): SPRT at 500 nodes H0, -3.7 +/- 10.5 at 1220 games: not merged.
 - [x] Futility pruning again (Stockfish's parent-node form): the moves after the first at depth
       <= 3 whose static eval + 45 + 4 * depth cannot raise alpha (margins measured with the mover2
       eval: the 99th percentile of the gap over the moves that raised alpha, 49/52/55/72 at depth
