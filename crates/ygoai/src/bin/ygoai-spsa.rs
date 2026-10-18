@@ -19,8 +19,8 @@
 //!
 //! FILE: ygoai-datagen's OUT.games.jsonl or ygoai-match's records. --spec: lines "name, int|float,
 //! min, max, c_end, r_end" (the start is the current default). OUT_DIR gets refs.jsonl (the
-//! positions and their references, reused by a later run with the same files, seed and
-//! reference settings), spsa.jsonl (each iteration) and the final values as tune.txt ($YGOAI_TUNE).
+//! positions and their references, reused by a later run with the same files, seed, reference
+//! nodes and default parameters), spsa.jsonl (each iteration) and the final values as tune.txt ($YGOAI_TUNE).
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
@@ -61,15 +61,16 @@ struct Spec {
 fn default_specs() -> Vec<Spec> {
     let s = |name: &str, is_int: bool, min: f64, max: f64, c_end: f64| Spec { name: name.into(), is_int, min, max, c_end, r_end: 0.002 };
     vec![
-        s("max_children", true, 2.0, 30.0, 2.0),
-        s("card_width", true, 1.0, 10.0, 1.0),
-        s("root_card_width", true, 1.0, 16.0, 1.0),
-        s("lmr_min_depth", true, 1.0, 8.0, 1.0),
+        // (the widths max_children, card_width, root_card_width are not tuned: a spec line adds them)
+        s("lmr_min_depth", false, 1.0, 8.0, 0.5),
         s("lmr_min_move_counter", true, 0.0, 10.0, 1.0),
-        s("lmr_reduction", true, 1.0, 4.0, 0.6),
-        s("futility_max_depth", true, 0.0, 20.0, 1.5),
+        s("lmr_reduction", false, 0.0, 4.0, 0.25),
+        s("lmr_reduction_per_move", false, 0.0, 2.0, 0.05),
+        s("futility_max_depth", false, 0.0, 20.0, 1.0),
         s("futility_margin", false, 0.0, 4000.0, 120.0),
         s("futility_margin_per_ply", false, 0.0, 2000.0, 60.0),
+        s("hist_exponent", false, 0.0, 6.0, 0.25),
+        s("hist_malus", false, 0.0, 4.0, 0.15),
     ]
 }
 
@@ -276,12 +277,17 @@ fn reference(record: &GameRecord, viewer: bool, game_seed: u64, ref_nodes: u64) 
     let k = eligible[rng.randrange(eligible.len())];
     let pos = position_at(record, viewer, k, vec![])?;
     // (the depth a search of ref_nodes completes, then every root move with the full window to it)
-    let tune = Tune { root_card_width: REF_ROOT_WIDTH, ..Tune::default() };
+    let tune = ref_tune();
     let (_, _, _, depth) = search(&pos, tune, ref_nodes, None, false);
     let (_, _, values, _) = search(&pos, tune, REF_EXACT_NODES_FACTOR * ref_nodes, Some(depth.max(1)), true);
     let values: Vec<f64> = values.into_iter().collect::<Option<_>>()?;
     let spread = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max) - values.iter().cloned().fold(f64::INFINITY, f64::min);
     (spread >= MIN_SPREAD).then_some((k, Position { values, ..pos }))
+}
+
+/// The reference's parameters: the defaults with every root card.
+fn ref_tune() -> Tune {
+    Tune { root_card_width: REF_ROOT_WIDTH, ..Tune::default() }
 }
 
 fn position_at(record: &GameRecord, viewer: bool, k: usize, values: Vec<f64>) -> Option<Position> {
@@ -320,7 +326,7 @@ fn main() {
     if let Ok(text) = std::fs::read_to_string(&refs_path) {
         for l in text.lines() {
             let v: Value = serde_json::from_str(l).unwrap();
-            if v["ref_nodes"].as_u64() == Some(a.ref_nodes) {
+            if v["ref_nodes"].as_u64() == Some(a.ref_nodes) && v["ref_tune"].as_str() == Some(&ref_tune().to_list()) {
                 let values = v["values"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
                 cached.insert((v["file"].as_str().unwrap().into(), v["line"].as_u64().unwrap() as usize), (v["decision"].as_u64().unwrap() as usize, values));
             }
@@ -410,7 +416,7 @@ fn main() {
         if let Some((file, line, k, values)) = b {
             pool.push((w, counts[w]));
             counts[w] += 1;
-            writeln!(refs_out, "{}", json!({"file": file, "line": line, "decision": k, "ref_nodes": a.ref_nodes, "values": values})).unwrap();
+            writeln!(refs_out, "{}", json!({"file": file, "line": line, "decision": k, "ref_nodes": a.ref_nodes, "ref_tune": ref_tune().to_list(), "values": values})).unwrap();
         }
         if tried % 200 == 0 {
             println!("[{:6.0}s] {} positions of {tried} games", t0.elapsed().as_secs_f64(), pool.len());

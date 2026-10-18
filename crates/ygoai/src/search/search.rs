@@ -235,7 +235,7 @@ impl SearchState<'_> {
             let mut aborted = false;
             for &m in &move_order {
                 let lower = if exact_root { f64::NEG_INFINITY } else { alpha };
-                match self.search_move(&mut root_duel, prompt, &moves[m], lower, f64::INFINITY, depth - 1, 1, false) {
+                match self.search_move(&mut root_duel, prompt, &moves[m], lower, f64::INFINITY, (depth - 1) as f64, 1, false) {
                     Ok(value) => {
                         values[m] = Some(value);
                         if value > alpha {
@@ -288,9 +288,9 @@ impl SearchState<'_> {
     /// The value of the decision `prompt` for its player (negamax), searched `depth` plies deep;
     /// `height` plies below the root.
     #[allow(clippy::too_many_arguments)]
-    fn search(&mut self, duel: &mut Duel, prompt: &Msg, mut alpha: f64, mut beta: f64, depth: i32, height: i32) -> Result<f64, Stop> {
+    fn search(&mut self, duel: &mut Duel, prompt: &Msg, mut alpha: f64, mut beta: f64, depth: f64, height: i32) -> Result<f64, Stop> {
         let us = prompt.player().unwrap_or(0);
-        if depth <= 0 {
+        if depth <= 0.0 {
             return Ok(evaluate_at(duel, us, Some(prompt)));
         }
 
@@ -310,7 +310,7 @@ impl SearchState<'_> {
         if let Some(h) = hash_result {
             self.tables.tt_hits += 1;
             tt_state = if h.best_move >= 0 { 2 + h.node_type as u8 } else { 1 };
-            if h.depth as i32 >= depth {
+            if h.depth as f64 >= depth {
                 match h.node_type {
                     NodeType::PvNode => return Ok(h.value),
                     NodeType::CutNode => alpha = alpha.max(h.value),
@@ -326,9 +326,9 @@ impl SearchState<'_> {
         }
 
         let t = self.tables.tune;
-        let static_eval = if depth <= t.futility_max_depth || (self.tables.stats.is_some() && depth <= 4) { Some(evaluate_at(duel, us, Some(prompt))) } else { None };
+        let static_eval = if depth <= t.futility_max_depth || (self.tables.stats.is_some() && depth <= 4.0) { Some(evaluate_at(duel, us, Some(prompt))) } else { None };
         // (futility pruning: the moves after the first whose static eval plus the margin cannot raise alpha)
-        let futility_value = static_eval.filter(|_| depth <= t.futility_max_depth).map(|s| s + t.futility_margin + t.futility_margin_per_ply * depth as f64);
+        let futility_value = static_eval.filter(|_| depth <= t.futility_max_depth).map(|s| s + t.futility_margin + t.futility_margin_per_ply * depth);
 
         // move ordering: the TT move first, then by history (the rules' order among equals)
         let history_keys: Vec<usize> = moves.iter().map(|m| move_key(prompt, m)).collect();
@@ -363,15 +363,17 @@ impl SearchState<'_> {
 
             // (the node's last search may use its position: nothing needs it afterwards)
             let last = i == move_order.len() - 1;
-            let new_depth = depth - 1;
+            let new_depth = depth - 1.0;
             let mut value = None;
 
             // late move reduction: a late move, unlikely the best by the move ordering, searched
-            // `lmr_reduction` plies less with a null window (it only has to show that it does not raise alpha); the full
-            // depth and window after all if it raises alpha
+            // `lmr_reduction` plies less (and `lmr_reduction_per_move` more for each move after the
+            // first reduced one; fractional) with a null window (it only has to show that it does
+            // not raise alpha); the full depth and window after all if it raises alpha
             if depth >= t.lmr_min_depth && i >= t.lmr_min_move_counter {
                 let reduced_beta = if alpha.is_finite() { alpha + NULL_WINDOW } else { beta };
-                let reduced = self.search_move(duel, prompt, mv, alpha, reduced_beta, (new_depth - t.lmr_reduction).max(0), height + 1, false)?;
+                let reduction = t.lmr_reduction + t.lmr_reduction_per_move * (i - t.lmr_min_move_counter) as f64;
+                let reduced = self.search_move(duel, prompt, mv, alpha, reduced_beta, (new_depth - reduction).max(0.0), height + 1, false)?;
                 if reduced <= alpha {
                     value = Some(reduced);
                 }
@@ -393,7 +395,7 @@ impl SearchState<'_> {
                 && alpha.is_finite()
                 && let Some(st) = &mut self.tables.stats
             {
-                st.gaps.push((move_kind(prompt, mv), depth as i8, (alpha - s) as f32, value > alpha));
+                st.gaps.push((move_kind(prompt, mv), depth.round() as i8, (alpha - s) as f32, value > alpha));
             }
             if value > best_value {
                 (best_value, best_move) = (value, m);
@@ -402,7 +404,7 @@ impl SearchState<'_> {
                 node_type = NodeType::CutNode;
                 // (history: this move up, the ones tried before it down)
                 let tried: Vec<usize> = move_order[..i].iter().map(|&k| history_keys[k]).collect();
-                self.tables.history_table.update(history_keys[m], &tried, depth);
+                self.tables.history_table.update(history_keys[m], &tried, depth, t.hist_exponent, t.hist_malus);
                 cut_at = i as u8;
                 break;
             }
@@ -418,7 +420,7 @@ impl SearchState<'_> {
             e[0] += 1;
             e[1] += move_counter as u64;
             *st.cuts.entry((label, tt_state, move_order.len() as u8, cut_at)).or_default() += 1;
-            let e = st.subtree.entry((label, depth.clamp(-1, 60) as i8)).or_default();
+            let e = st.subtree.entry((label, depth.round().clamp(-1.0, 60.0) as i8)).or_default();
             e[0] += 1;
             e[1] += self.tables.nodes - nodes_before + 1;
         }
@@ -438,7 +440,7 @@ impl SearchState<'_> {
     /// hint are this node's again, and a broken line (one the core cannot play) is a loss for the
     /// mover, who avoids it (in place it is the caller's copy's loss).
     #[allow(clippy::too_many_arguments)]
-    fn search_move(&mut self, duel: &mut Duel, prompt: &Msg, mv: &Response, alpha: f64, beta: f64, depth: i32, height: i32, in_place: bool) -> Result<f64, Stop> {
+    fn search_move(&mut self, duel: &mut Duel, prompt: &Msg, mv: &Response, alpha: f64, beta: f64, depth: f64, height: i32, in_place: bool) -> Result<f64, Stop> {
         if self.should_stop() {
             return Err(Stop::Abort);
         }
@@ -467,7 +469,7 @@ impl SearchState<'_> {
 
     /// (`search_move` on the given duel)
     #[allow(clippy::too_many_arguments)]
-    fn make_and_search(&mut self, duel: &mut Duel, prompt: &Msg, mv: &Response, alpha: f64, beta: f64, depth: i32, height: i32) -> Result<f64, Stop> {
+    fn make_and_search(&mut self, duel: &mut Duel, prompt: &Msg, mv: &Response, alpha: f64, beta: f64, depth: f64, height: i32) -> Result<f64, Stop> {
         let us = prompt.player().unwrap_or(0);
         Ok(match self.do_move(duel, prompt, mv, depth)? {
             NewPosition::Win(winner) => {
@@ -492,7 +494,7 @@ impl SearchState<'_> {
     /// Makes the move: the response, then the core runs on, the rules answering the decisions
     /// the search does not make (hidden ones, the only move, and at the horizon the decisions
     /// inside a move, so that it completes first), up to the next searched decision.
-    fn do_move(&mut self, duel: &mut Duel, prompt: &Msg, mv: &Response, depth: i32) -> Result<NewPosition, Stop> {
+    fn do_move(&mut self, duel: &mut Duel, prompt: &Msg, mv: &Response, depth: f64) -> Result<NewPosition, Stop> {
         duel.ocg_set_response(&encode(prompt, mv).map_err(|_| Stop::Broken)?);
         let mut prompt = prompt.clone();
         for _ in 0..MAX_AUTO_STEPS {
@@ -516,7 +518,7 @@ impl SearchState<'_> {
             let player = prompt.player().unwrap_or(0);
             let response = if is_hidden_prompt(&prompt) {
                 auto_response()
-            } else if matches!(prompt, Msg::SelectCard { .. }) && depth <= 0 {
+            } else if matches!(prompt, Msg::SelectCard { .. }) && depth <= 0.0 {
                 self.policies[player as usize].respond_to(&prompt, None).map_err(|_| Stop::Broken)?
             } else if is_searched(&prompt) {
                 let moves = candidates(&prompt);

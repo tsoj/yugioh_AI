@@ -22,7 +22,7 @@ pub enum NodeType {
 pub struct HashResult {
     key: u64,
     pub value: f64,
-    pub depth: i16,
+    pub depth: f32,
     pub node_type: NodeType,
     pub best_move: i8,
     generation: u16,
@@ -52,8 +52,8 @@ impl TranspositionTable {
     }
 
     /// Stores a result (always replacing the slot's entry).
-    pub fn add(&mut self, key: u64, node_type: NodeType, value: f64, depth: i32, best_move: usize) {
-        self.entries[Self::slot(key)] = HashResult { key, value, depth: depth as i16, node_type, best_move: best_move as i8, generation: self.generation };
+    pub fn add(&mut self, key: u64, node_type: NodeType, value: f64, depth: f64, best_move: usize) {
+        self.entries[Self::slot(key)] = HashResult { key, value, depth: depth as f32, node_type, best_move: best_move as i8, generation: self.generation };
     }
 
     /// A new decision: the entries so far stop counting.

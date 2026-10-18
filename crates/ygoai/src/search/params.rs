@@ -38,16 +38,22 @@ pub fn hard_limit(budget: f64, remaining: f64) -> f64 {
 pub const MAX_AUTO_STEPS: usize = 300;
 pub const TT_BITS: u32 = 16;
 pub const HIST_BITS: u32 = 14;
-/// (the history table's decay per decision)
+/// (the history table's decay per decision; a cutoff's bonus is depth^HIST_EXPONENT, the moves
+/// tried before it share HIST_MALUS times that as a penalty)
 pub const HIST_DECAY: f64 = 0.5;
+pub const HIST_EXPONENT: f64 = 2.0;
+pub const HIST_MALUS: f64 = 1.0;
 
 /// (the null window's width, 1 LP: the smallest step of a value)
 pub const NULL_WINDOW: f64 = 1.0;
-/// (late move reductions by one ply from this depth on, for the moves after the first
+/// (late move reductions by LMR_REDUCTION plies from this depth on, for the moves after the first
 /// LMR_MIN_MOVE_COUNTER, with a null window: SPRT H1 +19.1 +/- 14.9 at 1204 games, 2026-10-13; the
-/// null window +11.1 +/- 8.8 at 3074 games at 1000 nodes, 2026-10-16)
-pub const LMR_MIN_DEPTH: i32 = 2;
+/// null window +11.1 +/- 8.8 at 3074 games at 1000 nodes, 2026-10-16. Depths are fractional: the
+/// reduction grows by LMR_REDUCTION_PER_MOVE for each later move)
+pub const LMR_MIN_DEPTH: f64 = 2.0;
 pub const LMR_MIN_MOVE_COUNTER: usize = 2;
+pub const LMR_REDUCTION: f64 = 1.0;
+pub const LMR_REDUCTION_PER_MOVE: f64 = 0.0;
 /// (futility pruning up to this depth, margin FUTILITY_MARGIN + FUTILITY_MARGIN_PER_PLY * depth:
 /// 5 + 2 * depth points of the mover2 eval (1 point = 116.68 LP), chosen for +2 plies at 3000
 /// nodes (mean depth 9.65 -> 12.37); SPRT vs lmr,predict H1, +19.4 +/- 13.5 at 1364 games. The
@@ -56,7 +62,7 @@ pub const LMR_MIN_MOVE_COUNTER: usize = 2;
 /// near zero). Then SPSA run 1 (ygoai-spsa, 1000 nodes vs a 2000-node reference, 3000
 /// iterations; validation loss 538 -> ~500): margins 583.4 -> 546.6 and 233.4 -> 228.1 LP, root
 /// card width 3 -> 5; SPRT at 20+0.2 H1, +17.8 +/- 12.8 at 1484 games, 2026-10-18)
-pub const FUTILITY_MAX_DEPTH: i32 = 8;
+pub const FUTILITY_MAX_DEPTH: f64 = 8.0;
 pub const FUTILITY_MARGIN: f64 = 546.633177069564;
 pub const FUTILITY_MARGIN_PER_PLY: f64 = 228.1061522305487;
 
@@ -72,13 +78,16 @@ pub struct Tune {
     pub max_children: usize,
     pub card_width: usize,
     pub root_card_width: usize,
-    pub lmr_min_depth: i32,
+    pub lmr_min_depth: f64,
     pub lmr_min_move_counter: usize,
-    pub lmr_reduction: i32,
-    pub futility_max_depth: i32,
+    pub lmr_reduction: f64,
+    pub lmr_reduction_per_move: f64,
+    pub futility_max_depth: f64,
     pub futility_margin: f64,
     pub futility_margin_per_ply: f64,
     pub hist_decay: f64,
+    pub hist_exponent: f64,
+    pub hist_malus: f64,
 }
 
 impl Default for Tune {
@@ -89,28 +98,34 @@ impl Default for Tune {
             root_card_width: ROOT_CARD_WIDTH,
             lmr_min_depth: LMR_MIN_DEPTH,
             lmr_min_move_counter: LMR_MIN_MOVE_COUNTER,
-            lmr_reduction: 1,
+            lmr_reduction: LMR_REDUCTION,
+            lmr_reduction_per_move: LMR_REDUCTION_PER_MOVE,
             futility_max_depth: FUTILITY_MAX_DEPTH,
             futility_margin: FUTILITY_MARGIN,
             futility_margin_per_ply: FUTILITY_MARGIN_PER_PLY,
             hist_decay: HIST_DECAY,
+            hist_exponent: HIST_EXPONENT,
+            hist_malus: HIST_MALUS,
         }
     }
 }
 
 impl Tune {
     /// The parameters' names, in a fixed order.
-    pub const NAMES: [&'static str; 10] = [
+    pub const NAMES: [&'static str; 13] = [
         "max_children",
         "card_width",
         "root_card_width",
         "lmr_min_depth",
         "lmr_min_move_counter",
         "lmr_reduction",
+        "lmr_reduction_per_move",
         "futility_max_depth",
         "futility_margin",
         "futility_margin_per_ply",
         "hist_decay",
+        "hist_exponent",
+        "hist_malus",
     ];
 
     /// The parameter `name`'s value (as a number).
@@ -119,31 +134,38 @@ impl Tune {
             "max_children" => self.max_children as f64,
             "card_width" => self.card_width as f64,
             "root_card_width" => self.root_card_width as f64,
-            "lmr_min_depth" => self.lmr_min_depth as f64,
+            "lmr_min_depth" => self.lmr_min_depth,
             "lmr_min_move_counter" => self.lmr_min_move_counter as f64,
-            "lmr_reduction" => self.lmr_reduction as f64,
-            "futility_max_depth" => self.futility_max_depth as f64,
+            "lmr_reduction" => self.lmr_reduction,
+            "lmr_reduction_per_move" => self.lmr_reduction_per_move,
+            "futility_max_depth" => self.futility_max_depth,
             "futility_margin" => self.futility_margin,
             "futility_margin_per_ply" => self.futility_margin_per_ply,
             "hist_decay" => self.hist_decay,
+            "hist_exponent" => self.hist_exponent,
+            "hist_malus" => self.hist_malus,
             _ => return None,
         })
     }
 
-    /// Sets the parameter `name` (an integer one to the nearest integer); false for an unknown name.
+    /// Sets the parameter `name` (a count to the nearest integer; depths are fractional); false for
+    /// an unknown name.
     pub fn set(&mut self, name: &str, v: f64) -> bool {
         let n = v.round().max(0.0);
         match name {
             "max_children" => self.max_children = (n as usize).max(1),
             "card_width" => self.card_width = (n as usize).max(1),
             "root_card_width" => self.root_card_width = (n as usize).max(1),
-            "lmr_min_depth" => self.lmr_min_depth = n as i32,
+            "lmr_min_depth" => self.lmr_min_depth = v,
             "lmr_min_move_counter" => self.lmr_min_move_counter = n as usize,
-            "lmr_reduction" => self.lmr_reduction = n as i32,
-            "futility_max_depth" => self.futility_max_depth = n as i32,
+            "lmr_reduction" => self.lmr_reduction = v.max(0.0),
+            "lmr_reduction_per_move" => self.lmr_reduction_per_move = v.max(0.0),
+            "futility_max_depth" => self.futility_max_depth = v,
             "futility_margin" => self.futility_margin = v,
             "futility_margin_per_ply" => self.futility_margin_per_ply = v,
             "hist_decay" => self.hist_decay = v.clamp(0.0, 1.0),
+            "hist_exponent" => self.hist_exponent = v,
+            "hist_malus" => self.hist_malus = v.max(0.0),
             _ => return false,
         }
         true

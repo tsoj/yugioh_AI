@@ -19,13 +19,13 @@ impl HistoryTable {
         self.table[key]
     }
 
-    /// A cutoff at depth `depth` by the move `best`: it gains depth^2, the moves tried before it
-    /// (`tried`) lose depth^2 / their count.
-    pub fn update(&mut self, best: usize, tried: &[usize], depth: i32) {
-        let bonus = (depth * depth) as f64;
+    /// A cutoff at depth `depth` by the move `best`: it gains depth^`exponent`, the moves tried
+    /// before it (`tried`) lose `malus` times that / their count.
+    pub fn update(&mut self, best: usize, tried: &[usize], depth: f64, exponent: f64, malus: f64) {
+        let bonus = depth.max(0.0).powf(exponent);
         self.table[best] += bonus;
         for &k in tried {
-            self.table[k] -= bonus / tried.len() as f64;
+            self.table[k] -= malus * bonus / tried.len() as f64;
         }
     }
 
