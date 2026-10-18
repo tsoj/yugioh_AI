@@ -6,8 +6,6 @@ pub const WIN: f64 = 10_000_000.0;
 pub const MAX_DEPTH: i32 = 100;
 /// (without a time control: a fixed depth)
 pub const DEPTH_NO_CLOCK: i32 = 2;
-/// (per node, after ordering)
-pub const MAX_CHILDREN: usize = 12;
 /// (a one-card selection: the rules' first choices only, below the root and at the root; the root's
 /// width 3 -> 5 by SPSA run 1, see FUTILITY_MARGIN)
 pub const CARD_WIDTH: usize = 3;
@@ -82,7 +80,6 @@ pub const FUTILITY_MARGIN_PER_PLY: f64 = 228.1061522305487;
 /// constants above; $YGOAI_TUNE as "name=value,..." overrides some (read once).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tune {
-    pub max_children: usize,
     pub card_width: usize,
     pub root_card_width: usize,
     pub lmr_min_depth: f64,
@@ -100,7 +97,6 @@ pub struct Tune {
 impl Default for Tune {
     fn default() -> Self {
         Tune {
-            max_children: MAX_CHILDREN,
             card_width: CARD_WIDTH,
             root_card_width: ROOT_CARD_WIDTH,
             lmr_min_depth: LMR_MIN_DEPTH,
@@ -119,8 +115,7 @@ impl Default for Tune {
 
 impl Tune {
     /// The parameters' names, in a fixed order.
-    pub const NAMES: [&'static str; 13] = [
-        "max_children",
+    pub const NAMES: [&'static str; 12] = [
         "card_width",
         "root_card_width",
         "lmr_min_depth",
@@ -138,7 +133,6 @@ impl Tune {
     /// The parameter `name`'s value (as a number).
     pub fn get(&self, name: &str) -> Option<f64> {
         Some(match name {
-            "max_children" => self.max_children as f64,
             "card_width" => self.card_width as f64,
             "root_card_width" => self.root_card_width as f64,
             "lmr_min_depth" => self.lmr_min_depth,
@@ -160,7 +154,6 @@ impl Tune {
     pub fn set(&mut self, name: &str, v: f64) -> bool {
         let n = v.round().max(0.0);
         match name {
-            "max_children" => self.max_children = (n as usize).max(1),
             "card_width" => self.card_width = (n as usize).max(1),
             "root_card_width" => self.root_card_width = (n as usize).max(1),
             "lmr_min_depth" => self.lmr_min_depth = v,

@@ -339,7 +339,6 @@ impl SearchState<'_> {
                 .partial_cmp(&((Some(b) != tt_move), -history.get(history_keys[b])))
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        move_order.truncate(t.max_children);
 
         let mut node_type = NodeType::AllNode;
         let (mut best_value, mut best_move) = (f64::NEG_INFINITY, move_order[0]);
