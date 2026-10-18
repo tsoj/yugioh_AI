@@ -15,12 +15,13 @@
 //!   ygoai-spsa OUT_DIR --games FILE [--games FILE ...] [--positions N] [--validation N]
 //!       [--nodes N] [--ref-nodes N] [--batch N] [--iterations N] [--jobs N] [--seed N]
 //!       [--params name,name,...] [--spec FILE] [--value-weight X] [--clamp LP]
-//!       [--alpha X] [--gamma X] [--a-ratio X] [--every N]
+//!       [--alpha X] [--gamma X] [--a-ratio X] [--every N] [--compare NAME=VALUE,...]
 //!
 //! FILE: ygoai-datagen's OUT.games.jsonl or ygoai-match's records. --spec: lines "name, int|float,
 //! min, max, c_end, r_end" (the start is the current default). OUT_DIR gets refs.jsonl (the
 //! positions and their references, reused by a later run with the same files, seed, reference
-//! nodes and default parameters), spsa.jsonl (each iteration) and the final values as tune.txt ($YGOAI_TUNE).
+//! nodes and default parameters; --compare: only the defaults vs the given parameters on all the
+//! positions, with the paired standard error), spsa.jsonl (each iteration) and the final values as tune.txt ($YGOAI_TUNE).
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
@@ -93,6 +94,7 @@ struct Args {
     gamma: f64,
     a_ratio: f64,
     every: usize,
+    compare: Option<String>,
 }
 
 fn usage(msg: &str) -> ! {
@@ -123,6 +125,7 @@ fn parse_args() -> Args {
         gamma: 0.101,
         a_ratio: 0.1,
         every: 100,
+        compare: None,
     };
     let mut i = 1;
     while i < argv.len() {
@@ -147,6 +150,7 @@ fn parse_args() -> Args {
             "--gamma" => a.gamma = num(&v),
             "--a-ratio" => a.a_ratio = num(&v),
             "--every" => a.every = num(&v) as usize,
+            "--compare" => a.compare = Some(v),
             _ => usage(&format!("unknown option {k}")),
         }
         i += 2;
@@ -430,10 +434,13 @@ fn main() {
         usage("too few positions");
     }
     let (validation, train) = pool.split_at(a.validation);
-    let (validation, mut train) = (validation.to_vec(), train.to_vec());
+    let validation = validation.to_vec();
+    // (the training positions by worker: a batch takes the same number from each, so that the
+    // workers finish an iteration together)
+    let mut train: Vec<Vec<(usize, usize)>> = (0..a.jobs).map(|w| train.iter().cloned().filter(|p| p.0 == w).collect()).filter(|v: &Vec<_>| !v.is_empty()).collect();
 
-    // evaluates (position, tag) pairs on the workers: the mean [loss, regret, value error] per tag
-    let evaluate = |items: &[((usize, usize), u8)], tunes: &[Tune]| -> Vec<[f64; 3]> {
+    // evaluates (position, tag) pairs on the workers: each pair's [loss, regret, value error]
+    let evaluate = |items: &[((usize, usize), u8)], tunes: &[Tune]| -> BTreeMap<((usize, usize), u8), [f64; 3]> {
         let mut by_worker: Vec<Vec<(usize, u8)>> = vec![vec![]; job_txs.len()];
         for &((w, local), tag) in items {
             by_worker[w].push((local, tag));
@@ -445,16 +452,48 @@ fn main() {
                 waiting += 1;
             }
         }
-        let mut sums = vec![[0.0f64; 4]; tunes.len()];
+        let mut out = BTreeMap::new();
         for _ in 0..waiting {
-            let (_, out) = res_rx.recv().unwrap();
-            for (_, tag, r) in out {
-                let s = &mut sums[tag as usize];
-                (s[0], s[1], s[2], s[3]) = (s[0] + r[0], s[1] + r[1], s[2] + r[2], s[3] + 1.0);
+            let (w, results) = res_rx.recv().unwrap();
+            for (local, tag, r) in results {
+                out.insert(((w, local), tag), r);
             }
+        }
+        out
+    };
+    // the mean [loss, regret, value error] per tag
+    let means = |results: &BTreeMap<((usize, usize), u8), [f64; 3]>, tags: usize| -> Vec<[f64; 3]> {
+        let mut sums = vec![[0.0f64; 4]; tags];
+        for ((_, tag), r) in results {
+            let s = &mut sums[*tag as usize];
+            (s[0], s[1], s[2], s[3]) = (s[0] + r[0], s[1] + r[1], s[2] + r[2], s[3] + 1.0);
         }
         sums.iter().map(|s| [s[0] / s[3].max(1.0), s[1] / s[3].max(1.0), s[2] / s[3].max(1.0)]).collect()
     };
+    // tag 1's loss minus tag 0's over the same positions: (mean, standard error)
+    let paired = |results: &BTreeMap<((usize, usize), u8), [f64; 3]>| -> (f64, f64) {
+        let d: Vec<f64> = results.iter().filter(|((_, tag), _)| *tag == 1).filter_map(|((p, _), r)| results.get(&(*p, 0)).map(|r0| r[0] - r0[0])).collect();
+        let n = d.len().max(2) as f64;
+        let mean = d.iter().sum::<f64>() / n;
+        let var = d.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0);
+        (mean, (var / n).sqrt())
+    };
+    // (--compare: the defaults vs the given parameters on every position, then exit)
+    if let Some(list) = &a.compare {
+        let other = Tune::parse(list).unwrap_or_else(|e| usage(&e));
+        let items: Vec<((usize, usize), u8)> = pool.iter().flat_map(|&p| [(p, 0u8), (p, 1u8)]).collect();
+        let results = evaluate(&items, &[Tune::default(), other]);
+        let r = means(&results, 2);
+        let (d, se) = paired(&results);
+        println!(
+            "[{:6.0}s] {} positions: loss default {:.1} (regret {:.1}, value error {:.1}), given {:.1} (regret {:.1}, value error {:.1}); given - default {d:+.1} +/- {se:.1}",
+            t0.elapsed().as_secs_f64(), pool.len(), r[0][0], r[0][1], r[0][2], r[1][0], r[1][1], r[1][2]
+        );
+        for tx in &job_txs {
+            let _ = tx.send(Job::Stop);
+        }
+        return;
+    }
 
     // SPSA (fishtest's and OpenBench's constants)
     let n_iter = a.iterations as f64;
@@ -472,9 +511,11 @@ fn main() {
     let validate = |theta: &[f64], k: usize| {
         let rounded: Vec<f64> = specs.iter().zip(theta).map(|(s, v)| if s.is_int { v.round() } else { *v }).collect();
         let items: Vec<((usize, usize), u8)> = validation.iter().flat_map(|&p| [(p, 0u8), (p, 1u8)]).collect();
-        let r = evaluate(&items, &[Tune::default(), tune_of(&rounded)]);
+        let results = evaluate(&items, &[Tune::default(), tune_of(&rounded)]);
+        let r = means(&results, 2);
+        let (d, se) = paired(&results);
         println!(
-            "[{:6.0}s] iter {k}: validation loss default {:.1} (regret {:.1}, value error {:.1}), theta {:.1} (regret {:.1}, value error {:.1}); {}",
+            "[{:6.0}s] iter {k}: validation loss default {:.1} (regret {:.1}, value error {:.1}), theta {:.1} (regret {:.1}, value error {:.1}), theta - default {d:+.1} +/- {se:.1}; {}",
             t0.elapsed().as_secs_f64(),
             r[0][0], r[0][1], r[0][2], r[1][0], r[1][1], r[1][2],
             specs.iter().zip(theta).map(|(s, v)| format!("{}={v:.2}", s.name)).collect::<Vec<_>>().join(" ")
@@ -484,7 +525,7 @@ fn main() {
     let mut log = std::io::BufWriter::new(std::fs::File::create(a.out.join("spsa.jsonl")).unwrap());
     validate(&theta, 0);
     let (mut sq_sum, mut sq_n) = (0.0f64, 0.0f64);
-    let mut cursor = train.len();
+    let mut cursors: Vec<usize> = train.iter().map(|v| v.len()).collect();
     for k in 1..=a.iterations {
         let kf = k as f64;
         let mut flips = Vec::new();
@@ -504,18 +545,19 @@ fn main() {
             cs.push(c);
             rs.push(r);
         }
-        // the batch: the next positions of the shuffled training set
+        // the batch: the next positions of each worker's shuffled training positions, in turn
         let mut batch = Vec::with_capacity(a.batch);
         while batch.len() < a.batch {
-            if cursor >= train.len() {
-                rng.shuffle(&mut train);
-                cursor = 0;
+            let w = (k * a.batch + batch.len()) % train.len();
+            if cursors[w] >= train[w].len() {
+                rng.shuffle(&mut train[w]);
+                cursors[w] = 0;
             }
-            batch.push(train[cursor]);
-            cursor += 1;
+            batch.push(train[w][cursors[w]]);
+            cursors[w] += 1;
         }
         let items: Vec<((usize, usize), u8)> = batch.iter().flat_map(|&p| [(p, 0u8), (p, 1u8)]).collect();
-        let r = evaluate(&items, &[tune_of(&plus), tune_of(&minus)]);
+        let r = means(&evaluate(&items, &[tune_of(&plus), tune_of(&minus)]), 2);
         // (the result in units of its typical size, like a game pair's: minus' loss over plus')
         let raw = r[1][0] - r[0][0];
         sq_sum += raw * raw;

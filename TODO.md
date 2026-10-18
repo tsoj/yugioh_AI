@@ -129,6 +129,14 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       the rest unchanged. SPRT at 20+0.2 H1, +17.8 +/- 12.8 at 1484 games: merged (bench checksum
       fb0d2430d4f8e25f). Next: more iterations / other parameters (time management, history decay,
       the move ordering), a deeper reference.
+      Run 2 (2026-10-18; fractional depths; tuned: lmr_min_depth, lmr_min_move_counter,
+      lmr_reduction, lmr_reduction_per_move (new, from 0), futility_*, hist_exponent (new),
+      hist_malus (new); 1000 nodes vs a 4000-node reference, refs ~20 min, 3000 iterations ~1.6 h):
+      no gain. Final lmr_reduction 1.24, per move 0.03, the rest near the defaults; on all 4500
+      positions (`--compare`) +9.3 +/- 6.9 loss vs the defaults (592.7): not merged, no SPRT.
+      One validation position can move the mean by 16 (regret clamp 8000 / 500): the validation
+      now prints the paired difference with its standard error; batches take the same number of
+      positions from each worker (the iteration waited for the unluckiest one, ~75% CPU).
 - [x] Futility pruning again (Stockfish's parent-node form): the moves after the first at depth
       <= 3 whose static eval + 45 + 4 * depth cannot raise alpha (margins measured with the mover2
       eval: the 99th percentile of the gap over the moves that raised alpha, 49/52/55/72 at depth
