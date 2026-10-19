@@ -41,6 +41,9 @@ fn main() {
     let mut tt = (0u64, 0u64);
     // (per search: the completed depth, the greatest height, the main line's height)
     let mut heights: [Vec<i32>; 3] = Default::default();
+    // (the main-line extension: its nodes [all, decided, another card than the rules'], and the
+    // searches whose last iteration's main line it extended)
+    let (mut ext, mut ext_searches) = ([0u64; 3], 0u32);
     let mut broken = 0u64;
     let stats_path = std::env::var("YGOAI_STATS").ok();
     let mut stats = NodeStats::default();
@@ -87,6 +90,7 @@ fn main() {
                 ab.prepare();
                 let before = ab.nodes;
                 let (bp, bh, bb) = (ab.tt_probes, ab.tt_hits, ab.broken);
+                let ext_before = ab.ext_nodes;
                 let t = Instant::now();
                 let params = SearchParams { budget, elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2], max_nodes, depth: None, exact_root: false };
                 let (best, done) = ab.search(&duel, &p, &cands, &params);
@@ -102,6 +106,10 @@ fn main() {
                 broken += ab.broken - bb;
                 searches += 1;
                 depth_sum += done as i64;
+                for (k, e) in ext.iter_mut().enumerate() {
+                    *e += ab.ext_nodes[k] - ext_before[k];
+                }
+                ext_searches += (ab.pv_height > done) as u32;
                 for (v, h) in heights.iter_mut().zip([done, ab.seldepth, ab.pv_height]) {
                     v.push(h);
                 }
@@ -129,6 +137,14 @@ fn main() {
         let mean = v.iter().map(|&x| x as f64).sum::<f64>() / v.len().max(1) as f64;
         println!("{name:>16}: mean {mean:.2}, min {}, p10 {}, p25 {}, median {}, p75 {}, p90 {}, max {}", q(0.0), q(0.1), q(0.25), q(0.5), q(0.75), q(0.9), q(1.0));
     }
+    println!(
+        "main-line extension: {} nodes ({:.2}% of all), {} decided, {} of them ({:.1}%) another card than the rules'; it extended the last iteration's main line in {ext_searches} of {searches} searches",
+        ext[0],
+        100.0 * ext[0] as f64 / nodes.max(1) as f64,
+        ext[1],
+        ext[2],
+        100.0 * ext[2] as f64 / ext[1].max(1) as f64
+    );
     if time_eval {
         println!("evaluation: {:.2} us per call ({eval_calls} calls)", eval_secs / eval_calls as f64 * 1e6);
     }

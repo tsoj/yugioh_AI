@@ -81,6 +81,9 @@ pub struct AlphaBeta {
     /// first move at every node) reached in the last completed iteration
     pub seldepth: i32,
     pub pv_height: i32,
+    /// the main-line horizon extension's nodes: all, those with an exact value or a cutoff, and of
+    /// these the ones whose best card is not the rules' first
+    pub ext_nodes: [u64; 3],
     pv_height_now: i32,
 }
 
@@ -100,6 +103,7 @@ impl Default for AlphaBeta {
             growth: vec![[GROWTH_PRIOR.ln() * GROWTH_PRIOR_WEIGHT, GROWTH_PRIOR_WEIGHT]; MAX_DEPTH as usize + 2],
             seldepth: 0,
             pv_height: 0,
+            ext_nodes: [0; 3],
             pv_height_now: 0,
         }
     }
@@ -311,7 +315,8 @@ impl SearchState<'_> {
                 return Ok(evaluate_at(duel, us, Some(prompt)));
             }
         }
-        let depth = if depth <= 0.0 { 1.0 } else { depth };
+        let extended = depth <= 0.0;
+        let depth = if extended { 1.0 } else { depth };
 
         // (moves are indices into the rules' order: the hash table keeps one, the history reorders them)
         let card_order = self.rules_card_order(prompt);
@@ -442,6 +447,14 @@ impl SearchState<'_> {
             let e = st.subtree.entry((label, depth.round().clamp(-1.0, 60.0) as i8)).or_default();
             e[0] += 1;
             e[1] += self.tables.nodes - nodes_before + 1;
+        }
+        if extended {
+            let e = &mut self.tables.ext_nodes;
+            e[0] += 1;
+            if node_type != NodeType::AllNode {
+                e[1] += 1;
+                e[2] += (best_move != 0) as u64;
+            }
         }
         if best_value.abs() < WIN / 2.0 {
             // (not a win or loss: those depend on the height)
