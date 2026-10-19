@@ -166,14 +166,15 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
 - [x] Linear LMR (`lmr_reduction_per_move`, the reduction 1 + x * (move - 2), 2026-10-19, without
       the 12 cap): x = 0.1 at 500 nodes stopped at 680 games (-3.6 +/- 17.7, LLR -1.05); x = 0.25 at
       1000 nodes stopped at 1160 games (-1.5 +/- 13.9, LLR -1.29): not merged.
-- [ ] Futility reductions instead of the pruning (Nalwald's, the static eval after the move in place
+- [x] Futility reductions instead of the pruning (Nalwald's, the static eval after the move in place
       of static eval + SEE, `futility_reduction_div`, 58ce4b1, 2026-10-19). Mean depth at bench
       3000n (default 13.05), fractional: div 300 15.50, 500 14.75, 800 13.82, 1200 13.26, 2400
       12.20, 4000 11.41; NPS ~4% lower. Div 800 at 10+0.1: H0, -3.7 +/- 10.6 at 2360 games.
       Div 500 at 10+0.1: H0, -20.4 +/- 18.3 at 562 games. Not merged (the pruning stays).
-- [ ] The decisions inside a move in the tree again, all types (`inner_width` 3, `is_inner`,
+- [x] The decisions inside a move in the tree again, all types (`inner_width` 3, `is_inner`,
       `tree_candidates`, the rules at the horizon, 58ce4b1): bench depth 13.65 (inner decisions
-      count as plies), ~12% lower NPS. SPRT at 10+0.1 running (merge on H1 or a stop above +3).
+      count as plies), ~12% lower NPS. SPRT at 10+0.1: H0, -23.1 +/- 19.1 at 724 games. Not
+      merged (inner_width stays 0; the code stays, off).
 - [x] Futility pruning again (Stockfish's parent-node form): the moves after the first at depth
       <= 3 whose static eval + 45 + 4 * depth cannot raise alpha (margins measured with the mover2
       eval: the 99th percentile of the gap over the moves that raised alpha, 49/52/55/72 at depth
