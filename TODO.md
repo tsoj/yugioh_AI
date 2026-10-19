@@ -180,8 +180,9 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       searched) is searched one ply deep at the horizon too, so the search finishes the move. Bench
       mean depth 13.05 -> 13.00, same NPS. SPRT at 10+0.1 H1, +25.4 +/- 16.4 at 890 games: default
       since 2026-10-19, bench checksum ba6b42dff5abf893.
-  - [ ] Next ideas: with `inner_width` 3 on the main line only; extend more than the main line
-        (e.g. every PV node, or the first k moves).
+  - [x] At every node whose window is wider than the null window (`pv_extension=2`, user): bench
+        depth 13.08, same NPS; SPRT vs the main line at 10+0.1 H0, -15.8 +/- 16.3 at 838 games.
+  - [ ] Next ideas: with `inner_width` 3 on the main line only; the first k moves at main-line nodes.
 - [x] Futility pruning again (Stockfish's parent-node form): the moves after the first at depth
       <= 3 whose static eval + 45 + 4 * depth cannot raise alpha (margins measured with the mover2
       eval: the 99th percentile of the gap over the moves that raised alpha, 49/52/55/72 at depth
