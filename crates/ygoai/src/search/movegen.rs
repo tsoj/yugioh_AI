@@ -57,6 +57,38 @@ pub fn root_candidates(m: &Msg, rules: &Heuristic, state: Option<&Snapshot>) -> 
     if is_searched(m) && !matches!(m, Msg::SelectCard { .. }) {
         return candidates(m);
     }
+    decision_candidates(m, rules, state, ROOT_COMBO_WIDTH, false)
+}
+
+/// The decisions inside a move that the tree searches (`Tune::inner_width` > 0): those
+/// `root_candidates` makes beyond the searched prompts' candidates.
+pub fn is_inner(m: &Msg) -> bool {
+    matches!(
+        m,
+        Msg::SelectCard { .. }
+            | Msg::SelectUnselectCard { .. }
+            | Msg::SelectTribute { .. }
+            | Msg::SelectSum { .. }
+            | Msg::SelectPosition { .. }
+            | Msg::SelectPlace { .. }
+            | Msg::SelectDisfield { .. }
+            | Msg::SelectCounter { .. }
+            | Msg::SortCard { .. }
+            | Msg::SortChain { .. }
+            | Msg::AnnounceNumber { .. }
+            | Msg::AnnounceRace { .. }
+            | Msg::AnnounceAttrib { .. }
+    ) && !matches!(m, Msg::SelectCard { min: 1, max: 1, .. })
+}
+
+/// An inner decision's moves in the tree: as at the root, but at most `width` of every type.
+pub fn tree_candidates(m: &Msg, rules: &Heuristic, width: usize) -> Vec<Response> {
+    decision_candidates(m, rules, None, width, true)
+}
+
+/// (`root_candidates` beyond the searched prompts: combinations at most `width`, and with
+/// `cap_all` also positions, numbers, types and attributes)
+fn decision_candidates(m: &Msg, rules: &Heuristic, state: Option<&Snapshot>, width: usize, cap_all: bool) -> Vec<Response> {
     let rules_answer = || rules.clone().respond_to(m, state).ok();
     let indices = |mut idx: Vec<usize>| {
         idx.sort();
@@ -87,7 +119,7 @@ pub fn root_candidates(m: &Msg, rules: &Heuristic, state: Option<&Snapshot>) -> 
             out
         }
         Msg::SelectUnselectCard { finishable, cancelable, select_cards, .. } => {
-            let mut out: Vec<Response> = rules.card_order(select_cards).into_iter().take(ROOT_COMBO_WIDTH).map(idx).collect();
+            let mut out: Vec<Response> = rules.card_order(select_cards).into_iter().take(width).map(idx).collect();
             if *finishable != 0 || (*cancelable != 0 && select_cards.is_empty()) {
                 out.push(Response { finish: Some(true), ..Response::default() });
             }
@@ -114,7 +146,7 @@ pub fn root_candidates(m: &Msg, rules: &Heuristic, state: Option<&Snapshot>) -> 
             let mut by_value: Vec<usize> = (0..cards.len()).collect();
             let v = |i: usize| card_value(&cards[i], card(cards[i].code));
             by_value.sort_by(|&a, &b| v(a).partial_cmp(&v(b)).unwrap_or(std::cmp::Ordering::Equal));
-            sum_selections(m, &by_value).into_iter().map(indices).collect()
+            sum_selections(m, &by_value, width).into_iter().map(indices).collect()
         }
         Msg::SelectPosition { code, positions, .. } => {
             let order = if card(*code).is_some_and(|c| c.attack <= 0) {
@@ -155,7 +187,7 @@ pub fn root_candidates(m: &Msg, rules: &Heuristic, state: Option<&Snapshot>) -> 
             // (the orders in lexicographic order: as listed first, the rules' answer)
             let mut order: Vec<i64> = (0..cards.len() as i64).collect();
             let mut out = vec![Response { order: Some(order.clone()), ..Response::default() }];
-            while out.len() < ROOT_COMBO_WIDTH && next_permutation(&mut order) {
+            while out.len() < width && next_permutation(&mut order) {
                 out.push(Response { order: Some(order.clone()), ..Response::default() });
             }
             out
@@ -167,16 +199,17 @@ pub fn root_candidates(m: &Msg, rules: &Heuristic, state: Option<&Snapshot>) -> 
         }
         _ => vec![],
     };
-    // (no duplicates; combinations at most ROOT_COMBO_WIDTH)
-    let mut seen = Vec::new();
+    // (no duplicates; combinations at most `width`)
+    let mut seen: Vec<Response> = Vec::new();
     out.retain(|r| {
-        let key = serde_json::to_string(r).unwrap_or_default();
-        let new = !seen.contains(&key);
-        seen.push(key);
+        let new = !seen.contains(r);
+        if new {
+            seen.push(r.clone());
+        }
         new
     });
-    if !matches!(m, Msg::SelectPosition { .. } | Msg::AnnounceNumber { .. } | Msg::AnnounceRace { .. } | Msg::AnnounceAttrib { .. }) {
-        out.truncate(ROOT_COMBO_WIDTH);
+    if cap_all || !matches!(m, Msg::SelectPosition { .. } | Msg::AnnounceNumber { .. } | Msg::AnnounceRace { .. } | Msg::AnnounceAttrib { .. }) {
+        out.truncate(width);
     }
     out
 }
@@ -207,14 +240,14 @@ fn next_permutation(v: &mut [i64]) -> bool {
     true
 }
 
-/// Up to ROOT_COMBO_WIDTH valid selections of a sum prompt, by a depth-first search over the cards
+/// Up to `width` valid selections of a sum prompt, by a depth-first search over the cards
 /// in `order` (the first cards first; a bounded number of steps).
-fn sum_selections(m: &Msg, order: &[usize]) -> Vec<Vec<usize>> {
+fn sum_selections(m: &Msg, order: &[usize], width: usize) -> Vec<Vec<usize>> {
     let Msg::SelectSum { max, .. } = m else { return vec![] };
     #[allow(clippy::too_many_arguments)]
-    fn dfs(m: &Msg, order: &[usize], start: usize, max: usize, chosen: &mut Vec<usize>, out: &mut Vec<Vec<usize>>, steps: &mut usize) {
+    fn dfs(m: &Msg, order: &[usize], start: usize, max: usize, width: usize, chosen: &mut Vec<usize>, out: &mut Vec<Vec<usize>>, steps: &mut usize) {
         *steps += 1;
-        if out.len() >= ROOT_COMBO_WIDTH || *steps > SUM_STEPS {
+        if out.len() >= width || *steps > SUM_STEPS {
             return;
         }
         if !chosen.is_empty() && check_sum(m, chosen) {
@@ -226,11 +259,11 @@ fn sum_selections(m: &Msg, order: &[usize]) -> Vec<Vec<usize>> {
         }
         for k in start..order.len() {
             chosen.push(order[k]);
-            dfs(m, order, k + 1, max, chosen, out, steps);
+            dfs(m, order, k + 1, max, width, chosen, out, steps);
             chosen.pop();
         }
     }
     let (mut out, mut steps) = (Vec::new(), 0);
-    dfs(m, order, 0, (*max as usize).max(1), &mut Vec::new(), &mut out, &mut steps);
+    dfs(m, order, 0, (*max as usize).max(1), width, &mut Vec::new(), &mut out, &mut steps);
     out
 }

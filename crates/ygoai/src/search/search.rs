@@ -18,7 +18,7 @@ use ygo_core::duel::Duel;
 
 use super::evaluate::evaluate_at;
 use super::history::HistoryTable;
-use super::movegen::{candidates, is_searched};
+use super::movegen::{candidates, is_inner, is_searched, tree_candidates};
 use super::movepick::{listed, move_key, move_kind, ordered, prompt_label};
 use super::params::*;
 use super::tt::{NodeType, TranspositionTable, hash_key};
@@ -235,8 +235,8 @@ impl SearchState<'_> {
             let mut aborted = false;
             for &m in &move_order {
                 let lower = if exact_root { f64::NEG_INFINITY } else { alpha };
-                match self.search_move(&mut root_duel, prompt, &moves[m], lower, f64::INFINITY, (depth - 1) as f64, 1, false) {
-                    Ok(value) => {
+                match self.search_move(&mut root_duel, prompt, &moves[m], lower, f64::INFINITY, (depth - 1) as f64, 1, false, None) {
+                    Ok((value, _)) => {
                         values[m] = Some(value);
                         if value > alpha {
                             (alpha, iteration_best) = (value, Some(m));
@@ -295,8 +295,19 @@ impl SearchState<'_> {
         }
 
         // (moves are indices into the rules' order: the hash table keeps one, the history reorders them)
-        let card_order = self.rules_card_order(prompt);
-        let mut moves = ordered(prompt, duel.ext_get_info()[1], card_order.as_deref());
+        let inner_width = self.tables.tune.inner_width;
+        let mut moves = if inner_width > 0 && is_inner(prompt) {
+            let policy = &mut self.policies[us as usize];
+            let moves = tree_candidates(prompt, policy, inner_width);
+            policy.hint = None;
+            moves
+        } else {
+            let card_order = self.rules_card_order(prompt);
+            ordered(prompt, duel.ext_get_info()[1], card_order.as_deref())
+        };
+        if moves.is_empty() {
+            return Ok(evaluate_at(duel, us, Some(prompt)));
+        }
         if matches!(prompt, Msg::SelectCard { min: 1, max: 1, .. }) {
             moves.truncate(self.tables.tune.card_width);
         }
@@ -326,9 +337,11 @@ impl SearchState<'_> {
         }
 
         let t = self.tables.tune;
-        let static_eval = if depth <= t.futility_max_depth || (self.tables.stats.is_some() && depth <= 4.0) { Some(evaluate_at(duel, us, Some(prompt))) } else { None };
+        // (futility reductions instead of futility pruning if futility_reduction_div > 0, see below)
+        let reductions = t.futility_reduction_div > 0.0;
+        let static_eval = if (!reductions && depth <= t.futility_max_depth) || (self.tables.stats.is_some() && depth <= 4.0) { Some(evaluate_at(duel, us, Some(prompt))) } else { None };
         // (futility pruning: the moves after the first whose static eval plus the margin cannot raise alpha)
-        let futility_value = static_eval.filter(|_| depth <= t.futility_max_depth).map(|s| s + t.futility_margin + t.futility_margin_per_ply * depth);
+        let futility_value = static_eval.filter(|_| !reductions && depth <= t.futility_max_depth).map(|s| s + t.futility_margin + t.futility_margin_per_ply * depth);
 
         // move ordering: the TT move first, then by history (the rules' order among equals)
         let history_keys: Vec<usize> = moves.iter().map(|m| move_key(prompt, m)).collect();
@@ -364,6 +377,10 @@ impl SearchState<'_> {
             let last = i == move_order.len() - 1;
             let new_depth = depth - 1.0;
             let mut value = None;
+            // futility reduction (Nalwald's, with the static eval after the move for static eval + SEE):
+            // a later move whose position falls short of alpha by k * futility_reduction_div is
+            // searched k plies less (fractional) with a null window, at the full depth and window if it raises alpha
+            let fr = (reductions && i >= t.futility_reduction_min_move_counter && alpha.is_finite() && alpha.abs() < WIN / 2.0).then_some(alpha);
 
             // late move reduction: a late move, unlikely the best by the move ordering, searched
             // `lmr_reduction` plies less (and `lmr_reduction_per_move` more for each move after the
@@ -372,7 +389,7 @@ impl SearchState<'_> {
             if depth >= t.lmr_min_depth && i >= t.lmr_min_move_counter {
                 let reduced_beta = if alpha.is_finite() { alpha + NULL_WINDOW } else { beta };
                 let reduction = t.lmr_reduction + t.lmr_reduction_per_move * (i - t.lmr_min_move_counter) as f64;
-                let reduced = self.search_move(duel, prompt, mv, alpha, reduced_beta, (new_depth - reduction).max(0.0), height + 1, false)?;
+                let (reduced, _) = self.search_move(duel, prompt, mv, alpha, reduced_beta, (new_depth - reduction).max(0.0), height + 1, false, fr)?;
                 if reduced <= alpha {
                     value = Some(reduced);
                 }
@@ -385,7 +402,10 @@ impl SearchState<'_> {
 
             let value = match value {
                 Some(v) => v,
-                None => self.search_move(duel, prompt, mv, alpha, beta, new_depth, height + 1, last)?,
+                None => match self.search_move(duel, prompt, mv, alpha, beta, new_depth, height + 1, last && fr.is_none(), fr)? {
+                    (v, true) if v > alpha => self.search_move(duel, prompt, mv, alpha, beta, new_depth, height + 1, last, None)?.0,
+                    (v, _) => v,
+                },
             };
 
             if let Some(s) = static_eval
@@ -439,17 +459,17 @@ impl SearchState<'_> {
     /// hint are this node's again, and a broken line (one the core cannot play) is a loss for the
     /// mover, who avoids it (in place it is the caller's copy's loss).
     #[allow(clippy::too_many_arguments)]
-    fn search_move(&mut self, duel: &mut Duel, prompt: &Msg, mv: &Response, alpha: f64, beta: f64, depth: f64, height: i32, in_place: bool) -> Result<f64, Stop> {
+    fn search_move(&mut self, duel: &mut Duel, prompt: &Msg, mv: &Response, alpha: f64, beta: f64, depth: f64, height: i32, in_place: bool, fr: Option<f64>) -> Result<(f64, bool), Stop> {
         if self.should_stop() {
             return Err(Stop::Abort);
         }
         self.tables.nodes += 1;
         if in_place {
-            return self.make_and_search(duel, prompt, mv, alpha, beta, depth, height);
+            return self.make_and_search(duel, prompt, mv, alpha, beta, depth, height, fr);
         }
         let mut new_duel = duel.clone();
         let saved: Vec<_> = self.policies.iter().map(|p| (p.activations.clone(), p.hint)).collect();
-        let result = self.make_and_search(&mut new_duel, prompt, mv, alpha, beta, depth, height);
+        let result = self.make_and_search(&mut new_duel, prompt, mv, alpha, beta, depth, height, fr);
         for (p, (activations, hint)) in self.policies.iter_mut().zip(saved) {
             (p.activations, p.hint) = (activations, hint);
         }
@@ -459,18 +479,36 @@ impl SearchState<'_> {
                 if std::env::var_os("YGOAI_DEBUG_BROKEN").is_some() {
                     eprintln!("broken: {} {mv:?}", prompt.name());
                 }
-                Ok(-WIN)
+                Ok((-WIN, false))
             }
             Err(_) => Err(Stop::Abort),
             Ok(v) => Ok(v),
         }
     }
 
-    /// (`search_move` on the given duel)
+    /// (`search_move` on the given duel; with `fr` (alpha) the futility reduction by the static
+    /// eval after the move: then a null window at `fr`, and true if the depth was reduced)
     #[allow(clippy::too_many_arguments)]
-    fn make_and_search(&mut self, duel: &mut Duel, prompt: &Msg, mv: &Response, alpha: f64, beta: f64, depth: f64, height: i32) -> Result<f64, Stop> {
+    fn make_and_search(&mut self, duel: &mut Duel, prompt: &Msg, mv: &Response, alpha: f64, beta: f64, depth: f64, height: i32, fr: Option<f64>) -> Result<(f64, bool), Stop> {
         let us = prompt.player().unwrap_or(0);
-        Ok(match self.do_move(duel, prompt, mv, depth)? {
+        let position = self.do_move(duel, prompt, mv, depth)?;
+        if let (Some(a), NewPosition::Decision(next)) = (fr, &position) {
+            let estimate = evaluate_at(duel, us, Some(next));
+            let reduction = (a - estimate) / self.tables.tune.futility_reduction_div;
+            if reduction > 0.0 {
+                let depth = (depth - reduction).max(0.0);
+                if depth <= 0.0 {
+                    return Ok((estimate, true)); // (the horizon: the static eval, already known)
+                }
+                let v = if next.player().unwrap_or(0) == us {
+                    self.search(duel, next, a, a + NULL_WINDOW, depth, height)?
+                } else {
+                    -self.search(duel, next, -(a + NULL_WINDOW), -a, depth, height)?
+                };
+                return Ok((v, true));
+            }
+        }
+        Ok((match position {
             NewPosition::Win(winner) => {
                 if winner == us {
                     WIN - height as f64
@@ -487,7 +525,7 @@ impl SearchState<'_> {
                     -self.search(duel, &next, -beta, -alpha, depth, height)?
                 }
             }
-        })
+        }, false))
     }
 
     /// Makes the move: the response, then the core runs on, the rules answering the decisions
@@ -518,6 +556,12 @@ impl SearchState<'_> {
             let response = if is_hidden_prompt(&prompt) {
                 auto_response()
             } else if matches!(prompt, Msg::SelectCard { .. }) && depth <= 0.0 {
+                self.policies[player as usize].respond_to(&prompt, None).map_err(|_| Stop::Broken)?
+            } else if self.tables.tune.inner_width > 0 && is_inner(&prompt) && depth > 0.0 {
+                // (a decision inside the move, with depth left: searched if it has a choice)
+                if tree_candidates(&prompt, &self.policies[player as usize], self.tables.tune.inner_width).len() > 1 {
+                    return Ok(NewPosition::Decision(prompt));
+                }
                 self.policies[player as usize].respond_to(&prompt, None).map_err(|_| Stop::Broken)?
             } else if is_searched(&prompt) {
                 let moves = candidates(&prompt);

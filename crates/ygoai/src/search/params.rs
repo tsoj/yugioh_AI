@@ -15,6 +15,9 @@ pub const ROOT_CARD_WIDTH: usize = 5;
 /// ROOT_COMBO_CARDS cards or places; a sum's search for valid selections stops after SUM_STEPS;
 /// SPRT at 20+0.2 H1, +11.5 +/- 9.2 at 2836 games, 2026-10-18)
 pub const ROOT_COMBO_WIDTH: usize = 5;
+/// (the decisions inside a move searched in the tree too if > 0, `is_inner`: at most this many
+/// choices each, with depth left; at the horizon the rules answer)
+pub const INNER_WIDTH: usize = 0;
 pub const ROOT_COMBO_CARDS: usize = 6;
 pub const SUM_STEPS: usize = 20_000;
 
@@ -70,6 +73,12 @@ pub const LMR_REDUCTION_PER_MOVE: f64 = 0.0;
 pub const FUTILITY_MAX_DEPTH: f64 = 8.0;
 pub const FUTILITY_MARGIN: f64 = 546.633177069564;
 pub const FUTILITY_MARGIN_PER_PLY: f64 = 228.1061522305487;
+/// (futility reductions instead of the pruning if > 0, Nalwald's with the static eval after the move
+/// in place of static eval + SEE: from the move FUTILITY_REDUCTION_MIN_MOVE_COUNTER (0-based) on, a
+/// move whose position is short of alpha by k times FUTILITY_REDUCTION_DIV LP is searched k plies
+/// less, fractional)
+pub const FUTILITY_REDUCTION_DIV: f64 = 0.0;
+pub const FUTILITY_REDUCTION_MIN_MOVE_COUNTER: usize = 1;
 
 // The search features that failed their SPRTs and their parameters were removed on 2026-10-18
 // (pvs, rfp, rfpall, conthist, qsearch, narrowext, killers, nullmove, online, lmrlog, resample,
@@ -82,6 +91,7 @@ pub const FUTILITY_MARGIN_PER_PLY: f64 = 228.1061522305487;
 pub struct Tune {
     pub card_width: usize,
     pub root_card_width: usize,
+    pub inner_width: usize,
     pub lmr_min_depth: f64,
     pub lmr_min_move_counter: usize,
     pub lmr_reduction: f64,
@@ -89,6 +99,8 @@ pub struct Tune {
     pub futility_max_depth: f64,
     pub futility_margin: f64,
     pub futility_margin_per_ply: f64,
+    pub futility_reduction_div: f64,
+    pub futility_reduction_min_move_counter: usize,
     pub hist_decay: f64,
     pub hist_exponent: f64,
     pub hist_malus: f64,
@@ -99,6 +111,7 @@ impl Default for Tune {
         Tune {
             card_width: CARD_WIDTH,
             root_card_width: ROOT_CARD_WIDTH,
+            inner_width: INNER_WIDTH,
             lmr_min_depth: LMR_MIN_DEPTH,
             lmr_min_move_counter: LMR_MIN_MOVE_COUNTER,
             lmr_reduction: LMR_REDUCTION,
@@ -106,6 +119,8 @@ impl Default for Tune {
             futility_max_depth: FUTILITY_MAX_DEPTH,
             futility_margin: FUTILITY_MARGIN,
             futility_margin_per_ply: FUTILITY_MARGIN_PER_PLY,
+            futility_reduction_div: FUTILITY_REDUCTION_DIV,
+            futility_reduction_min_move_counter: FUTILITY_REDUCTION_MIN_MOVE_COUNTER,
             hist_decay: HIST_DECAY,
             hist_exponent: HIST_EXPONENT,
             hist_malus: HIST_MALUS,
@@ -115,9 +130,10 @@ impl Default for Tune {
 
 impl Tune {
     /// The parameters' names, in a fixed order.
-    pub const NAMES: [&'static str; 12] = [
+    pub const NAMES: [&'static str; 15] = [
         "card_width",
         "root_card_width",
+        "inner_width",
         "lmr_min_depth",
         "lmr_min_move_counter",
         "lmr_reduction",
@@ -125,6 +141,8 @@ impl Tune {
         "futility_max_depth",
         "futility_margin",
         "futility_margin_per_ply",
+        "futility_reduction_div",
+        "futility_reduction_min_move_counter",
         "hist_decay",
         "hist_exponent",
         "hist_malus",
@@ -135,6 +153,7 @@ impl Tune {
         Some(match name {
             "card_width" => self.card_width as f64,
             "root_card_width" => self.root_card_width as f64,
+            "inner_width" => self.inner_width as f64,
             "lmr_min_depth" => self.lmr_min_depth,
             "lmr_min_move_counter" => self.lmr_min_move_counter as f64,
             "lmr_reduction" => self.lmr_reduction,
@@ -142,6 +161,8 @@ impl Tune {
             "futility_max_depth" => self.futility_max_depth,
             "futility_margin" => self.futility_margin,
             "futility_margin_per_ply" => self.futility_margin_per_ply,
+            "futility_reduction_div" => self.futility_reduction_div,
+            "futility_reduction_min_move_counter" => self.futility_reduction_min_move_counter as f64,
             "hist_decay" => self.hist_decay,
             "hist_exponent" => self.hist_exponent,
             "hist_malus" => self.hist_malus,
@@ -156,6 +177,7 @@ impl Tune {
         match name {
             "card_width" => self.card_width = (n as usize).max(1),
             "root_card_width" => self.root_card_width = (n as usize).max(1),
+            "inner_width" => self.inner_width = n as usize,
             "lmr_min_depth" => self.lmr_min_depth = v,
             "lmr_min_move_counter" => self.lmr_min_move_counter = n as usize,
             "lmr_reduction" => self.lmr_reduction = v.max(0.0),
@@ -163,6 +185,8 @@ impl Tune {
             "futility_max_depth" => self.futility_max_depth = v,
             "futility_margin" => self.futility_margin = v,
             "futility_margin_per_ply" => self.futility_margin_per_ply = v,
+            "futility_reduction_div" => self.futility_reduction_div = v.max(0.0),
+            "futility_reduction_min_move_counter" => self.futility_reduction_min_move_counter = (n as usize).max(1),
             "hist_decay" => self.hist_decay = v.clamp(0.0, 1.0),
             "hist_exponent" => self.hist_exponent = v,
             "hist_malus" => self.hist_malus = v.max(0.0),

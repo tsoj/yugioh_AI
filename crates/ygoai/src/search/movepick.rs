@@ -82,6 +82,14 @@ fn type_id(m: &Msg) -> u128 {
         Msg::SelectYesno { .. } => 5,
         Msg::SelectOption { .. } => 6,
         Msg::SelectCard { .. } => 7,
+        Msg::SelectUnselectCard { .. } => 8,
+        Msg::SelectTribute { .. } => 9,
+        Msg::SelectSum { .. } => 10,
+        Msg::SelectPosition { .. } => 11,
+        Msg::SelectPlace { .. } | Msg::SelectDisfield { .. } => 12,
+        Msg::SelectCounter { .. } => 13,
+        Msg::SortCard { .. } | Msg::SortChain { .. } => 14,
+        Msg::AnnounceNumber { .. } | Msg::AnnounceRace { .. } | Msg::AnnounceAttrib { .. } => 15,
         _ => 0,
     }
 }
@@ -164,12 +172,25 @@ pub fn move_key(m: &Msg, c: &Response) -> usize {
         kind = 1;
         if let (Msg::SelectCard { cards, .. }, [i]) = (m, ind.as_slice()) {
             code = cards.get(*i as usize).map_or(0, |e| e.code as u128);
+        } else if let Msg::SelectCard { cards, .. } | Msg::SelectTribute { cards, .. } | Msg::SelectSum { cards, .. } = m {
+            // (a set of cards: their codes)
+            code = ind.iter().fold(7u128, |h, &i| h.wrapping_mul(1000003).wrapping_add(cards.get(i as usize).map_or(0, |e| e.code as u128)));
         }
     } else if let Some(i) = c.index {
         kind = (1 + i) as u128;
+    } else if let Some(p) = c.position {
+        kind = p as u128;
+    } else if let Some(mask) = c.mask {
+        kind = mask as u128;
+    } else if let Some(places) = &c.places {
+        kind = places.iter().flatten().fold(7u128, |h, &x| h.wrapping_mul(1000003).wrapping_add(x as u128));
+    } else if let Some(order) = c.order.as_ref().or(c.counts.as_ref()) {
+        kind = order.iter().fold(7u128, |h, &x| h.wrapping_mul(1000003).wrapping_add(x as u128));
+    } else if c.finish == Some(true) {
+        kind = 2;
     }
     let player = m.player().unwrap_or(0) as u128;
-    let mut h = (((type_id(m) * 31 + player) * 31 + kind) * 1000003 + code) * 1000003 + desc;
+    let mut h = (((type_id(m) * 31 + player) * 31).wrapping_add(kind).wrapping_mul(1000003).wrapping_add(code)).wrapping_mul(1000003).wrapping_add(desc);
     h ^= h >> 17;
     let h = (h as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     (h >> (64 - HIST_BITS)) as usize
