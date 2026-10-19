@@ -95,7 +95,9 @@ fn main() {
                 let params = SearchParams { budget, elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2], max_nodes, depth: None, exact_root: false };
                 let (best, done) = ab.search(&duel, &p, &cands, &params);
                 if let Some(f) = &mut best_out {
-                    writeln!(f, "{oi} {si} {best}").unwrap();
+                    // (then the prompt, the extension's nodes in this search, and whether it extended
+                    // the last iteration's main line)
+                    writeln!(f, "{oi} {si} {best} {} {} {}", p.name(), ab.ext_nodes[0] - ext_before[0], (ab.pv_height > done) as u8).unwrap();
                 }
                 si += 1;
                 checksum = checksum.wrapping_mul(0x100000001b3) ^ (best as u64) ^ ((done as u64) << 8) ^ ((ab.nodes - before) << 16);
