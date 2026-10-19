@@ -80,8 +80,9 @@ pub const FUTILITY_MARGIN_PER_PLY: f64 = 228.1061522305487;
 pub const FUTILITY_REDUCTION_DIV: f64 = 0.0;
 pub const FUTILITY_REDUCTION_MIN_MOVE_COUNTER: usize = 1;
 /// (on the main line, the first move at every node, the decisions inside a move searched one ply
-/// deep at the horizon too if > 0, so that the search finishes the move, not the rules)
-pub const PV_EXTENSION: usize = 0;
+/// deep at the horizon too if > 0, so that the search finishes the move, not the rules; SPRT at
+/// 10+0.1 H1, +25.4 +/- 16.4 at 890 games, 2026-10-19)
+pub const PV_EXTENSION: usize = 1;
 
 // The search features that failed their SPRTs and their parameters were removed on 2026-10-18
 // (pvs, rfp, rfpall, conthist, qsearch, narrowext, killers, nullmove, online, lmrlog, resample,

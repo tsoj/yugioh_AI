@@ -175,6 +175,13 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       `tree_candidates`, the rules at the horizon, 58ce4b1): bench depth 13.65 (inner decisions
       count as plies), ~12% lower NPS. SPRT at 10+0.1: H0, -23.1 +/- 19.1 at 724 games. Not
       merged (inner_width stays 0; the code stays, off).
+- [x] Main-line horizon extension (`pv_extension`, user's idea, 2026-10-19): on the main line (the
+      first move at every node) a decision inside a move (a card selection; the `is_inner` ones if
+      searched) is searched one ply deep at the horizon too, so the search finishes the move. Bench
+      mean depth 13.05 -> 13.00, same NPS. SPRT at 10+0.1 H1, +25.4 +/- 16.4 at 890 games: default
+      since 2026-10-19, bench checksum ba6b42dff5abf893.
+  - [ ] Next ideas: with `inner_width` 3 on the main line only; extend more than the main line
+        (e.g. every PV node, or the first k moves).
 - [x] Futility pruning again (Stockfish's parent-node form): the moves after the first at depth
       <= 3 whose static eval + 45 + 4 * depth cannot raise alpha (margins measured with the mover2
       eval: the 99th percentile of the gap over the moves that raised alpha, 49/52/55/72 at depth
