@@ -185,8 +185,9 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
   - [x] Every main-line decision costs 0.5 ply (`pv_ply=0.5,pv_move_ply=0.5`): at 3000 nodes the
         iteration depth 13.00 -> 11.69, the main line's height 12.98 -> 22.32, the greatest height
         14.12 -> 24.44. SPRT at 10+0.1 stopped by the user at 2880 games (+1.9 +/- 9.4, LLR -1.35).
-  - [ ] Only the main line's decisions inside a move cost 0.5 (`pv_move_ply=0.5`): iteration depth
-        12.86, main line 14.26, greatest height 15.42. SPRT at 10+0.1 running.
+  - [x] Only the main line's decisions inside a move cost 0.5 (`pv_move_ply=0.5`): iteration depth
+        12.86, main line 14.26, greatest height 15.42. SPRT at 10+0.1 stopped by the user at 2720
+        games (+3.2 +/- 9.4, LLR -0.79).
   - [ ] Next ideas: with `inner_width` 3 on the main line only; the first k moves at main-line nodes.
 - [x] Futility pruning again (Stockfish's parent-node form): the moves after the first at depth
       <= 3 whose static eval + 45 + 4 * depth cannot raise alpha (margins measured with the mover2
