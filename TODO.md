@@ -163,6 +163,9 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
 - [x] No cap on the children below the root (MAX_CHILDREN 12 -> 1000, `YGOAI_TUNE=max_children=1000`,
       2026-10-19): SPRT at 500 nodes H0, -3.7 +/- 10.5 at 1220 games; removed anyway (user):
       MAX_CHILDREN and the tunable max_children are gone. Bench checksum 66e2903f46a8bd1e.
+- [x] Linear LMR (`lmr_reduction_per_move`, the reduction 1 + x * (move - 2), 2026-10-19, without
+      the 12 cap): x = 0.1 at 500 nodes stopped at 680 games (-3.6 +/- 17.7, LLR -1.05); x = 0.25 at
+      1000 nodes stopped at 1160 games (-1.5 +/- 13.9, LLR -1.29): not merged.
 - [x] Futility pruning again (Stockfish's parent-node form): the moves after the first at depth
       <= 3 whose static eval + 45 + 4 * depth cannot raise alpha (margins measured with the mover2
       eval: the 99th percentile of the gap over the moves that raised alpha, 49/52/55/72 at depth
