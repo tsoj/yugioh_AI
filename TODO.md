@@ -3,6 +3,12 @@
 Planned work, roughly in order. SPRTs run at 20+0.2 (since 2026-10-17; 30+0.3 before), SPRT [0, 10], with book
 `runs/books/match1.jsonl`, and are read by LLR. Results go to `runs/sprt/results.jsonl`.
 
+Since 2026-10-19 (OpenBench/fishtest style): main holds only what passed, always on, without flags
+to switch search methods; every experiment is a branch with the feature on by default, tested with
+`scripts/sprt_branch.sh <branch> [main]` (10+0.1 by default, `NODES=N` for fixed nodes). Failed
+experiments stay as branches: futility-reductions, inner-decisions, pvext-open-window, pv-half-ply,
+pv-move-half-ply, lmr-linear.
+
 ## Next (user's order, 2026-10-16)
 
 1. Different card guesses per iteration (below; the first-child extension failed).
