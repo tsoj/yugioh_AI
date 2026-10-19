@@ -203,7 +203,17 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
   - [x] Only the main line's decisions inside a move cost 0.5 (`pv_move_ply=0.5`): iteration depth
         12.86, main line 14.26, greatest height 15.42. SPRT at 10+0.1 stopped by the user at 2720
         games (+3.2 +/- 9.4, LLR -0.79).
-  - [ ] Next ideas: with `inner_width` 3 on the main line only; the first k moves at main-line nodes.
+  - [x] What it does (bench, 20 openings, 1239 searches at 3000 nodes): 0.06% of the nodes; it
+        fires in 833 searches, extends the last iteration's main line in 150; at 40% of its decided
+        nodes the best card is not the rules' first (gains when better: median 400-1500 LP, 3
+        wins found); 72% are the root player's own selections. Root moves differ from no extension
+        (branch no-pvext) in 70 of 1239 searches, only 9 of them with the last main line extended
+        (the rest: earlier iterations' move order, TT and history).
+  - [x] On every root move's own main line (branch pvext-root-all): H0, -36.4 +/- 23.5 at 402 games
+        (10+0.1). So the gain is the previous best's advantage (its line valued with searched card
+        choices, the alternatives with the rules'), not the accuracy of values.
+  - [ ] Next ideas: test that bias directly (a bonus for the previous best root move, no
+        extension); with `inner_width` 3 on the main line only; the first k moves at main-line nodes.
 - [x] Futility pruning again (Stockfish's parent-node form): the moves after the first at depth
       <= 3 whose static eval + 45 + 4 * depth cannot raise alpha (margins measured with the mover2
       eval: the 99th percentile of the gap over the moves that raised alpha, 49/52/55/72 at depth
