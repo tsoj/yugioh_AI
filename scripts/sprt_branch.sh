@@ -29,10 +29,10 @@ SHUF=${SHUF:-$(od -An -N4 -tu4 /dev/urandom | tr -d " ")}
 TREE=$ROOT/build/bench-tree
 TARGET=$ROOT/build/bench-target
 
-# The worktree for builds (made once): the submodules are links to the checkout's.
+# The worktree for builds (made once): the submodules are links to the checkout's (checked
+# every time: a checkout there can turn them back into empty directories).
 setup_tree() {
-    [ -e "$TREE/Cargo.toml" ] && return
-    git worktree add -q --detach "$TREE" HEAD
+    [ -e "$TREE/Cargo.toml" ] || git worktree add -q --detach "$TREE" HEAD
     for sub in rust external/CardScripts external/BabelCDB external/HiGHS; do
         rmdir "$TREE/$sub" 2>/dev/null || true
         [ -e "$TREE/$sub" ] || ln -s "$ROOT/$sub" "$TREE/$sub"
@@ -50,8 +50,8 @@ build() {
         exit 1
     fi
     if [ ! -x "$dir/ygoai-engine" ] || [ ! -x "$dir/ygoai-match" ] || [ ! -d "$dir/root" ]; then
+        git -C "$TREE" checkout -q --detach "$sha" 2>/dev/null || { setup_tree; git -C "$TREE" checkout -q --detach "$sha"; }
         setup_tree
-        git -C "$TREE" checkout -q --detach "$sha"
         echo "$(date) building $1 ($sha)" >&2
         systemd-run --user --scope -q -p MemoryMax=28G -p MemorySwapMax=0 nice -n 10 \
             env CARGO_TARGET_DIR="$TARGET" CARGO_BUILD_JOBS=6 YGOAI_DECK_MODELS_ONNX="$ROOT/download_human_decks/onnx_export" \
