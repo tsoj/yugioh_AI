@@ -208,9 +208,15 @@ impl SearchState<'_> {
         matches!(m, Msg::SelectCard { .. }) || (self.tables.tune.inner_width > 0 && is_inner(m))
     }
 
-    /// (the main line's horizon extension, `pv_extension`, applies at `height`)
-    fn extends(&self, pv: bool, height: i32) -> bool {
-        pv && self.tables.tune.pv_extension > 0 && height < MAX_DEPTH
+    /// (the horizon extension, `pv_extension`, applies at `height` with the window `alpha`, `beta`:
+    /// 1 on the main line, 2 at every node whose window is not a null window)
+    fn extends(&self, pv: bool, alpha: f64, beta: f64, height: i32) -> bool {
+        let on = match self.tables.tune.pv_extension {
+            0 => false,
+            1 => pv,
+            _ => beta - alpha > NULL_WINDOW,
+        };
+        on && height < MAX_DEPTH
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -303,9 +309,10 @@ impl SearchState<'_> {
     fn search(&mut self, duel: &mut Duel, prompt: &Msg, mut alpha: f64, mut beta: f64, depth: f64, height: i32, pv: bool) -> Result<f64, Stop> {
         let us = prompt.player().unwrap_or(0);
         if depth <= 0.0 {
-            // (on the main line a decision inside a move is searched one ply deep at the horizon
-            // too, with pv_extension: the move is finished by the search, not by the rules)
-            if !(self.extends(pv, height) && self.in_move(prompt)) {
+            // (on the main line, or with a window wider than the null window, a decision inside a
+            // move is searched one ply deep at the horizon too, with pv_extension: the move is
+            // finished by the search, not by the rules)
+            if !(self.extends(pv, alpha, beta, height) && self.in_move(prompt)) {
                 return Ok(evaluate_at(duel, us, Some(prompt)));
             }
         }
@@ -509,7 +516,7 @@ impl SearchState<'_> {
     #[allow(clippy::too_many_arguments)]
     fn make_and_search(&mut self, duel: &mut Duel, prompt: &Msg, mv: &Response, alpha: f64, beta: f64, depth: f64, height: i32, fr: Option<f64>, pv: bool) -> Result<(f64, bool), Stop> {
         let us = prompt.player().unwrap_or(0);
-        let position = self.do_move(duel, prompt, mv, depth, self.extends(pv, height))?;
+        let position = self.do_move(duel, prompt, mv, depth, self.extends(pv, alpha, beta, height))?;
         if let (Some(a), NewPosition::Decision(next)) = (fr, &position) {
             let estimate = evaluate_at(duel, us, Some(next));
             let reduction = (a - estimate) / self.tables.tune.futility_reduction_div;
