@@ -44,6 +44,11 @@ build() {
     local sha dir
     sha=$(git rev-parse --short=10 "$1^{commit}")
     dir=$ROOT/build/engines/$sha
+    # (YGOAI_ROOT: refs from before it would read the worktree's data, which it lacks)
+    if ! git merge-base --is-ancestor 6d49e8f "$sha"; then
+        echo "$1 lacks 6d49e8f (YGOAI_ROOT): rebase it onto main first" >&2
+        exit 1
+    fi
     if [ ! -x "$dir/ygoai-engine" ] || [ ! -x "$dir/ygoai-match" ] || [ ! -d "$dir/root" ]; then
         setup_tree
         git -C "$TREE" checkout -q --detach "$sha"
