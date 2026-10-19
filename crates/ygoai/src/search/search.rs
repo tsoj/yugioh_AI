@@ -399,7 +399,13 @@ impl SearchState<'_> {
 
             // (the node's last search may use its position: nothing needs it afterwards)
             let last = i == move_order.len() - 1;
-            let new_depth = depth - 1.0;
+            // (a main-line move costs pv_ply plies, pv_move_ply if it is a decision inside a move)
+            let ply = if pv && i == 0 {
+                if self.in_move(prompt) { t.pv_move_ply } else { t.pv_ply }
+            } else {
+                1.0
+            };
+            let new_depth = depth - ply;
             let mut value = None;
             // futility reduction (Nalwald's, with the static eval after the move for static eval + SEE):
             // a later move whose position falls short of alpha by k * futility_reduction_div is
