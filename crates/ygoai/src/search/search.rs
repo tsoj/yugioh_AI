@@ -202,6 +202,17 @@ impl SearchState<'_> {
         Some(order)
     }
 
+    /// (a decision inside a move, one the rules answer at the horizon: a card selection, and the
+    /// `is_inner` ones if they are searched)
+    fn in_move(&self, m: &Msg) -> bool {
+        matches!(m, Msg::SelectCard { .. }) || (self.tables.tune.inner_width > 0 && is_inner(m))
+    }
+
+    /// (the main line's horizon extension, `pv_extension`, applies at `height`)
+    fn extends(&self, pv: bool, height: i32) -> bool {
+        pv && self.tables.tune.pv_extension > 0 && height < MAX_DEPTH
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn iterative_deepening(
         &mut self,
@@ -235,7 +246,8 @@ impl SearchState<'_> {
             let mut aborted = false;
             for &m in &move_order {
                 let lower = if exact_root { f64::NEG_INFINITY } else { alpha };
-                match self.search_move(&mut root_duel, prompt, &moves[m], lower, f64::INFINITY, (depth - 1) as f64, 1, false, None) {
+                let pv = m == move_order[0];
+                match self.search_move(&mut root_duel, prompt, &moves[m], lower, f64::INFINITY, (depth - 1) as f64, 1, false, None, pv) {
                     Ok((value, _)) => {
                         values[m] = Some(value);
                         if value > alpha {
@@ -286,13 +298,18 @@ impl SearchState<'_> {
     }
 
     /// The value of the decision `prompt` for its player (negamax), searched `depth` plies deep;
-    /// `height` plies below the root.
+    /// `height` plies below the root; `pv` on the main line (the first move at every node above).
     #[allow(clippy::too_many_arguments)]
-    fn search(&mut self, duel: &mut Duel, prompt: &Msg, mut alpha: f64, mut beta: f64, depth: f64, height: i32) -> Result<f64, Stop> {
+    fn search(&mut self, duel: &mut Duel, prompt: &Msg, mut alpha: f64, mut beta: f64, depth: f64, height: i32, pv: bool) -> Result<f64, Stop> {
         let us = prompt.player().unwrap_or(0);
         if depth <= 0.0 {
-            return Ok(evaluate_at(duel, us, Some(prompt)));
+            // (on the main line a decision inside a move is searched one ply deep at the horizon
+            // too, with pv_extension: the move is finished by the search, not by the rules)
+            if !(self.extends(pv, height) && self.in_move(prompt)) {
+                return Ok(evaluate_at(duel, us, Some(prompt)));
+            }
         }
+        let depth = if depth <= 0.0 { 1.0 } else { depth };
 
         // (moves are indices into the rules' order: the hash table keeps one, the history reorders them)
         let inner_width = self.tables.tune.inner_width;
@@ -389,7 +406,7 @@ impl SearchState<'_> {
             if depth >= t.lmr_min_depth && i >= t.lmr_min_move_counter {
                 let reduced_beta = if alpha.is_finite() { alpha + NULL_WINDOW } else { beta };
                 let reduction = t.lmr_reduction + t.lmr_reduction_per_move * (i - t.lmr_min_move_counter) as f64;
-                let (reduced, _) = self.search_move(duel, prompt, mv, alpha, reduced_beta, (new_depth - reduction).max(0.0), height + 1, false, fr)?;
+                let (reduced, _) = self.search_move(duel, prompt, mv, alpha, reduced_beta, (new_depth - reduction).max(0.0), height + 1, false, fr, false)?;
                 if reduced <= alpha {
                     value = Some(reduced);
                 }
@@ -402,8 +419,8 @@ impl SearchState<'_> {
 
             let value = match value {
                 Some(v) => v,
-                None => match self.search_move(duel, prompt, mv, alpha, beta, new_depth, height + 1, last && fr.is_none(), fr)? {
-                    (v, true) if v > alpha => self.search_move(duel, prompt, mv, alpha, beta, new_depth, height + 1, last, None)?.0,
+                None => match self.search_move(duel, prompt, mv, alpha, beta, new_depth, height + 1, last && fr.is_none(), fr, pv && i == 0)? {
+                    (v, true) if v > alpha => self.search_move(duel, prompt, mv, alpha, beta, new_depth, height + 1, last, None, pv && i == 0)?.0,
                     (v, _) => v,
                 },
             };
@@ -457,19 +474,20 @@ impl SearchState<'_> {
     /// With `in_place` on `duel` itself (the node's last search: nothing needs the position
     /// afterwards), else on a copy, after which the rules' players' activation caps and select
     /// hint are this node's again, and a broken line (one the core cannot play) is a loss for the
-    /// mover, who avoids it (in place it is the caller's copy's loss).
+    /// mover, who avoids it (in place it is the caller's copy's loss). `pv`: the new position is on
+    /// the main line.
     #[allow(clippy::too_many_arguments)]
-    fn search_move(&mut self, duel: &mut Duel, prompt: &Msg, mv: &Response, alpha: f64, beta: f64, depth: f64, height: i32, in_place: bool, fr: Option<f64>) -> Result<(f64, bool), Stop> {
+    fn search_move(&mut self, duel: &mut Duel, prompt: &Msg, mv: &Response, alpha: f64, beta: f64, depth: f64, height: i32, in_place: bool, fr: Option<f64>, pv: bool) -> Result<(f64, bool), Stop> {
         if self.should_stop() {
             return Err(Stop::Abort);
         }
         self.tables.nodes += 1;
         if in_place {
-            return self.make_and_search(duel, prompt, mv, alpha, beta, depth, height, fr);
+            return self.make_and_search(duel, prompt, mv, alpha, beta, depth, height, fr, pv);
         }
         let mut new_duel = duel.clone();
         let saved: Vec<_> = self.policies.iter().map(|p| (p.activations.clone(), p.hint)).collect();
-        let result = self.make_and_search(&mut new_duel, prompt, mv, alpha, beta, depth, height, fr);
+        let result = self.make_and_search(&mut new_duel, prompt, mv, alpha, beta, depth, height, fr, pv);
         for (p, (activations, hint)) in self.policies.iter_mut().zip(saved) {
             (p.activations, p.hint) = (activations, hint);
         }
@@ -489,9 +507,9 @@ impl SearchState<'_> {
     /// (`search_move` on the given duel; with `fr` (alpha) the futility reduction by the static
     /// eval after the move: then a null window at `fr`, and true if the depth was reduced)
     #[allow(clippy::too_many_arguments)]
-    fn make_and_search(&mut self, duel: &mut Duel, prompt: &Msg, mv: &Response, alpha: f64, beta: f64, depth: f64, height: i32, fr: Option<f64>) -> Result<(f64, bool), Stop> {
+    fn make_and_search(&mut self, duel: &mut Duel, prompt: &Msg, mv: &Response, alpha: f64, beta: f64, depth: f64, height: i32, fr: Option<f64>, pv: bool) -> Result<(f64, bool), Stop> {
         let us = prompt.player().unwrap_or(0);
-        let position = self.do_move(duel, prompt, mv, depth)?;
+        let position = self.do_move(duel, prompt, mv, depth, self.extends(pv, height))?;
         if let (Some(a), NewPosition::Decision(next)) = (fr, &position) {
             let estimate = evaluate_at(duel, us, Some(next));
             let reduction = (a - estimate) / self.tables.tune.futility_reduction_div;
@@ -501,9 +519,9 @@ impl SearchState<'_> {
                     return Ok((estimate, true)); // (the horizon: the static eval, already known)
                 }
                 let v = if next.player().unwrap_or(0) == us {
-                    self.search(duel, next, a, a + NULL_WINDOW, depth, height)?
+                    self.search(duel, next, a, a + NULL_WINDOW, depth, height, pv)?
                 } else {
-                    -self.search(duel, next, -(a + NULL_WINDOW), -a, depth, height)?
+                    -self.search(duel, next, -(a + NULL_WINDOW), -a, depth, height, pv)?
                 };
                 return Ok((v, true));
             }
@@ -520,9 +538,9 @@ impl SearchState<'_> {
             NewPosition::StepLimit(last) => evaluate_at(duel, us, Some(&last)),
             NewPosition::Decision(next) => {
                 if next.player().unwrap_or(0) == us {
-                    self.search(duel, &next, alpha, beta, depth, height)?
+                    self.search(duel, &next, alpha, beta, depth, height, pv)?
                 } else {
-                    -self.search(duel, &next, -beta, -alpha, depth, height)?
+                    -self.search(duel, &next, -beta, -alpha, depth, height, pv)?
                 }
             }
         }, false))
@@ -530,8 +548,10 @@ impl SearchState<'_> {
 
     /// Makes the move: the response, then the core runs on, the rules answering the decisions
     /// the search does not make (hidden ones, the only move, and at the horizon the decisions
-    /// inside a move, so that it completes first), up to the next searched decision.
-    fn do_move(&mut self, duel: &mut Duel, prompt: &Msg, mv: &Response, depth: f64) -> Result<NewPosition, Stop> {
+    /// inside a move, so that it completes first, unless `extend`: on the main line, see `search`),
+    /// up to the next searched decision.
+    fn do_move(&mut self, duel: &mut Duel, prompt: &Msg, mv: &Response, depth: f64, extend: bool) -> Result<NewPosition, Stop> {
+        let depth = if extend && depth <= 0.0 { 1.0 } else { depth };
         duel.ocg_set_response(&encode(prompt, mv).map_err(|_| Stop::Broken)?);
         let mut prompt = prompt.clone();
         for _ in 0..MAX_AUTO_STEPS {

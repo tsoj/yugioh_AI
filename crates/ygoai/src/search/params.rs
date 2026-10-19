@@ -79,6 +79,9 @@ pub const FUTILITY_MARGIN_PER_PLY: f64 = 228.1061522305487;
 /// less, fractional)
 pub const FUTILITY_REDUCTION_DIV: f64 = 0.0;
 pub const FUTILITY_REDUCTION_MIN_MOVE_COUNTER: usize = 1;
+/// (on the main line, the first move at every node, the decisions inside a move searched one ply
+/// deep at the horizon too if > 0, so that the search finishes the move, not the rules)
+pub const PV_EXTENSION: usize = 0;
 
 // The search features that failed their SPRTs and their parameters were removed on 2026-10-18
 // (pvs, rfp, rfpall, conthist, qsearch, narrowext, killers, nullmove, online, lmrlog, resample,
@@ -101,6 +104,7 @@ pub struct Tune {
     pub futility_margin_per_ply: f64,
     pub futility_reduction_div: f64,
     pub futility_reduction_min_move_counter: usize,
+    pub pv_extension: usize,
     pub hist_decay: f64,
     pub hist_exponent: f64,
     pub hist_malus: f64,
@@ -121,6 +125,7 @@ impl Default for Tune {
             futility_margin_per_ply: FUTILITY_MARGIN_PER_PLY,
             futility_reduction_div: FUTILITY_REDUCTION_DIV,
             futility_reduction_min_move_counter: FUTILITY_REDUCTION_MIN_MOVE_COUNTER,
+            pv_extension: PV_EXTENSION,
             hist_decay: HIST_DECAY,
             hist_exponent: HIST_EXPONENT,
             hist_malus: HIST_MALUS,
@@ -130,7 +135,7 @@ impl Default for Tune {
 
 impl Tune {
     /// The parameters' names, in a fixed order.
-    pub const NAMES: [&'static str; 15] = [
+    pub const NAMES: [&'static str; 16] = [
         "card_width",
         "root_card_width",
         "inner_width",
@@ -143,6 +148,7 @@ impl Tune {
         "futility_margin_per_ply",
         "futility_reduction_div",
         "futility_reduction_min_move_counter",
+        "pv_extension",
         "hist_decay",
         "hist_exponent",
         "hist_malus",
@@ -163,6 +169,7 @@ impl Tune {
             "futility_margin_per_ply" => self.futility_margin_per_ply,
             "futility_reduction_div" => self.futility_reduction_div,
             "futility_reduction_min_move_counter" => self.futility_reduction_min_move_counter as f64,
+            "pv_extension" => self.pv_extension as f64,
             "hist_decay" => self.hist_decay,
             "hist_exponent" => self.hist_exponent,
             "hist_malus" => self.hist_malus,
@@ -187,6 +194,7 @@ impl Tune {
             "futility_margin_per_ply" => self.futility_margin_per_ply = v,
             "futility_reduction_div" => self.futility_reduction_div = v.max(0.0),
             "futility_reduction_min_move_counter" => self.futility_reduction_min_move_counter = (n as usize).max(1),
+            "pv_extension" => self.pv_extension = n as usize,
             "hist_decay" => self.hist_decay = v.clamp(0.0, 1.0),
             "hist_exponent" => self.hist_exponent = v,
             "hist_malus" => self.hist_malus = v.max(0.0),
