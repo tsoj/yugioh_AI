@@ -304,7 +304,12 @@ impl Agent for BeliefSearchAgent {
         self.items.push(ObsItem::Prompt(prompt.clone(), state.cloned()));
         self.info = None;
         // (every decision: the rules' answer and alternatives, see `root_candidates`)
-        let cands = root_candidates(prompt, &self.fallback, state);
+        let mut cands = root_candidates(prompt, &self.fallback, state);
+        // (the same effect at most MAX_SAME_ACTIVATION_PER_TURN times per turn, as the rules' player:
+        // an effect that changes nothing, e.g. negated, would otherwise be activated forever)
+        if cands.iter().any(|c| self.fallback.within_cap(prompt, c)) {
+            cands.retain(|c| self.fallback.within_cap(prompt, c));
+        }
         let mut resp = None;
         // (with no more than the reserve and TIME_BUFFER on the clock, the rules' player answers)
         if cands.len() > 1 && clock.is_none_or(|(remaining, _)| remaining > TIME_BUFFER + self.reserve()) {
@@ -319,6 +324,9 @@ impl Agent for BeliefSearchAgent {
                 self.log_root(&path, prompt, state, cands.len(), k, t0.elapsed().as_secs_f64());
             }
             resp = k.map(|k| cands[k].clone());
+            if let Some(r) = &resp {
+                self.fallback.note_choice(prompt, r);
+            }
             self.clock_after_search = clock.map(|(remaining, _)| remaining - t0.elapsed().as_secs_f64());
         }
         let resp = match resp {

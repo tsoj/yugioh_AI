@@ -130,6 +130,31 @@ impl Heuristic {
         *self.activations.entry(Self::key(e)).or_insert(0) += 1;
     }
 
+    /// The effect (or card) that `r` activates or Special Summons at `prompt` (an idle, battle or
+    /// chain decision), whose uses this turn are capped.
+    fn capped_use<'a>(prompt: &'a Msg, r: &Response) -> Option<&'a Card> {
+        let i = usize::try_from(r.index?).ok()?;
+        match (prompt, r.kind.as_deref()) {
+            (Msg::SelectChain { chains, .. }, _) => chains.get(i),
+            (Msg::SelectIdlecmd { activatable, .. }, Some("activate")) | (Msg::SelectBattlecmd { activatable, .. }, Some("activate")) => activatable.get(i),
+            (Msg::SelectIdlecmd { spsummonable, .. }, Some("spsummon")) => spsummonable.get(i),
+            _ => None,
+        }
+    }
+
+    /// Whether `r` at `prompt` stays within the uses per turn (MAX_SAME_ACTIVATION_PER_TURN) of
+    /// what it activates; another player's (a search's) choices are capped like the rules' own.
+    pub fn within_cap(&self, prompt: &Msg, r: &Response) -> bool {
+        Self::capped_use(prompt, r).is_none_or(|e| self.allowed(e))
+    }
+
+    /// Counts `r` at `prompt` (chosen by someone else, e.g. the search) towards the cap.
+    pub fn note_choice(&mut self, prompt: &Msg, r: &Response) {
+        if let Some(e) = Self::capped_use(prompt, r) {
+            self.note(e);
+        }
+    }
+
     pub fn observe_msg(&mut self, m: &Msg) {
         match m {
             Msg::NewTurn { .. } => self.activations.clear(),
