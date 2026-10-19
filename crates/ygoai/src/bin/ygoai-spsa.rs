@@ -64,7 +64,6 @@ fn default_specs() -> Vec<Spec> {
         s("lmr_min_depth", false, 1.0, 8.0, 0.5),
         s("lmr_min_move_counter", true, 0.0, 10.0, 1.0),
         s("lmr_reduction", false, 0.0, 4.0, 0.25),
-        s("lmr_reduction_per_move", false, 0.0, 2.0, 0.05),
         s("futility_max_depth", false, 0.0, 20.0, 1.0),
         s("futility_margin", false, 0.0, 4000.0, 120.0),
         s("futility_margin_per_ply", false, 0.0, 2000.0, 60.0),
