@@ -77,6 +77,11 @@ pub struct AlphaBeta {
     /// by depth: [sum of ln(nodes of the iteration / nodes of the one before), weight], kept
     /// across searches (when to start another iteration)
     growth: Vec<[f64; 2]>,
+    /// the last search's greatest height (plies below the root), and the height its main line (the
+    /// first move at every node) reached in the last completed iteration
+    pub seldepth: i32,
+    pub pv_height: i32,
+    pv_height_now: i32,
 }
 
 impl Default for AlphaBeta {
@@ -93,6 +98,9 @@ impl Default for AlphaBeta {
             last_value: f64::NAN,
             last_root_values: Vec::new(),
             growth: vec![[GROWTH_PRIOR.ln() * GROWTH_PRIOR_WEIGHT, GROWTH_PRIOR_WEIGHT]; MAX_DEPTH as usize + 2],
+            seldepth: 0,
+            pv_height: 0,
+            pv_height_now: 0,
         }
     }
 }
@@ -149,6 +157,7 @@ impl AlphaBeta {
         let turn_player = duel.ext_get_info()[1];
         let stop_time = p.budget.map(|b| start_time + std::time::Duration::from_secs_f64(hard_limit(b, p.clock_remaining)));
         let max_nodes = p.max_nodes.map(|n| self.nodes + n);
+        (self.seldepth, self.pv_height) = (0, 0);
         let mut state = SearchState { tables: self, policies, stop_time, max_nodes };
         let card_order = state.rules_card_order(root_prompt);
         let preference = ordered(root_prompt, turn_player, card_order.as_deref());
@@ -247,6 +256,7 @@ impl SearchState<'_> {
                 break;
             }
             let (iteration_nodes, iteration_start) = (self.tables.nodes, start_time.elapsed().as_secs_f64());
+            self.tables.pv_height_now = 0;
             let mut values: Vec<Option<f64>> = vec![None; moves.len()];
             let (mut alpha, mut iteration_best) = (f64::NEG_INFINITY, None);
             let mut aborted = false;
@@ -292,6 +302,7 @@ impl SearchState<'_> {
             }
             (last_nodes, last_secs) = (self.tables.nodes - iteration_nodes, iteration_secs);
             (best_move, completed_depth) = (b, depth);
+            self.tables.pv_height = self.tables.pv_height_now;
             self.tables.last_value = values[b].unwrap();
             self.tables.last_root_values = values.clone();
             // (the next iteration: the best first; cut-off moves keep their bound's order)
@@ -522,6 +533,10 @@ impl SearchState<'_> {
     #[allow(clippy::too_many_arguments)]
     fn make_and_search(&mut self, duel: &mut Duel, prompt: &Msg, mv: &Response, alpha: f64, beta: f64, depth: f64, height: i32, fr: Option<f64>, pv: bool) -> Result<(f64, bool), Stop> {
         let us = prompt.player().unwrap_or(0);
+        self.tables.seldepth = self.tables.seldepth.max(height);
+        if pv {
+            self.tables.pv_height_now = self.tables.pv_height_now.max(height);
+        }
         let position = self.do_move(duel, prompt, mv, depth, self.extends(pv, alpha, beta, height))?;
         if let (Some(a), NewPosition::Decision(next)) = (fr, &position) {
             let estimate = evaluate_at(duel, us, Some(next));

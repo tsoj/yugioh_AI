@@ -39,6 +39,8 @@ fn main() {
     init(None).unwrap();
     let (mut nodes, mut searches, mut depth_sum, mut secs) = (0u64, 0u32, 0i64, 0.0);
     let mut tt = (0u64, 0u64);
+    // (per search: the completed depth, the greatest height, the main line's height)
+    let mut heights: [Vec<i32>; 3] = Default::default();
     let mut broken = 0u64;
     let stats_path = std::env::var("YGOAI_STATS").ok();
     let mut stats = NodeStats::default();
@@ -100,6 +102,9 @@ fn main() {
                 broken += ab.broken - bb;
                 searches += 1;
                 depth_sum += done as i64;
+                for (v, h) in heights.iter_mut().zip([done, ab.seldepth, ab.pv_height]) {
+                    v.push(h);
+                }
             }
             let resp = if is_hidden_prompt(&p) { auto_response() } else { players[player as usize].respond_to(&p, None).unwrap() };
             duel.ocg_set_response(&ygoai::actions::encode(&p, &resp).unwrap());
@@ -117,6 +122,12 @@ fn main() {
     }
     if let Some(path) = stats_path {
         print_stats(&stats, &path);
+    }
+    for (name, v) in ["iteration depth", "greatest height", "main-line height"].iter().zip(heights.iter_mut()) {
+        v.sort();
+        let q = |f: f64| v.get(((v.len() as f64 - 1.0) * f).round() as usize).copied().unwrap_or(0);
+        let mean = v.iter().map(|&x| x as f64).sum::<f64>() / v.len().max(1) as f64;
+        println!("{name:>16}: mean {mean:.2}, min {}, p10 {}, p25 {}, median {}, p75 {}, p90 {}, max {}", q(0.0), q(0.1), q(0.25), q(0.5), q(0.75), q(0.9), q(1.0));
     }
     if time_eval {
         println!("evaluation: {:.2} us per call ({eval_calls} calls)", eval_secs / eval_calls as f64 * 1e6);
