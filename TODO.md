@@ -9,6 +9,15 @@ to switch search methods; every experiment is a branch with the feature on by de
 experiments stay as branches: futility-reductions, inner-decisions, pvext-open-window, pv-half-ply,
 pv-move-half-ply, lmr-linear.
 
+Where we stand (2026-10-19, current alphabeta at 10+0.1, 100 games each, shuffle 7):
+the rules' player (Rust) 93-7 (+449 +/- 155); the rules' player at 1b5e063 (Python) 95-5 (+512 +/-
+215); the RL policy (ygoai/nn/policy.npz, rl4 iteration 71) 90-10 (+382 +/- 119); the first
+alpha-beta (1b5e063, Python on the C++ core, rebuilt in build/snapshots/first-ab-1b5e063) 86-14
+(+315 +/- 96). Logs: runs/sprt/vsold-*. The first run against the rules' player had a game of 12332
+decisions (alphabeta activated Zoodiac Whiptail's attach effect, negated every time, ~3000 times in
+one turn, then lost on time): fixed by capping the search agent's own activations per turn (1c731b1;
+the rerun: longest game 941 decisions).
+
 ## Next (user's order, 2026-10-16)
 
 1. Different card guesses per iteration (below; the first-child extension failed).
