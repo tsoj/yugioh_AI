@@ -5,8 +5,8 @@
 #   scripts/sprt_branch.sh NEW [BASE]        (BASE defaults to main)
 #
 # Each ref is built once into build/engines/<sha>/ (ygoai-engine, ygoai-match), in a worktree of
-# its own (build/bench-tree, target build/bench-target; the submodules and the deck models are the
-# checkout's): the checkout itself is never switched. Each build's engines run with
+# its own (build/bench-tree, target build/bench-target; its submodules at the ref's commits, the
+# deck models the checkout's): the checkout itself is never switched. Each build's engines run with
 # YGOAI_ROOT=build/engines/<sha>/root: the ref's lua_fixes/, the checkout's data. The match uses
 # BASE's ygoai-match. Log and records go to runs/sprt/<name>_<time>.*, a summary line to
 # runs/sprt/results.jsonl.
@@ -29,14 +29,19 @@ SHUF=${SHUF:-$(od -An -N4 -tu4 /dev/urandom | tr -d " ")}
 TREE=$ROOT/build/bench-tree
 TARGET=$ROOT/build/bench-target
 
-# The worktree for builds (made once): the submodules are links to the checkout's (checked
-# every time: a checkout there can turn them back into empty directories).
+# The worktree for builds (made once), with real submodule checkouts at the ref's commits, cloned
+# and fetched from the checkout's submodules (url.*.insteadOf: nothing is downloaded): an ordinary
+# checkout, nothing to commit there.
+submodules() {
+    local args=(-c protocol.file.allow=always) name url
+    while read -r name url; do
+        args+=(-c "url.$ROOT/${name}.insteadOf=$url")
+    done < <(git config -f "$ROOT/.gitmodules" --get-regexp '^submodule\..*\.url$' | sed -E 's/^submodule\.(.*)\.url /\1 /')
+    git -C "$TREE" "${args[@]}" submodule update --init -q
+}
+
 setup_tree() {
     [ -e "$TREE/Cargo.toml" ] || git worktree add -q --detach "$TREE" HEAD
-    for sub in rust external/CardScripts external/BabelCDB external/HiGHS; do
-        rmdir "$TREE/$sub" 2>/dev/null || true
-        [ -e "$TREE/$sub" ] || ln -s "$ROOT/$sub" "$TREE/$sub"
-    done
 }
 
 # The binaries of `ref` in build/engines/<sha>/ (built if missing); prints the directory.
@@ -50,8 +55,9 @@ build() {
         exit 1
     fi
     if [ ! -x "$dir/ygoai-engine" ] || [ ! -x "$dir/ygoai-match" ] || [ ! -d "$dir/root" ]; then
-        git -C "$TREE" checkout -q --detach "$sha" 2>/dev/null || { setup_tree; git -C "$TREE" checkout -q --detach "$sha"; }
         setup_tree
+        git -C "$TREE" checkout -q --detach "$sha"
+        submodules
         echo "$(date) building $1 ($sha)" >&2
         systemd-run --user --scope -q -p MemoryMax=28G -p MemorySwapMax=0 nice -n 10 \
             env CARGO_TARGET_DIR="$TARGET" CARGO_BUILD_JOBS=6 YGOAI_DECK_MODELS_ONNX="$ROOT/download_human_decks/onnx_export" \
