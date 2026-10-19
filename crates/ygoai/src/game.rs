@@ -41,11 +41,11 @@ impl std::error::Error for GameError {}
 /// The card database and the card scripts, loaded once per process.
 static SHARED: OnceLock<(Arc<CardDb>, Arc<Scripts>)> = OnceLock::new();
 
-/// The BabelCDB directory: $YGOAI_CDB_DIR, else external/BabelCDB of this repository.
+/// The BabelCDB directory: $YGOAI_CDB_DIR, else external/BabelCDB of the repository (`paths::root`).
 pub fn cdb_dir() -> PathBuf {
     std::env::var_os("YGOAI_CDB_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../external/BabelCDB")))
+        .unwrap_or_else(|| crate::paths::root().join("external").join("BabelCDB"))
 }
 
 /// Loads the card database (from `dir`, default [`cdb_dir`]) and the scripts, once per process.

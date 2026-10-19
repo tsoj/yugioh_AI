@@ -2,9 +2,10 @@
 
 use std::path::PathBuf;
 
-/// The repository (the main one: this crate is crates/ygoai in it).
+/// The repository (the main one: this crate is crates/ygoai in it), or $YGOAI_ROOT: a build of
+/// another version runs with its own lua_fixes/ and the checkout's data (scripts/sprt_branch.sh).
 pub fn root() -> PathBuf {
-    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
+    std::env::var_os("YGOAI_ROOT").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")))
 }
 
 fn env_or(var: &str, default: PathBuf) -> PathBuf {

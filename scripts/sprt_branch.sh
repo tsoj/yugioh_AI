@@ -4,10 +4,12 @@
 #
 #   scripts/sprt_branch.sh NEW [BASE]        (BASE defaults to main)
 #
-# Each ref is built once into build/engines/<sha>/ (ygoai-engine, ygoai-match): the working tree
-# is checked out at the ref for the build (tracked files must be committed; submodules stay as
-# they are) and back afterwards. The match uses BASE's ygoai-match. Log and records go to
-# runs/sprt/<name>_<time>.*, a summary line to runs/sprt/results.jsonl.
+# Each ref is built once into build/engines/<sha>/ (ygoai-engine, ygoai-match), in a worktree of
+# its own (build/bench-tree, target build/bench-target; the submodules and the deck models are the
+# checkout's): the checkout itself is never switched. Each build's engines run with
+# YGOAI_ROOT=build/engines/<sha>/root: the ref's lua_fixes/, the checkout's data. The match uses
+# BASE's ygoai-match. Log and records go to runs/sprt/<name>_<time>.*, a summary line to
+# runs/sprt/results.jsonl.
 #
 # Environment: TC (default 10+0.1); NODES=N for fixed-node searches (YGOAI_SEARCH_NODES, --tc
 # 60+1); CONC (16 games at once); OPENINGS (5000); ELO ("0 10"); NAME (default NEW); SHUF (the
@@ -24,27 +26,38 @@ ELO=${ELO:-0 10}
 NAME=${NAME:-$(echo "$NEW" | tr '/' '-')}
 SHUF=${SHUF:-$(od -An -N4 -tu4 /dev/urandom | tr -d " ")}
 
+TREE=$ROOT/build/bench-tree
+TARGET=$ROOT/build/bench-target
+
+# The worktree for builds (made once): the submodules are links to the checkout's.
+setup_tree() {
+    [ -e "$TREE/Cargo.toml" ] && return
+    git worktree add -q --detach "$TREE" HEAD
+    for sub in rust external/CardScripts external/BabelCDB external/HiGHS; do
+        rmdir "$TREE/$sub" 2>/dev/null || true
+        [ -e "$TREE/$sub" ] || ln -s "$ROOT/$sub" "$TREE/$sub"
+    done
+}
+
 # The binaries of `ref` in build/engines/<sha>/ (built if missing); prints the directory.
 build() {
-    local sha dir orig
+    local sha dir
     sha=$(git rev-parse --short=10 "$1^{commit}")
-    dir=build/engines/$sha
-    if [ ! -x "$dir/ygoai-engine" ] || [ ! -x "$dir/ygoai-match" ]; then
-        if ! git diff --quiet --ignore-submodules || ! git diff --cached --quiet --ignore-submodules; then
-            echo "uncommitted changes to tracked files: commit or stash them first" >&2
-            exit 1
-        fi
-        orig=$(git symbolic-ref -q --short HEAD || git rev-parse HEAD)
-        trap 'git checkout -q "$orig"' EXIT
-        git checkout -q --detach "$sha"
+    dir=$ROOT/build/engines/$sha
+    if [ ! -x "$dir/ygoai-engine" ] || [ ! -x "$dir/ygoai-match" ] || [ ! -d "$dir/root" ]; then
+        setup_tree
+        git -C "$TREE" checkout -q --detach "$sha"
         echo "$(date) building $1 ($sha)" >&2
         systemd-run --user --scope -q -p MemoryMax=28G -p MemorySwapMax=0 nice -n 10 \
-            env CARGO_TARGET_DIR="$ROOT/rust/target" CARGO_BUILD_JOBS=6 \
-            cargo build --release -p ygoai --bin ygoai-engine --bin ygoai-match >&2
-        mkdir -p "$dir"
-        cp rust/target/release/ygoai-engine rust/target/release/ygoai-match "$dir/"
-        git checkout -q "$orig"
-        trap - EXIT
+            env CARGO_TARGET_DIR="$TARGET" CARGO_BUILD_JOBS=6 YGOAI_DECK_MODELS_ONNX="$ROOT/download_human_decks/onnx_export" \
+            cargo build --release --manifest-path "$TREE/Cargo.toml" -p ygoai --bin ygoai-engine --bin ygoai-match >&2
+        mkdir -p "$dir/root"
+        cp "$TARGET/release/ygoai-engine" "$TARGET/release/ygoai-match" "$dir/"
+        # (the ref's corrected scripts; the data is the checkout's)
+        git archive "$sha" lua_fixes | tar -x -C "$dir/root"
+        for d in external download_human_decks build; do
+            [ -e "$dir/root/$d" ] || ln -s "$ROOT/$d" "$dir/root/$d"
+        done
     fi
     echo "$dir"
 }
@@ -55,16 +68,18 @@ base_dir=$(build "$BASE")
 
 new_sha=$(basename "$new_dir")
 base_sha=$(basename "$base_dir")
-env_prefix=""
+new_env="env YGOAI_ROOT=$new_dir/root"
+base_env="env YGOAI_ROOT=$base_dir/root"
 if [ -n "${NODES:-}" ]; then
-    env_prefix="env YGOAI_SEARCH_NODES=$NODES "
+    new_env="$new_env YGOAI_SEARCH_NODES=$NODES"
+    base_env="$base_env YGOAI_SEARCH_NODES=$NODES"
     TC=60+1
 fi
 T=$(date +%Y%m%d-%H%M%S)
 log=runs/sprt/${NAME}_$T.log
 mkdir -p runs/sprt
 echo "$(date) start $NAME: $NEW ($new_sha) vs $BASE ($base_sha), tc $TC${NODES:+, $NODES nodes} -> $log"
-"$base_dir/ygoai-match" --engine "new=$env_prefix$new_dir/ygoai-engine alphabeta" --engine "base=$env_prefix$base_dir/ygoai-engine alphabeta" \
+YGOAI_ROOT=$base_dir/root "$base_dir/ygoai-match" --engine "new=$new_env $new_dir/ygoai-engine alphabeta" --engine "base=$base_env $base_dir/ygoai-engine alphabeta" \
     --book runs/books/match1.jsonl --pool 10000 --shuffle "$SHUF" -n "$OPENINGS" -c "$CONC" --tc "$TC" --sprt $ELO \
     --records "runs/sprt/${NAME}_$T.jsonl" > "$log" 2>&1 || true
 final=$(grep -E "^(SPRT finished|final:)" "$log" | tr '\n' ' ' || true)
