@@ -117,7 +117,8 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
     (2026-10-20 18:22); sprt_branch.sh now refuses a branch that lacks BASE's last code commit.
   - Reruns (rebased onto main with tm-nodes): `iir` H0, -13.4 +/- 15.4 at 934 games; `corrhist`
     stopped at 2220 games, -2.2, LLR about -2.4; `razoring` stopped at 380 games, -14.6 +/- 26.8; `hist-prune` H0, -4.3 +/- 10.9 at 1954 games;
-    `probcut` stopped at 5260+ games, about +3 (LLR about -1.6): a small gain at best, maybe retune.
+    `probcut` stopped at 5380 games, +2.8 +/- 6.6 (LLR -1.91): a small gain at best; `improving`
+    stopped at 2700 games, +2.8 +/- 9.1 (LLR -1.00).
   - `lmp` (late move pruning, Stockfish's/Reckless's shape: off the main line, a node stops after
     2.75 + 1.32 * depth^2 moves unless it is losing; depth 13.15): H0, -24.7 +/- 19.8 at 704 games.
   - `aspiration` (root window around the iterations' mean, delta 300 LP, x1.5 per fail): not run,
