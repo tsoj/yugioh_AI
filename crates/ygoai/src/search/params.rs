@@ -33,6 +33,17 @@ pub const HARD_FACTOR: f64 = 3.0;
 pub const HARD_SHARE: f64 = 0.25;
 pub const HARD_MAX_SHARE: f64 = 0.5;
 pub const TIME_BUFFER: f64 = 0.05;
+/// (the budget's scale after each iteration, Reckless's: max(TM_NODES_MIN, TM_NODES_BASE -
+/// TM_NODES_PER_FRACTION * the best move's share of the root's nodes) times max(TM_STABILITY_MIN,
+/// TM_STABILITY_BASE - TM_STABILITY_PER_ITERATION * the iterations it has stayed the best))
+pub const TM_NODES_BASE: f64 = 3.1838;
+pub const TM_NODES_PER_FRACTION: f64 = 2.6554;
+pub const TM_NODES_MIN: f64 = 0.5460;
+pub const TM_STABILITY_BASE: f64 = 1.2881;
+pub const TM_STABILITY_PER_ITERATION: f64 = 0.0440;
+pub const TM_STABILITY_MIN: f64 = 0.7160;
+/// (times this: the scale's mean on the bench's searches was 1.8 without it, 1 with it)
+pub const TM_SCALE_NORM: f64 = 0.556;
 
 /// The hard limit's seconds for a decision with `budget` seconds and `remaining` on the clock.
 pub fn hard_limit(budget: f64, remaining: f64) -> f64 {
