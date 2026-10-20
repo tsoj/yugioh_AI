@@ -103,6 +103,12 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
     2.66 * the best move's share of the root's nodes) * max(0.716, 1.29 - 0.044 * the iterations it
     has stayed the best), times 0.556 for a mean of 1 on the bench): H1, +16.4 +/- 12.1 at 1612
     games; merged 2426943.
+  - `iir` (internal iterative reduction: not on the main line, from depth 3, without a TT entry or
+    one 4.5 plies too shallow, 1 ply less; depth 13.49): stopped near zero at 5640 games, +3.2 +/-
+    6.7, LLR -1.54.
+  - `probcut` (off the main line from depth 5, TT value (else static eval) >= beta: the first 2
+    moves 3 plies less against beta + 1000 LP; depth 14.01): stopped near zero at 3280 games, +3.0
+    +/- 8.6, LLR -1.06.
   - `aspiration` (root window around the iterations' mean, delta 300 LP, x1.5 per fail): not run,
     the bench depth fell at every delta (100: 12.39, 300: 12.67, 600: 12.79, 1500: 12.86).
 - Tried 2026-10-16/17 (features in the code, off by default):
