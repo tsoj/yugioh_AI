@@ -116,7 +116,7 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
     without tm-nodes' gain (about -16 Elo each). All branches rebased onto main, all rerun
     (2026-10-20 18:22); sprt_branch.sh now refuses a branch that lacks BASE's last code commit.
   - Reruns (rebased onto main with tm-nodes): `iir` H0, -13.4 +/- 15.4 at 934 games; `corrhist`
-    stopped at 2220 games, -2.2, LLR about -2.4.
+    stopped at 2220 games, -2.2, LLR about -2.4; `razoring` stopped at 380 games, -14.6 +/- 26.8.
   - `lmp` (late move pruning, Stockfish's/Reckless's shape: off the main line, a node stops after
     2.75 + 1.32 * depth^2 moves unless it is losing; depth 13.15): H0, -24.7 +/- 19.8 at 704 games.
   - `aspiration` (root window around the iterations' mean, delta 300 LP, x1.5 per fail): not run,
