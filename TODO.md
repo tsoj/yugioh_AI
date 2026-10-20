@@ -99,6 +99,10 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
     singular beta tt.value - 800 LP * depth, verification at half depth; +1, +2 if 300 LP below,
     multicut, -1 when tt.value >= beta; 14% singular, depth 12.59): H0, -16.2 +/- 16.6 at 900
     games. `se-400` (margin 400, depth 11.35) dropped with it.
+  - `tm-nodes` (Reckless's node-based time management: the budget scaled by max(0.546, 3.18 -
+    2.66 * the best move's share of the root's nodes) * max(0.716, 1.29 - 0.044 * the iterations it
+    has stayed the best), times 0.556 for a mean of 1 on the bench): H1, +16.4 +/- 12.1 at 1612
+    games; merged 2426943.
   - `aspiration` (root window around the iterations' mean, delta 300 LP, x1.5 per fail): not run,
     the bench depth fell at every delta (100: 12.39, 300: 12.67, 600: 12.79, 1500: 12.86).
 - Tried 2026-10-16/17 (features in the code, off by default):
