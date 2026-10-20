@@ -41,6 +41,8 @@ fn main() {
     let mut tt = (0u64, 0u64);
     // (per search: the completed depth, the greatest height, the main line's height)
     let mut heights: [Vec<i32>; 3] = Default::default();
+    // (per search: the best move's share of the nodes, the time budget's scale)
+    let mut tm: [Vec<f64>; 2] = Default::default();
     // (the main-line extension: its nodes [all, decided, another card than the rules'], and the
     // searches whose last iteration's main line it extended)
     let (mut ext, mut ext_searches) = ([0u64; 3], 0u32);
@@ -112,6 +114,8 @@ fn main() {
                     *e += ab.ext_nodes[k] - ext_before[k];
                 }
                 ext_searches += (ab.pv_height > done) as u32;
+                tm[0].push(ab.best_fraction);
+                tm[1].push(ab.tm_scale);
                 for (v, h) in heights.iter_mut().zip([done, ab.seldepth, ab.pv_height]) {
                     v.push(h);
                 }
@@ -147,6 +151,12 @@ fn main() {
         ext[2],
         100.0 * ext[2] as f64 / ext[1].max(1) as f64
     );
+    for (name, v) in ["best move's node share", "time budget scale"].iter().zip(tm.iter_mut()) {
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let q = |f: f64| v.get(((v.len() as f64 - 1.0) * f).round() as usize).copied().unwrap_or(0.0);
+        let mean = v.iter().sum::<f64>() / v.len().max(1) as f64;
+        println!("{name:>22}: mean {mean:.3}, p10 {:.3}, p25 {:.3}, median {:.3}, p75 {:.3}, p90 {:.3}", q(0.1), q(0.25), q(0.5), q(0.75), q(0.9));
+    }
     if time_eval {
         println!("evaluation: {:.2} us per call ({eval_calls} calls)", eval_secs / eval_calls as f64 * 1e6);
     }

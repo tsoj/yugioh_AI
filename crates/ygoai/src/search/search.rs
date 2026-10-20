@@ -84,6 +84,9 @@ pub struct AlphaBeta {
     /// the main-line horizon extension's nodes: all, those with an exact value or a cutoff, and of
     /// these the ones whose best card is not the rules' first
     pub ext_nodes: [u64; 3],
+    /// the last search's best root move's share of the nodes, and its time budget's scale
+    pub best_fraction: f64,
+    pub tm_scale: f64,
     pv_height_now: i32,
 }
 
@@ -104,6 +107,8 @@ impl Default for AlphaBeta {
             seldepth: 0,
             pv_height: 0,
             ext_nodes: [0; 3],
+            best_fraction: 0.0,
+            tm_scale: 1.0,
             pv_height_now: 0,
         }
     }
@@ -234,11 +239,16 @@ impl SearchState<'_> {
         let (mut last_nodes, mut last_secs) = (0u64, 0.0);
         // (the root's moves are searched on a copy of it: it stays as it is)
         let mut root_duel = duel.clone();
+        // (node-based time management, Reckless's: the nodes each root move took, over all
+        // iterations; for how many iterations the best move has stayed; the budget's scale)
+        let mut root_nodes = vec![0u64; moves.len()];
+        let mut stable = 0u32;
+        let mut scale = 1.0;
         for depth in 1..=max_depth {
-            // (the next iteration only if it is expected to end within the budget)
+            // (the next iteration only if it is expected to end within the budget, scaled)
             if let Some(b) = budget
                 && depth > 1
-                && start_time.elapsed().as_secs_f64() + last_secs * self.tables.expected_growth(depth) > b
+                && start_time.elapsed().as_secs_f64() + last_secs * self.tables.expected_growth(depth) > b * scale
             {
                 break;
             }
@@ -250,7 +260,10 @@ impl SearchState<'_> {
             for &m in &move_order {
                 let lower = if exact_root { f64::NEG_INFINITY } else { alpha };
                 let pv = m == move_order[0];
-                match self.search_move(&mut root_duel, prompt, &moves[m], lower, f64::INFINITY, (depth - 1) as f64, 1, false, pv) {
+                let nodes_before = self.tables.nodes;
+                let result = self.search_move(&mut root_duel, prompt, &moves[m], lower, f64::INFINITY, (depth - 1) as f64, 1, false, pv);
+                root_nodes[m] += self.tables.nodes - nodes_before;
+                match result {
                     Ok(value) => {
                         values[m] = Some(value);
                         if value > alpha {
@@ -288,7 +301,15 @@ impl SearchState<'_> {
                 );
             }
             (last_nodes, last_secs) = (self.tables.nodes - iteration_nodes, iteration_secs);
+            stable = if b == best_move && depth > 1 { stable + 1 } else { 0 };
             (best_move, completed_depth) = (b, depth);
+            // (the budget's scale: less time when the best move took most of the nodes, or has
+            // stayed the best for several iterations; more when it did not)
+            let fraction = root_nodes[b] as f64 / root_nodes.iter().sum::<u64>().max(1) as f64;
+            let by_nodes = (TM_NODES_BASE - TM_NODES_PER_FRACTION * fraction).max(TM_NODES_MIN);
+            let by_stability = (TM_STABILITY_BASE - TM_STABILITY_PER_ITERATION * stable as f64).max(TM_STABILITY_MIN);
+            scale = by_nodes * by_stability;
+            (self.tables.best_fraction, self.tables.tm_scale) = (fraction, scale);
             self.tables.pv_height = self.tables.pv_height_now;
             self.tables.last_value = values[b].unwrap();
             self.tables.last_root_values = values.clone();
