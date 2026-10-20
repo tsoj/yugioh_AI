@@ -111,7 +111,10 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
     +/- 8.6, LLR -1.06. Both rerun against the new main (with tm-nodes); the rerun stopped at 460 games, -19.7 +/- 24.2.
   - `razoring` (off the main line up to depth 4, a static eval 1000 LP per ply below alpha is the
     value; depth 13.57): stopped at 1640 games, -7.6 +/- 13.1, LLR -2.84.
-  (The reruns against main with tm-nodes ran while the machine was also in other use.)
+  - INVALID: every test started after the tm-nodes merge (lmp, razoring, the iir and probcut reruns,
+    improving, hist-prune, corrhist) ran a branch from before the merge against main with it, so
+    without tm-nodes' gain (about -16 Elo each). All branches rebased onto main, all rerun
+    (2026-10-20 18:22); sprt_branch.sh now refuses a branch that lacks BASE's last code commit.
   - `lmp` (late move pruning, Stockfish's/Reckless's shape: off the main line, a node stops after
     2.75 + 1.32 * depth^2 moves unless it is losing; depth 13.15): H0, -24.7 +/- 19.8 at 704 games.
   - `aspiration` (root window around the iterations' mean, delta 300 LP, x1.5 per fail): not run,
