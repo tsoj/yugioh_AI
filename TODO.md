@@ -108,7 +108,10 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
     6.7, LLR -1.54; rerun against main with tm-nodes stopped at 460 games, -18.1 +/- 23.7.
   - `probcut` (off the main line from depth 5, TT value (else static eval) >= beta: the first 2
     moves 3 plies less against beta + 1000 LP; depth 14.01): stopped by accident at 3280 games, +3.0
-    +/- 8.6, LLR -1.06. Both rerun against the new main (with tm-nodes).
+    +/- 8.6, LLR -1.06. Both rerun against the new main (with tm-nodes); the rerun stopped at 460 games, -19.7 +/- 24.2.
+  - `razoring` (off the main line up to depth 4, a static eval 1000 LP per ply below alpha is the
+    value; depth 13.57): stopped at 1640 games, -7.6 +/- 13.1, LLR -2.84.
+  (The reruns against main with tm-nodes ran while the machine was also in other use.)
   - `lmp` (late move pruning, Stockfish's/Reckless's shape: off the main line, a node stops after
     2.75 + 1.32 * depth^2 moves unless it is losing; depth 13.15): H0, -24.7 +/- 19.8 at 704 games.
   - `aspiration` (root window around the iterations' mean, delta 300 LP, x1.5 per fail): not run,
