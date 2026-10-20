@@ -105,7 +105,7 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
     games; merged 2426943.
   - `iir` (internal iterative reduction: not on the main line, from depth 3, without a TT entry or
     one 4.5 plies too shallow, 1 ply less; depth 13.49): stopped by accident at 5640 games, +3.2 +/-
-    6.7, LLR -1.54.
+    6.7, LLR -1.54; rerun against main with tm-nodes stopped at 460 games, -18.1 +/- 23.7.
   - `probcut` (off the main line from depth 5, TT value (else static eval) >= beta: the first 2
     moves 3 plies less against beta + 1000 LP; depth 14.01): stopped by accident at 3280 games, +3.0
     +/- 8.6, LLR -1.06. Both rerun against the new main (with tm-nodes).
