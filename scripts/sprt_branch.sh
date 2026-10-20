@@ -18,6 +18,8 @@
 # file during a run cannot change it; still, replace it by a rename rather than in place)
 main() {
 set -euo pipefail
+# (also inside $(...): a failed build must not go on to copy older binaries)
+shopt -s inherit_errexit
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 NEW=$1
@@ -64,7 +66,8 @@ build() {
         echo "$(date) building $1 ($sha)" >&2
         systemd-run --user --scope -q -p MemoryMax=28G -p MemorySwapMax=0 nice -n 10 \
             env CARGO_TARGET_DIR="$TARGET" CARGO_BUILD_JOBS=6 YGOAI_DECK_MODELS_ONNX="$ROOT/download_human_decks/onnx_export" \
-            cargo build --release --manifest-path "$TREE/Cargo.toml" -p ygoai --bin ygoai-engine --bin ygoai-match --bin ygoai-bench-search >&2
+            cargo build --release --manifest-path "$TREE/Cargo.toml" -p ygoai --bin ygoai-engine --bin ygoai-match --bin ygoai-bench-search >&2 \
+            || { echo "build of $1 failed" >&2; exit 1; }
         mkdir -p "$dir/root"
         cp "$TARGET/release/ygoai-engine" "$TARGET/release/ygoai-match" "$TARGET/release/ygoai-bench-search" "$dir/"
         # (the ref's corrected scripts; the data is the checkout's)
