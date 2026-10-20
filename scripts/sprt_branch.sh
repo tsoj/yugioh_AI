@@ -4,7 +4,7 @@
 #
 #   scripts/sprt_branch.sh NEW [BASE]        (BASE defaults to main)
 #
-# Each ref is built once into build/engines/<sha>/ (ygoai-engine, ygoai-match), in a worktree of
+# Each ref is built once into build/engines/<sha>/ (ygoai-engine, ygoai-match, ygoai-bench-search), in a worktree of
 # its own (build/bench-tree, target build/bench-target; its submodules at the ref's commits, the
 # deck models the checkout's): the checkout itself is never switched. Each build's engines run with
 # YGOAI_ROOT=build/engines/<sha>/root: the ref's lua_fixes/, the checkout's data. The match uses
@@ -56,16 +56,16 @@ build() {
         echo "$1 lacks 6d49e8f (YGOAI_ROOT): rebase it onto main first" >&2
         exit 1
     fi
-    if [ ! -x "$dir/ygoai-engine" ] || [ ! -x "$dir/ygoai-match" ] || [ ! -d "$dir/root" ]; then
+    if [ ! -x "$dir/ygoai-engine" ] || [ ! -x "$dir/ygoai-match" ] || [ ! -x "$dir/ygoai-bench-search" ] || [ ! -d "$dir/root" ]; then
         setup_tree
         git -C "$TREE" checkout -q --detach "$sha"
         submodules
         echo "$(date) building $1 ($sha)" >&2
         systemd-run --user --scope -q -p MemoryMax=28G -p MemorySwapMax=0 nice -n 10 \
             env CARGO_TARGET_DIR="$TARGET" CARGO_BUILD_JOBS=6 YGOAI_DECK_MODELS_ONNX="$ROOT/download_human_decks/onnx_export" \
-            cargo build --release --manifest-path "$TREE/Cargo.toml" -p ygoai --bin ygoai-engine --bin ygoai-match >&2
+            cargo build --release --manifest-path "$TREE/Cargo.toml" -p ygoai --bin ygoai-engine --bin ygoai-match --bin ygoai-bench-search >&2
         mkdir -p "$dir/root"
-        cp "$TARGET/release/ygoai-engine" "$TARGET/release/ygoai-match" "$dir/"
+        cp "$TARGET/release/ygoai-engine" "$TARGET/release/ygoai-match" "$TARGET/release/ygoai-bench-search" "$dir/"
         # (the ref's corrected scripts; the data is the checkout's)
         git archive "$sha" lua_fixes | tar -x -C "$dir/root"
         for d in external download_human_decks build; do
