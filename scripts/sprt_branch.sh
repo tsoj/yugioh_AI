@@ -79,8 +79,12 @@ build() {
     echo "$dir"
 }
 
+# (one build at a time: runs started together share the worktree and build/engines)
+exec 8>"$ROOT/build/engines.lock"
+flock 8
 new_dir=$(build "$NEW")
 base_dir=$(build "$BASE")
+flock -u 8
 [ "${BUILD_ONLY:-0}" = 1 ] && { echo "$new_dir $base_dir"; exit 0; }
 
 new_sha=$(basename "$new_dir")
