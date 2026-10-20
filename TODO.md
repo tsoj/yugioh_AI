@@ -109,6 +109,8 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
   - `probcut` (off the main line from depth 5, TT value (else static eval) >= beta: the first 2
     moves 3 plies less against beta + 1000 LP; depth 14.01): stopped by accident at 3280 games, +3.0
     +/- 8.6, LLR -1.06. Both rerun against the new main (with tm-nodes).
+  - `lmp` (late move pruning, Stockfish's/Reckless's shape: off the main line, a node stops after
+    2.75 + 1.32 * depth^2 moves unless it is losing; depth 13.15): H0, -24.7 +/- 19.8 at 704 games.
   - `aspiration` (root window around the iterations' mean, delta 300 LP, x1.5 per fail): not run,
     the bench depth fell at every delta (100: 12.39, 300: 12.67, 600: 12.79, 1500: 12.86).
 - Tried 2026-10-16/17 (features in the code, off by default):
