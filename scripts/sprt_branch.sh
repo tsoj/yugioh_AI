@@ -11,7 +11,7 @@
 # BASE's ygoai-match. Log and records go to runs/sprt/<name>_<time>.*, a summary line to
 # runs/sprt/results.jsonl.
 #
-# Environment: TC (default 10+0.1); NODES=N for fixed-node searches (YGOAI_SEARCH_NODES, --tc
+# Environment: ALLOW_DIVERGED=1 (NEW need not contain BASE); TC (default 10+0.1); NODES=N for fixed-node searches (YGOAI_SEARCH_NODES, --tc
 # 60+1); CONC (16 games at once); OPENINGS (5000); ELO ("0 10"); NAME (default NEW); SHUF (the
 # book's shuffle seed, random by default); BUILD_ONLY=1 builds and stops.
 # (all in one function, read whole before it runs, and the call and exit on one line: editing the
@@ -79,6 +79,12 @@ build() {
     echo "$dir"
 }
 
+# (NEW must contain BASE: a branch from before a merge into BASE would also be tested without that
+# merge's gain; ALLOW_DIVERGED=1 to compare anyway)
+if [ "${ALLOW_DIVERGED:-0}" != 1 ] && ! git merge-base --is-ancestor "$BASE" "$NEW"; then
+    echo "$NEW does not contain $BASE: rebase it first (or ALLOW_DIVERGED=1)" >&2
+    exit 1
+fi
 # (one build at a time: runs started together share the worktree and build/engines)
 exec 8>"$ROOT/build/engines.lock"
 flock 8
