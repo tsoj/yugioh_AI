@@ -212,8 +212,12 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
   - [x] On every root move's own main line (branch pvext-root-all): H0, -36.4 +/- 23.5 at 402 games
         (10+0.1). So the gain is the previous best's advantage (its line valued with searched card
         choices, the alternatives with the rules'), not the accuracy of values.
-  - [ ] Next ideas: test that bias directly (a bonus for the previous best root move, no
-        extension); with `inner_width` 3 on the main line only; the first k moves at main-line nodes.
+  - [x] A bonus for the previous best root move instead (branch prevbest-bonus, 100 LP, no
+        extension) vs main: H0, -6.5 +/- 12.1 at 1712 games. Control: no extension at all (branch
+        no-pvext) vs main: H0, -8.6 +/- 13.3 at 1296 games. So the extension is worth less than
+        its first SPRT said (+25.4 at 890 games), perhaps ~+5-10; the bonus does not clearly
+        replace it.
+  - [ ] Next ideas: with `inner_width` 3 on the main line only; the first k moves at main-line nodes.
 - [x] Futility pruning again (Stockfish's parent-node form): the moves after the first at depth
       <= 3 whose static eval + 45 + 4 * depth cannot raise alpha (margins measured with the mover2
       eval: the 99th percentile of the gap over the moves that raised alpha, 49/52/55/72 at depth
