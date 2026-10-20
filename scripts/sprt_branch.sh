@@ -79,10 +79,11 @@ build() {
     echo "$dir"
 }
 
-# (NEW must contain BASE: a branch from before a merge into BASE would also be tested without that
-# merge's gain; ALLOW_DIVERGED=1 to compare anyway)
-if [ "${ALLOW_DIVERGED:-0}" != 1 ] && ! git merge-base --is-ancestor "$BASE" "$NEW"; then
-    echo "$NEW does not contain $BASE: rebase it first (or ALLOW_DIVERGED=1)" >&2
+# (NEW must contain BASE's engine, its last commit to the code: a branch from before a merge into
+# BASE would also be tested without that merge's gain; ALLOW_DIVERGED=1 to compare anyway)
+base_code=$(git log -1 --format=%H "$BASE" -- crates lua_fixes Cargo.toml Cargo.lock rust external)
+if [ "${ALLOW_DIVERGED:-0}" != 1 ] && ! git merge-base --is-ancestor "$base_code" "$NEW"; then
+    echo "$NEW lacks $BASE's code ($base_code): rebase it first (or ALLOW_DIVERGED=1)" >&2
     exit 1
 fi
 # (one build at a time: runs started together share the worktree and build/engines)
