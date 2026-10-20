@@ -93,6 +93,14 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
 - [ ] Not tried yet (from the chess progression in memory): aspiration windows, late move
       pruning, internal iterative reduction, improving heuristic, SEE-like pruning, singular
       extensions / multicut, double/negative extensions.
+- Technique round 2026-10-20 (branches from main, implementations after Stockfish, Reckless,
+  Plenty, Stormphrax, Pawnocchio; SPRT 10+0.1 vs main; bench depth at 3000 nodes, main 13.00):
+  - `se` (singular extensions: TT move, depth >= 4, tt.depth >= depth - 3, not an all node,
+    singular beta tt.value - 800 LP * depth, verification at half depth; +1, +2 if 300 LP below,
+    multicut, -1 when tt.value >= beta; 14% singular, depth 12.59): H0, -16.2 +/- 16.6 at 900
+    games. `se-400` (margin 400, depth 11.35) dropped with it.
+  - `aspiration` (root window around the iterations' mean, delta 300 LP, x1.5 per fail): not run,
+    the bench depth fell at every delta (100: 12.39, 300: 12.67, 600: 12.79, 1500: 12.86).
 - Tried 2026-10-16/17 (features in the code, off by default):
   - `killers` (two per height, after the TT move; depth at 3000 nodes 12.84 -> 12.93), 1000
     nodes: H0, -2.8 +/- 10.1 at 1972 games.
