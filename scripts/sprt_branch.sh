@@ -14,7 +14,8 @@
 # Environment: TC (default 10+0.1); NODES=N for fixed-node searches (YGOAI_SEARCH_NODES, --tc
 # 60+1); CONC (16 games at once); OPENINGS (5000); ELO ("0 10"); NAME (default NEW); SHUF (the
 # book's shuffle seed, random by default); BUILD_ONLY=1 builds and stops.
-# (all in one function, read whole before it runs: editing the file during a run cannot change it)
+# (all in one function, read whole before it runs, and the call and exit on one line: editing the
+# file during a run cannot change it; still, replace it by a rename rather than in place)
 main() {
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -101,5 +102,4 @@ python3 -c "import json,sys; a=sys.argv; print(json.dumps({'new': a[2], 'new_sha
     "$final" "$NAME" "$new_sha" "$BASE" "$base_sha" "$TC" "${NODES:-}" "$ELO" "$SHUF" >> runs/sprt/results.jsonl
 echo "$(date) done $NAME: $final"
 }
-main "$@"
-exit
+main "$@"; exit
