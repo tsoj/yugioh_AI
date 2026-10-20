@@ -42,6 +42,8 @@ pub const TM_NODES_MIN: f64 = 0.5460;
 pub const TM_STABILITY_BASE: f64 = 1.2881;
 pub const TM_STABILITY_PER_ITERATION: f64 = 0.0440;
 pub const TM_STABILITY_MIN: f64 = 0.7160;
+/// (times this: the scale's mean on the bench's searches was 1.8 without it, 1 with it)
+pub const TM_SCALE_NORM: f64 = 0.556;
 
 /// The hard limit's seconds for a decision with `budget` seconds and `remaining` on the clock.
 pub fn hard_limit(budget: f64, remaining: f64) -> f64 {

@@ -308,7 +308,7 @@ impl SearchState<'_> {
             let fraction = root_nodes[b] as f64 / root_nodes.iter().sum::<u64>().max(1) as f64;
             let by_nodes = (TM_NODES_BASE - TM_NODES_PER_FRACTION * fraction).max(TM_NODES_MIN);
             let by_stability = (TM_STABILITY_BASE - TM_STABILITY_PER_ITERATION * stable as f64).max(TM_STABILITY_MIN);
-            scale = by_nodes * by_stability;
+            scale = TM_SCALE_NORM * by_nodes * by_stability;
             (self.tables.best_fraction, self.tables.tm_scale) = (fraction, scale);
             self.tables.pv_height = self.tables.pv_height_now;
             self.tables.last_value = values[b].unwrap();
