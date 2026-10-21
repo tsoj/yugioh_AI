@@ -489,20 +489,28 @@ fn dense_relu(w: &[Vec<f64>], b: &[f64], x: &[f64]) -> Vec<f64> {
 }
 
 impl LearnedEval {
-    /// The evaluation of a model file's text; `name` for the warnings.
+    /// The evaluation of a model file's text; `name` for the errors. Panics without a valid LP
+    /// anchor (one measured on these weights): the search's margins are in LP.
     pub fn from_json(text: &str, name: &str) -> LearnedEval {
-        let mut e: LearnedEval = serde_json::from_str(text).unwrap_or_else(|err| panic!("eval {name}: {err}"));
-        assert!(e.features == "mover2" && e.mu.len() == e.scale.len(), "eval {name}: a {} net; only mover2 MLPs are evaluated", e.features);
-        e.lp_factor = 1.0;
+        let mut e = LearnedEval::from_json_unanchored(text, name);
         match &e.lp_anchor {
-            None => eprintln!("warning: eval {name} has no LP anchor (run ygoai-anchor): its values are in the network's own points, the search's margins are in LP"),
-            Some(a) if a.weights_hash != e.weights_hash() => eprintln!(
-                "warning: eval {name}: the LP anchor was measured on other weights (hash {} vs {}): run ygoai-anchor again; values in the network's own points",
+            None => panic!("eval {name} has no LP anchor: run ygoai-anchor MODEL ROWS --write"),
+            Some(a) if a.weights_hash != e.weights_hash() => panic!(
+                "eval {name}: the LP anchor was measured on other weights (hash {} vs {}): run ygoai-anchor MODEL ROWS --write again",
                 a.weights_hash,
                 e.weights_hash()
             ),
             Some(a) => e.lp_factor = a.factor,
         }
+        e
+    }
+
+    /// The evaluation of a model file's text with its values in the network's own points (an LP
+    /// factor of 1), whatever its anchor: for ygoai-anchor, which measures that anchor.
+    pub fn from_json_unanchored(text: &str, name: &str) -> LearnedEval {
+        let mut e: LearnedEval = serde_json::from_str(text).unwrap_or_else(|err| panic!("eval {name}: {err}"));
+        assert!(e.features == "mover2" && e.mu.len() == e.scale.len(), "eval {name}: a {} net; only mover2 MLPs are evaluated", e.features);
+        e.lp_factor = 1.0;
         e
     }
 

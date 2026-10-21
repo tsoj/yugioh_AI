@@ -23,7 +23,7 @@ fn main() {
     let write = args.iter().any(|a| a == "--write");
     let max: usize = args.iter().position(|a| a == "--max").map_or(200_000, |i| args[i + 1].parse().unwrap());
     let text = std::fs::read_to_string(model_path).expect("model file");
-    let eval = LearnedEval::from_json(&text, model_path);
+    let eval = LearnedEval::from_json_unanchored(&text, model_path);
     let (me, opp) = eval.lp_features();
 
     let rows = std::fs::read_to_string(rows_path).expect("rows file");
