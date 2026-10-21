@@ -189,7 +189,7 @@ if args.save_v:
 if args.output:
     import json
     assert args.model == "mlp"
-    FEATURE_SETS = {87: "mover2", 104: "mover3", 122: "mover4"}
+    FEATURE_SETS = {87: "mover2", 99: "mover5", 104: "mover3", 122: "mover4"}
     st = {kk: vv.detach().cpu().numpy().astype(float) for kk, vv in net.state_dict().items()}
     if args.drop:  # (dropped inputs were 0 in training but not at inference: their weights out)
         st["0.weight"][:, [int(i) for i in args.drop.split(",")]] = 0
