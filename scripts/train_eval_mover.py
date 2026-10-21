@@ -16,6 +16,7 @@ ap.add_argument("data")
 ap.add_argument("--model", default="mlp")
 ap.add_argument("--hidden", type=int, default=32)
 ap.add_argument("--layers", type=int, default=1, help="hidden layers")
+ap.add_argument("--dims", help="the hidden layers' widths, comma list (e.g. 8,32), instead of --hidden and --layers")
 ap.add_argument("--lam", type=float, default=0.5)
 ap.add_argument("--epochs", type=int, default=12)
 ap.add_argument("--lr", type=float, default=2e-3)
@@ -34,6 +35,8 @@ ap.add_argument("--min-wins", type=int, default=0, help="leave out of training t
 ap.add_argument("--balance-wins", action="store_true", help="weight each training game so that both decks of a pair have as much weight in won games: a game the pair's winner of W of its games won counts min(W, L) / W (a one-sided pair: 0)")
 ap.add_argument("--fold",help="I/N: hold out the I-th of N folds of the deck pairs instead of --held of them")
 args = ap.parse_args()
+hidden = [int(w) for w in args.dims.split(",")] if args.dims else [args.hidden] * args.layers
+args.layers = len(hidden)
 torch.manual_seed(args.seed)
 dev = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -111,8 +114,8 @@ n = X.shape[1]
 if args.model == "linear":
     net = torch.nn.Linear(n, 1)
 else:
-    dims = [n] + [args.hidden] * args.layers
-    net = torch.nn.Sequential(*[m for a_, b_ in zip(dims, dims[1:]) for m in (torch.nn.Linear(a_, b_), torch.nn.ReLU())], torch.nn.Linear(args.hidden, 1))
+    dims = [n] + hidden
+    net = torch.nn.Sequential(*[m for a_, b_ in zip(dims, dims[1:]) for m in (torch.nn.Linear(a_, b_), torch.nn.ReLU())], torch.nn.Linear(dims[-1], 1))
 net = net.to(dev)
 a = torch.zeros(int(ps.max()) + 1, device=dev, requires_grad=True)
 opt = torch.optim.Adam([{"params": net.parameters(), "weight_decay": args.wd}, {"params": [a]}], lr=args.lr)
@@ -201,7 +204,7 @@ if args.output:
                "w1": st["0.weight"].tolist(), "b1": st["0.bias"].tolist(),
                "layers": [{"w": st[f"{2 * i}.weight"].tolist(), "b": st[f"{2 * i}.bias"].tolist()} for i in range(1, args.layers)],
                "w2": (st[f"{2 * args.layers}.weight"][0] * K).tolist(), "b2": float(st[f"{2 * args.layers}.bias"][0] * K),
-               "k": float(K), "lam": args.lam, "hidden": args.hidden, "n_layers": args.layers}, open(args.output, "w"))
+               "k": float(K), "lam": args.lam, "hidden": hidden[0], "dims": hidden, "n_layers": args.layers}, open(args.output, "w"))
     print("saved", args.output)
     # the LP anchor (ygoai-anchor) on the held-out pairs' rows, so that the engine's values are in LP
     import os, subprocess, tempfile
