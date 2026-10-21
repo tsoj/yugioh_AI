@@ -122,8 +122,12 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
     1180 games, -3.5 +/- 14.3 (LLR -1.60); `probcut-aggr2` (from depth 4, first 3 moves, margin 0;
     depth 15.05) stopped at about 180 games, -29.0 +/- 34.7; `hist-lmr-bad` (1 ply more LMR for
     moves with negative history; depth 13.05) stopped at 1080 games, -2.6 +/- 14.9 (LLR -1.31).
+  - Finished 2026-10-21 (vs main with tm-nodes): `probcut-aggr` (from depth 3, first 3 moves, margin
+    300 LP; depth 14.76) H0, +1.7 +/- 6.5 at 5870 games (was +18 at 540); `hist-gravity` (history
+    bonus with gravity, HIST_MAX 2000; depth 13.09) H0, -0.0 +/- 8.0 at 3860 games; `hist-lmr` (LMR
+    reduction from history; depth 12.46) H0, -22.8 +/- 18.9 at 702 games.
   - `lmp` (late move pruning, Stockfish's/Reckless's shape: off the main line, a node stops after
-    2.75 + 1.32 * depth^2 moves unless it is losing; depth 13.15): H0, -24.7 +/- 19.8 at 704 games.
+    2.75 + 1.32 * depth^2 moves unless it is losing; depth 13.15): H0, -24.7 +/- 19.8 at 704 games. Rebased rerun: H0, +0.5 +/- 7.7 at 4388 games.
   - `aspiration` (root window around the iterations' mean, delta 300 LP, x1.5 per fail): not run,
     the bench depth fell at every delta (100: 12.39, 300: 12.67, 600: 12.79, 1500: 12.86).
 - Tried 2026-10-16/17 (features in the code, off by default):
