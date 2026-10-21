@@ -120,7 +120,8 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
     `probcut` stopped at 5380 games, +2.8 +/- 6.6 (LLR -1.91): a small gain at best; `improving`
     stopped at 2720 games, +3.1 +/- 9.1 (LLR -0.90); `tm-eval` (on top of tm-nodes) stopped at about
     1180 games, -3.5 +/- 14.3 (LLR -1.60); `probcut-aggr2` (from depth 4, first 3 moves, margin 0;
-    depth 15.05) stopped at about 180 games, -29.0 +/- 34.7.
+    depth 15.05) stopped at about 180 games, -29.0 +/- 34.7; `hist-lmr-bad` (1 ply more LMR for
+    moves with negative history; depth 13.05) stopped at 1080 games, -2.6 +/- 14.9 (LLR -1.31).
   - `lmp` (late move pruning, Stockfish's/Reckless's shape: off the main line, a node stops after
     2.75 + 1.32 * depth^2 moves unless it is losing; depth 13.15): H0, -24.7 +/- 19.8 at 704 games.
   - `aspiration` (root window around the iterations' mean, delta 300 LP, x1.5 per fail): not run,
