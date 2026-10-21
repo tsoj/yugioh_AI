@@ -126,6 +126,8 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
     300 LP; depth 14.76) H0, +1.7 +/- 6.5 at 5870 games (was +18 at 540); `hist-gravity` (history
     bonus with gravity, HIST_MAX 2000; depth 13.09) H0, -0.0 +/- 8.0 at 3860 games; `hist-lmr` (LMR
     reduction from history; depth 12.46) H0, -22.8 +/- 18.9 at 702 games.
+  - `probcut-improving` (both together, ProbCut on improving's static eval; depth 13.92): H0, +0.4
+    +/- 7.7 at 4098 games.
   - `lmp` (late move pruning, Stockfish's/Reckless's shape: off the main line, a node stops after
     2.75 + 1.32 * depth^2 moves unless it is losing; depth 13.15): H0, -24.7 +/- 19.8 at 704 games. Rebased rerun: H0, +0.5 +/- 7.7 at 4388 games.
   - `aspiration` (root window around the iterations' mean, delta 300 LP, x1.5 per fail): not run,
