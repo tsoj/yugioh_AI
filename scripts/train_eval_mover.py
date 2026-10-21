@@ -189,6 +189,7 @@ if args.save_v:
 if args.output:
     import json
     assert args.model == "mlp"
+    FEATURE_SETS = {87: "mover2", 104: "mover3", 122: "mover4"}
     st = {kk: vv.detach().cpu().numpy().astype(float) for kk, vv in net.state_dict().items()}
     if args.drop:  # (dropped inputs were 0 in training but not at inference: their weights out)
         st["0.weight"][:, [int(i) for i in args.drop.split(",")]] = 0
@@ -196,7 +197,7 @@ if args.output:
     if args.indicator:  # (the indicator is 0 in play: its input (0 - mu) / sd joins the bias)
         st["0.bias"] = st["0.bias"] + st["0.weight"][:, -1] * (0 - mu[-1]) / sd[-1]
         st["0.weight"], mu, sd, n = st["0.weight"][:, :-1], mu[:-1], sd[:-1], n - 1
-    json.dump({"features": {87: "mover2", 104: "mover3", 122: "mover4"}.get(n, "mover"), "model": "mover_mlp", "mu": mu.astype(float).tolist(), "scale": sd.astype(float).tolist(),
+    json.dump({"features": FEATURE_SETS.get(n, "mover"), "model": "mover_mlp", "mu": mu.astype(float).tolist(), "scale": sd.astype(float).tolist(),
                "w1": st["0.weight"].tolist(), "b1": st["0.bias"].tolist(),
                "layers": [{"w": st[f"{2 * i}.weight"].tolist(), "b": st[f"{2 * i}.bias"].tolist()} for i in range(1, args.layers)],
                "w2": (st[f"{2 * args.layers}.weight"][0] * K).tolist(), "b2": float(st[f"{2 * args.layers}.bias"][0] * K),
@@ -208,7 +209,7 @@ if args.output:
     if os.path.exists(anchor):
         with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
             for row in d["x"][is_hp][:, :n]:
-                f.write(json.dumps({"x": row.astype(float).tolist()}) + "\n")
+                f.write(json.dumps({FEATURE_SETS.get(n, "mover"): row.astype(float).tolist()}) + "\n")
         subprocess.run([anchor, args.output, f.name, "--write"], check=True)
         os.unlink(f.name)
     else:
