@@ -329,8 +329,10 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
     log-loss 0.4798 vs 0.4850). Feature-group ablations were all within noise.
 - [ ] Deeper / wider MLPs (`--dims`, the Rust eval takes any shape): on rounds 2+3, 2x64 ranked
       +0.007 +/- 0.004 over 1x16 but overfit after a few epochs; SPRT 2x64 stopped at 380 games
-      (-7.3). On the SPRT data (2026-10-21, 6x more): MLP 64 H1 +35.8 vs 16 (default); 32x32,
-      64x32 and 8x32 against the 64 running. The net's size costs no NPS (the features dominate).
+      (-7.3). On the SPRT data (2026-10-21, 6x more): MLP 64 H1 +35.8 vs 16 (default); against
+      the 64: 32x32 H0 (+0.9 +/- 7.3, 4380 games), 64x32 stopped (-0.0, 1720 games, LLR -1.30),
+      8x32 stopped (-4.6, 600 games, LLR -1.09). The net's size costs no NPS (the features dominate).
+      Next on this axis: more data rather than more shape.
 - [x] Data are games (45ab3d4): ygoai-datagen writes OUT.games.jsonl (GameRecord + search value and
       depth per searched decision); `ygoai-refeature GAMES OUT --features ...` computes rows for any
       feature set (`ygoai::datarow`) by replay, in seconds. Rounds 1 and 2 predate it (no moves
@@ -358,7 +360,9 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
   - Shapes (2026-10-21, mover2 on the same data, `--dims`; the same NPS for all, the features cost
     the time): MLP 64 H1 +35.8 +/- 20.0 at 702 games vs the MLP16, default since 5fd9188
     (models/eval_mover2_sprtr23os_64.json). 32x32 was at +19.8 +/- 17.4 (860 games, LLR +1.89) and
-    64x32 had just started when it passed: both stopped, rerun with 8x32 against the 64.
+    64x32 had just started when it passed: both stopped, rerun against the 64 with 8x32: 32x32
+    H0 (+0.9 +/- 7.3 at 4380 games), 64x32 stopped at 1720 games (-0.0 +/- 12.2, LLR -1.30), 8x32
+    (bottleneck: 8 then 32) stopped at 600 games (-4.6 +/- 18.5, LLR -1.09).
   - mover5 (branch `eval-mover5`, 99 features: mover2 and per side the ready attackers' ATK, the
     Normal Summons left this turn (turn player before the End Phase, a free Main Monster Zone, the
     mover a monster in hand to summon, the opponent assumed to have one), and mover4's field / GY
@@ -394,6 +398,16 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       Data-bound; on the full round 3 see Round 3 above.
 - [ ] More features: LP thresholds, ...
 - [ ] Later: the learned policy/value nets and effect-text embeddings (see memory).
+- [ ] Linear move policy (2026-10-21, branch `policy-linear`, search::policy): a weight per move
+      feature (kind one-hot + ATK/DEF/level, attack margins, chain context), trained by
+      scripts/train_policy_linear.py on the SPRT games' search choices (ygoai-refeature --features
+      policy), orders the moves of the decisions that are not card selections (after TT move and
+      history). Held-out top-1 0.594 vs the rules' 0.350 (idle 0.364/0.276, chain 0.747/0.222,
+      battle 0.786/0.727, effect yes/no 0.814/0.745). SPRT vs main running. Next: card selections.
+- [ ] No hand shuffle (branch `noshuffle`): the idle command "shuffle hand" is never offered to the
+      search (it changes nothing the opponent can't see anyway); the search picked it in 10.6% of
+      idle decisions (~4 per game). Bench depth 13.73 vs 13.35. SPRT vs main running; if it
+      passes, policy-linear is retrained without shuffle moves before its SPRT.
 
 ## Engine and core correctness
 
