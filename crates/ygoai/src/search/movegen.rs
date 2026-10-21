@@ -28,10 +28,13 @@ fn idx(i: usize) -> Response {
     Response { index: Some(i as i64), ..Response::default() }
 }
 
-/// The candidates of a searched prompt (belief_mc.candidates).
+/// The candidates of a searched prompt (belief_mc.candidates). An idle command's shuffling of the
+/// hand is none (it changes nothing but the hand's order, which nothing here tracks, and comes back
+/// to the same prompt: in the tree a copy of the node one ply shallower, at the root a search spent
+/// on nothing; the search chose it in 10.6% of its idle commands).
 pub fn candidates(m: &Msg) -> Vec<Response> {
     match m {
-        Msg::SelectIdlecmd { .. } => idle_options(m),
+        Msg::SelectIdlecmd { .. } => idle_options(m).into_iter().filter(|c| c.kind.as_deref() != Some("shuffle")).collect(),
         Msg::SelectBattlecmd { .. } => battle_options(m),
         Msg::SelectChain { chains, forced, .. } => {
             let opts = (0..chains.len()).map(idx);
