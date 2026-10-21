@@ -21,18 +21,21 @@ the rerun: longest game 941 decisions).
 ## Next (user's order, 2026-10-16)
 
 1. Different card guesses per iteration (below; the first-child extension failed).
-2. A new data round with the current engine (labels from match-style records), train the same
-   architecture (MLP16, mover2), SPRT it.
+2. [x] A new data round with the current engine (labels from match-style records), train the same
+   architecture (MLP16, mover2), SPRT it: done with the SPRT games as data (2026-10-21, H1 +17.2).
 3. More input features.
 4. Enough diverse openings for tests and datagen: match1.jsonl has 19996 lines (15535 pass
    book_min 2); SPRTs draw from the first 10000 (shuffled); the eval data used deck pairs from
    lines 10000-10999 (pairs500x20*.jsonl). Keep test and training openings apart and check how
-   often SPRTs reuse openings (and decks) the nets were trained on.
+   often SPRTs reuse openings (and decks) the nets were trained on. Urgent since 2026-10-21: the
+   SPRT-data net and the MLP 64 were trained on SPRT games, i.e. on the openings the SPRTs draw
+   from (the first 10000). Check their gains on unused openings (lines 12000+) before more of it.
 
 ## Running now
 
-- [ ] Self-play data with repeated deck pairs (500 pairs x 20 games, both seat orders):
-      `runs/books/pairs500x20.jsonl` into `runs/data/selfplay_pairs_2000n*.jsonl`.
+- [x] Self-play data with repeated deck pairs (500 pairs x 20 games, both seat orders):
+      `runs/books/pairs500x20.jsonl` into `runs/data/pairs500x20_2000n.jsonl` (round 1; rounds 2 and
+      3 followed, see Evaluation).
 - [x] Self-play data for the eval: `ygoai-datagen`, 2000 nodes per search, 9996 games, in
       `runs/data/selfplay_2000n.jsonl` (1.42M rows).
 
@@ -40,10 +43,9 @@ the rerun: longest game 941 decisions).
 
 See `docs/search-decisions.md` for what is and isn't searched.
 
-- [ ] SPRT each decision feature vs `lmr` (queued in this order): `unselect`, `tribute`,
-      `multicard`, `position`, `place`, then all six (`unselect,tribute,multicard,sum,position,place`).
-      `sum` is too rare for an SPRT of its own.
-- [ ] Make the winners default (`DEFAULT_FEATURES`).
+- [x] SPRT each decision feature vs `lmr` (`unselect`, `tribute`, `multicard`, `position`,
+      `place`, `sum`): obsolete, the features were removed with the other failed ones in the
+      2026-10-18 cleanup (see the retest item below).
 - [ ] Search the decisions that have no feature yet:
   - [ ] `SelectDisfield` (zones to disable)
   - [ ] `SelectPlace` with several zones
@@ -90,9 +92,11 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
     nodes), but the speed depends on the load: 15600 nodes/s idle, 3800 with three SPRTs running.
   - 74% of the game pairs are split (the same deck wins both); openings the engine decides would
     make SPRTs 3-4x faster.
-- [ ] Not tried yet (from the chess progression in memory): aspiration windows, late move
+- [x] Not tried yet (from the chess progression in memory): aspiration windows, late move
       pruning, internal iterative reduction, improving heuristic, SEE-like pruning, singular
-      extensions / multicut, double/negative extensions.
+      extensions / multicut, double/negative extensions. All but these tried in the 2026-10-20
+      round below (all H0 or stopped near 0): SEE-like pruning (no exchange notion here yet),
+      double/negative extensions (SE itself failed), aspiration (not run: bench depth fell).
 - Technique round 2026-10-20 (branches from main, implementations after Stockfish, Reckless,
   Plenty, Stormphrax, Pawnocchio; SPRT 10+0.1 vs main; bench depth at 3000 nodes, main 13.00):
   - `se` (singular extensions: TT move, depth >= 4, tt.depth >= depth - 3, not an all node,
@@ -146,8 +150,9 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
 - [x] Predictive stopping (`predict`, default since 2026-10-14 without a pass: +3.8 +/- 11.7,
       LLR -0.35 at 1760 games): the next iteration only if it is expected to end within the
       budget. It uses about 25% more of the budget than the old rule (start while under half).
-- [ ] Time management: node-based scaling of the soft bound, best-move stability, eval stability;
-      the split between early and late moves (`MOVES_TO_GO` = 20).
+- [ ] Time management: node-based scaling of the soft bound and best-move stability done
+      (`tm-nodes`, H1 +16.4, 2026-10-20); eval stability failed (`tm-eval` stopped near 0). Left: the
+      split between early and late moves (`MOVES_TO_GO` = 20), tuning tm-nodes' constants.
 - [x] Clock handling (2026-10-18, taken without a pass: 20+0.2 stopped at 460 games, -10.6 +/-
       22.8, LLR -1.16; uses ~48 s of the clock per game vs 42, depth 12.51 vs 12.26): no
       MIN_SEARCH_TIME (2 s) floor any more, under which the rules' player answered (at 1+0.01 that
@@ -322,9 +327,10 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
   - The within-pair ranking did not predict it (mover2 -0.005 +/- 0.004 vs 49 features; it moves
     by as much between epochs); the held-out losses did (value BCE 0.5107 vs 0.5129, result
     log-loss 0.4798 vs 0.4850). Feature-group ablations were all within noise.
-- [ ] Deeper MLPs (`--layers`, the Rust eval takes any number): 2x64 ranks +0.007 +/- 0.004 over
-      1x16 but overfits after a few epochs (10k games); SPRT 2x64 vs the default stopped at 380
-      games (-7.3 +/- 24.9, LLR -0.77). Retry once more data rounds exist.
+- [ ] Deeper / wider MLPs (`--dims`, the Rust eval takes any shape): on rounds 2+3, 2x64 ranked
+      +0.007 +/- 0.004 over 1x16 but overfit after a few epochs; SPRT 2x64 stopped at 380 games
+      (-7.3). On the SPRT data (2026-10-21, 6x more): MLP 64 H1 +35.8 vs 16 (default); 32x32,
+      64x32 and 8x32 against the 64 running. The net's size costs no NPS (the features dominate).
 - [x] Data are games (45ab3d4): ygoai-datagen writes OUT.games.jsonl (GameRecord + search value and
       depth per searched decision); `ygoai-refeature GAMES OUT --features ...` computes rows for any
       feature set (`ygoai::datarow`) by replay, in seconds. Rounds 1 and 2 predate it (no moves
