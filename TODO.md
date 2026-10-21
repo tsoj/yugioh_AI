@@ -404,9 +404,11 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       policy), orders the moves of the decisions that are not card selections (after TT move and
       history). Held-out top-1 0.594 vs the rules' 0.350 (idle 0.364/0.276, chain 0.747/0.222,
       battle 0.786/0.727, effect yes/no 0.814/0.745). SPRT H0, -27.2 +/- 20.6 at 538 games (penta
-      44 lost pairs vs 23 won); not slower (bench depth 13.42 vs 13.35). Now `policy-tree`: the
-      policy inside the tree only, the root in the rules' order (which decides an unfinished
-      iteration's move). Retrained without shuffle moves (--drop idle:shuffle): top-1 0.617 vs
+      44 lost pairs vs 23 won); not slower (bench depth 13.42 vs 13.35). `policy-tree` (the
+      policy inside the tree only, the root in the rules' order, which decides ties and an
+      unfinished iteration's move): H0, -4.8 +/- 11.3 at 1888 games; same depth (8.97 vs 9.02 in
+      the games). So the root order cost most of the -27, and in the tree the policy buys no depth:
+      trained on the search's choices on the game's line, not on what cuts off inside the tree. Retrained without shuffle moves (--drop idle:shuffle): top-1 0.617 vs
       0.366, branch `policy-linear-ns` on noshuffle, untested.
 - [ ] No hand shuffle (branch `noshuffle`): the idle command "shuffle hand" is never offered to the
       search; the search picked it in 10.6% of
