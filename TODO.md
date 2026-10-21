@@ -349,6 +349,10 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       12.6 at 1680 games (LLR +2.97) vs the round-2+3 net. Bench mean depth 13.35, checksum
       44336e139f6541ec. Next: mover3/mover4 and deeper nets on this data (the engine evaluates only
       mover2 since the cleanup), and keep adding SPRT games as data.
+  - Shapes (2026-10-21, mover2 on the same data, `--dims`; the same NPS for all, the features cost
+    the time): MLP 64 H1 +35.8 +/- 20.0 at 702 games vs the MLP16, default since 5fd9188
+    (models/eval_mover2_sprtr23os_64.json). 32x32 was at +19.8 +/- 17.4 (860 games, LLR +1.89) and
+    64x32 had just started when it passed: both stopped, rerun with 8x32 against the 64.
   - mover5 (branch `eval-mover5`, 99 features: mover2 and per side the ready attackers' ATK, the
     Normal Summons left this turn (turn player before the End Phase, a free Main Monster Zone, the
     mover a monster in hand to summon, the opponent assumed to have one), and mover4's field / GY
