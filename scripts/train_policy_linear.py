@@ -4,7 +4,9 @@ A linear move policy (search::policy): a weight per move feature, a move's score
 features' weights times their values, trained per move towards 1 for the move the search chose and
 0 for the others (logistic regression). ROWS: ygoai-refeature ... --features policy. Reports, on
 held-out games (every 10th by a hash of the game), how often the best-scored move is the search's
-choice, against the rules' order (the first of `rules`), per prompt.
+choice, against the rules' order (the first of `rules`), per prompt. --drop F (repeatable) removes
+the moves with feature F (e.g. idle:shuffle when the engine no longer offers them) and the
+decisions where the search chose one.
 """
 import argparse, collections, json, zlib
 import multiprocessing as mp
@@ -18,6 +20,7 @@ ap.add_argument("--epochs", type=int, default=4)
 ap.add_argument("--lr", type=float, default=0.05)
 ap.add_argument("--batch", type=int, default=65536)
 ap.add_argument("--max-rows", type=int, default=0)
+ap.add_argument("--drop", action="append", default=[])
 args = ap.parse_args()
 
 def parse(lines):
@@ -25,8 +28,16 @@ def parse(lines):
     for l in lines:
         r = json.loads(l)
         p = r.get("policy")
-        if p:
-            out.append((r["game"], p["prompt"], p["moves"], p["chosen"], p["rules"][0] if p["rules"] else -1))
+        if not p:
+            continue
+        moves, chosen, rules = p["moves"], p["chosen"], p["rules"]
+        if args.drop:
+            keep = [j for j, m in enumerate(moves) if not any(f in m for f in args.drop)]
+            if chosen not in keep or len(keep) < 2:
+                continue
+            new = {j: i for i, j in enumerate(keep)}
+            moves, chosen, rules = [moves[j] for j in keep], new[chosen], [new[j] for j in rules if j in new]
+        out.append((r["game"], p["prompt"], moves, chosen, rules[0] if rules else -1))
     return out
 
 def chunks(path, size=20000):

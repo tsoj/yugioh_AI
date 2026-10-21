@@ -405,7 +405,7 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       history). Held-out top-1 0.594 vs the rules' 0.350 (idle 0.364/0.276, chain 0.747/0.222,
       battle 0.786/0.727, effect yes/no 0.814/0.745). SPRT vs main running. Next: card selections.
 - [ ] No hand shuffle (branch `noshuffle`): the idle command "shuffle hand" is never offered to the
-      search (it changes nothing the opponent can't see anyway); the search picked it in 10.6% of
+      search; the search picked it in 10.6% of
       idle decisions (~4 per game). Bench depth 13.73 vs 13.35. SPRT vs main running; if it
       passes, policy-linear is retrained without shuffle moves before its SPRT.
 
