@@ -1,6 +1,6 @@
 """Usage: scripts/train_eval_mover.py FEATURES.npz [--hidden 16] [--lam 0.5] [-o runs/nn/X.json]
 (FEATURES.npz from scripts/eval_mover_features.py; games in blocks of 20 per deck pair, alternating
-seat order, as runs/books/pairs500x20.jsonl).
+seat order, as runs/books/pairs500x20.jsonl, or explicit deck pairs: `pair`, `aseat`, `valgame`).
 
 Mover-view eval with a deck-pair term (experiment).
 
@@ -41,8 +41,15 @@ d = np.load(args.data)
 X, value, static, result, game, player, turn = (d[k] for k in ["x", "value", "static", "result", "game", "player", "turn"])
 if args.drop:
     X = X.copy(); X[:, [int(i) for i in args.drop.split(",")]] = 0
-pair, k = game // 20, game % 20
-ps = pair * 2 + (k % 2)
+# (explicit deck pairs if the npz has them, e.g. match records: `pair`, `aseat` the seat of the
+# pair's first deck, `valgame` the validation games within training pairs; else blocks of 20 games
+# per pair with alternating seat order, the last 2 of each for validation)
+if "pair" in d.files:
+    pair, aseat, valgame = d["pair"], d["aseat"], d["valgame"].astype(bool)
+else:
+    pair, k = game // 20, game % 20
+    aseat, valgame = k % 2, k >= 18
+ps = pair * 2 + aseat
 sgn = np.where(player == 0, 1.0, -1.0).astype(np.float32)
 
 def fit_k(v, r):
@@ -70,13 +77,13 @@ if args.fold:
 else:
     held_pairs = set(rng.choice(np.unique(pair[pair < args.held_below] if args.held_below else pair), args.held, replace=False).tolist())
 is_hp = np.isin(pair, list(held_pairs))
-is_vin = ~is_hp & (k >= 18)
+is_vin = ~is_hp & valgame
 is_tr = ~is_hp & ~is_vin
 W = np.ones(len(X), np.float32)
 min_wins = max(args.min_wins, 1 if args.drop_onesided else 0)
 if min_wins or args.balance_wins:
-    # (the pair's first deck sits in seat k % 2; per game: 0 or 1 the deck that won, 2 a draw)
-    won = np.where(result == 0, 2, (np.where(result > 0, player, 1 - player) != k % 2).astype(np.int64))
+    # (the pair's first deck sits in seat aseat; per game: 0 or 1 the deck that won, 2 a draw)
+    won = np.where(result == 0, 2, (np.where(result > 0, player, 1 - player) != aseat).astype(np.int64))
     games_of = {}
     for g_, p_, w_ in zip(game, pair, won):
         games_of.setdefault(p_, {})[g_] = w_
