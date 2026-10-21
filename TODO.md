@@ -340,7 +340,16 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       response ("info"), and ygoai-match's records carry them as `labels`; ygoai-refeature reads
       such records (the game number is the line). The labels are the engine's view (its
       reconstruction), the features the true duel's, as in the datagen.
-- [x] Round 3 (default since 2026-10-17): datagen with the round-2 net on runs/books/pairs500x20_c.jsonl
+- [x] SPRT games as data (default since 2026-10-21): MLP16 mover2 on the SPRT games with search
+      values from the runs started after the round-2+3 net became the default (2026-10-17 23:22
+      to 2026-10-21, without vsold-*: 86594 games, 13.2M positions; runs/data/sprt_net/, built by
+      collecting the records + ygoai-refeature + an npz with explicit deck pairs) and rounds 2+3,
+      without one-sided deck pairs (2544 of 8737), `--held 400`
+      (crates/ygoai/models/eval_mover2_sprtr23os_mlp16.json, LP factor 1.105): SPRT H1 +17.2 +/-
+      12.6 at 1680 games (LLR +2.97) vs the round-2+3 net. Bench mean depth 13.35, checksum
+      44336e139f6541ec. Next: mover3/mover4 and deeper nets on this data (the engine evaluates only
+      mover2 since the cleanup), and keep adding SPRT games as data.
+- [x] Round 3 (default 2026-10-17 to 2026-10-21): datagen with the round-2 net on runs/books/pairs500x20_c.jsonl
       (lines 11000-11499 of match1, 20 games per pair; all 10000 games in
       runs/data/pairs500x20c_2000n_all.games.jsonl, the ones the OOM below lost replayed). MLP16 on
       the mover2 features of rounds 2 and 3 (2.45M positions; crates/ygoai/models/eval_mover2_r23_mlp16.json)
