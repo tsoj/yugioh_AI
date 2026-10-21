@@ -349,6 +349,11 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       12.6 at 1680 games (LLR +2.97) vs the round-2+3 net. Bench mean depth 13.35, checksum
       44336e139f6541ec. Next: mover3/mover4 and deeper nets on this data (the engine evaluates only
       mover2 since the cleanup), and keep adding SPRT games as data.
+  - mover5 (branch `eval-mover5`, 99 features: mover2 and per side the ready attackers' ATK, the
+    Normal Summons left this turn (turn player before the End Phase, a free Main Monster Zone, the
+    mover a monster in hand to summon, the opponent assumed to have one), and mover4's field / GY
+    effects with uses left, second best battle stat, weakest attacker's ATK), MLP16 on the same SPRT
+    games and round 3 (round 2 has no moves): H0, -8.6 +/- 13.3 at 1368 games. Same NPS.
 - [x] Round 3 (default 2026-10-17 to 2026-10-21): datagen with the round-2 net on runs/books/pairs500x20_c.jsonl
       (lines 11000-11499 of match1, 20 games per pair; all 10000 games in
       runs/data/pairs500x20c_2000n_all.games.jsonl, the ones the OOM below lost replayed). MLP16 on
