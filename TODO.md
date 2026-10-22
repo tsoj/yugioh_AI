@@ -447,6 +447,12 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       99/159), while eval training also loaded the CPU under 32 games on 32 cores; before (232/233)
       and after (61/58) even. Less time per move seems to favour it. Rerun on a quiet machine if
       wanted.
+- [x] Eval training target (user's question, 2026-10-22): the default MLP 64 uses --lam 0.5 (half
+      the game result with the deck-pair term, half the search value). Same data and settings:
+      `eval-lam0` (results alone; held-out pairs res-ll 0.5306, overfits the training games:
+      0.446 vs 0.654 on held-out games) H0, -12.1 +/- 14.9 at 1262 games (LLR -2.98).
+      `eval-lam1` (search values alone; held-out pairs res-ll 0.5277) H0, -2.0 +/- 9.4 at 2806
+      games (LLR -3.04). The mix stays.
 - [ ] Eval net forward in f32 / columns (branch `eval-f32`): the same search tree (depth-10
       bench checksum eb7f41e9580dc935 as main), 1.0% fewer instructions. Too small for a [0, 10]
       SPRT; the user's call whether to merge as a pure speedup.
