@@ -467,6 +467,19 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       Hidden 16/32/64, temperature, wd: all within ~0.01 (data-bound). Off (YGOAI_CARD_POLICY=none)
       = main's checksum; on: depth-10 bench 4.6% fewer instructions, +0.9% per node at 3000 nodes
       (depth 13.42 vs 13.34). SPRT running (lane next to the quiesce-greedy rerun).
+- [ ] Horizon by action, not by decision type (user, 2026-10-22, branch `horizon-action`): at the
+      horizon `do_move` let the rules answer only card selections, so a yes/no or option inside a
+      resolution stopped the move and the eval came mid-effect. `action_under_way` (search::movegen)
+      reads the core's unit stack: a chain link resolving (`chain_solving`) or any unit behind
+      the question other than Turn/IdleCommand/BattleCommand/PointEvent/PhaseEvent/QuickEffect/
+      SolveChain/DamageStep/ForcedBattle/bookkeeping (AddChain = cost/targets, summon procedures,
+      DiscardHand, OperationReplace, SolveContinuous ...). At the horizon such decisions are answered
+      by the rules; on the main line searched one ply deeper (as card selections). The strict
+      variant: an open chain's response window still stops. Stacks at searched decisions in 100
+      replayed games: idle/battle commands, chain windows and trigger yes/no all on boundary stacks;
+      resolution: 847 card / 92 yes-no / 45 option, activation (AddChain) ~500 card / 28 option.
+      Bench: depth 10 353580 nodes (main 353436), +1.7% instructions; 3000n depth 13.35 (13.34).
+      SPRT running.
 - [ ] Eval net forward in f32 / columns (branch `eval-f32`): the same search tree (depth-10
       bench checksum eb7f41e9580dc935 as main), 1.0% fewer instructions. Too small for a [0, 10]
       SPRT; the user's call whether to merge as a pure speedup.
