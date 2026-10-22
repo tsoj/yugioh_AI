@@ -454,7 +454,7 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       0.446 vs 0.654 on held-out games) H0, -12.1 +/- 14.9 at 1262 games (LLR -2.98).
       `eval-lam1` (search values alone; held-out pairs res-ll 0.5277) H0, -2.0 +/- 9.4 at 2806
       games (LLR -3.04). The mix stays.
-- [ ] Card policy (user's idea, 2026-10-22, branch `card-policy`): a small MLP (16 hidden) scores the
+- [x] Card policy (user's idea, 2026-10-22, branch `card-policy`): a small MLP (16 hidden) scores the
       cards of a one-card selection (`search::cardpolicy`) in place of the rules' order by the
       select hint: it decides which cards the search tries (card_width 3, root 5) and the horizon's
       pick. Features: the card's types, attribute, level, ATK/DEF, location, its effects (kinds,
@@ -466,7 +466,9 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       the first 3 0.849 (0.808), first 5 0.932 (0.898); regret of the first 3's best 251 LP (342).
       Hidden 16/32/64, temperature, wd: all within ~0.01 (data-bound). Off (YGOAI_CARD_POLICY=none)
       = main's checksum; on: depth-10 bench 4.6% fewer instructions, +0.9% per node at 3000 nodes
-      (depth 13.42 vs 13.34). SPRT running (lane next to the quiesce-greedy rerun).
+      (depth 13.42 vs 13.34). SPRT H1: +8.5 +/- 6.7 at 5348 games (LLR +3.01), merged (578c0ce).
+      Main's depth-10 bench is now 343056 nodes, 331.3G instructions. Next: more card-ref data
+      (the model is data-bound), and the policy's first card in quiescence's greedy moves.
 - [ ] Horizon by action, not by decision type (user, 2026-10-22, branch `horizon-action`): at the
       horizon `do_move` let the rules answer only card selections, so a yes/no or option inside a
       resolution stopped the move and the eval came mid-effect. `action_under_way` (search::movegen)
