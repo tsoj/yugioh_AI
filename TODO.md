@@ -410,10 +410,10 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       the games). So the root order cost most of the -27, and in the tree the policy buys no depth:
       trained on the search's choices on the game's line, not on what cuts off inside the tree. Retrained without shuffle moves (--drop idle:shuffle): top-1 0.617 vs
       0.366, branch `policy-linear-ns` on noshuffle, untested.
-- [ ] No hand shuffle (branch `noshuffle`): the idle command "shuffle hand" is never offered to the
-      search; the search picked it in 10.6% of
-      idle decisions (~4 per game). Bench depth 13.73 vs 13.35. SPRT vs main running; if it
-      passes, policy-linear is retrained without shuffle moves before its SPRT.
+- [x] No hand shuffle (merged b1aec37, user's call): the idle command "shuffle hand" is never
+      offered to the search; the search picked it in 10.6% of idle decisions (~4 per game). Bench
+      depth 13.73 vs 13.35. SPRT stopped at 5660 games, +2.8 +/- 6.4, LLR -2.02 (a simplification,
+      merged as neutral).
 
 ## Engine and core correctness
 
