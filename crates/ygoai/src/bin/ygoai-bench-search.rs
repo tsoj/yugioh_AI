@@ -1,6 +1,7 @@
 //! Speed of the alpha-beta search (crate::search): plays book openings with the heuristic player
 //! and, at each searched decision of player 0, searches the true duel for `budget` seconds, or
-//! `N` nodes with a budget of the form "Nn" (then the run is deterministic: its checksum over the
+//! `N` nodes with a budget of the form "Nn", or to depth `N` with "Nd" (both deterministic: the
+//! nodes a fixed depth takes measure the move ordering; the checksum over the
 //! searches' results and node counts shows that a change kept the engine's behavior).
 //!
 //!   ygoai-bench-search BOOK [OPENINGS] [BUDGET]
@@ -31,9 +32,10 @@ fn main() {
     let n: usize = args.get(2).map_or(2, |s| s.parse().unwrap());
     let book = load_book_head(args[1].as_ref(), 0, n).expect("book");
     let budget = args.get(3).map_or("0.5", |s| s.as_str());
-    let (budget, max_nodes) = match budget.strip_suffix('n') {
-        Some(k) => (None, Some(k.parse::<u64>().unwrap())),
-        None => (Some(budget.parse::<f64>().unwrap()), None),
+    let (budget, max_nodes, depth) = match (budget.strip_suffix('n'), budget.strip_suffix('d')) {
+        (Some(k), _) => (None, Some(k.parse::<u64>().unwrap()), None),
+        (_, Some(k)) => (None, None, Some(k.parse::<i32>().unwrap())),
+        _ => (Some(budget.parse::<f64>().unwrap()), None, None),
     };
     let mut checksum = 0u64;
     init(None).unwrap();
@@ -94,7 +96,7 @@ fn main() {
                 let (bp, bh, bb) = (ab.tt_probes, ab.tt_hits, ab.broken);
                 let ext_before = ab.ext_nodes;
                 let t = Instant::now();
-                let params = SearchParams { budget, elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2], max_nodes, depth: None, exact_root: false };
+                let params = SearchParams { budget, elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2], max_nodes, depth, exact_root: false };
                 let (best, done) = ab.search(&duel, &p, &cands, &params);
                 if let Some(f) = &mut best_out {
                     // (then the prompt, the extension's nodes in this search, and whether it extended
