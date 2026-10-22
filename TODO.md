@@ -432,6 +432,13 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       ablation: net arithmetic 2.1%, move features 0.5%). Any gain must come from quality (LMR).
       SPRT H0: -1.1 +/- 8.8 at 3260 games (LLR -3.00). Better top-1 than history buys neither
       nodes nor quality: the order matters at few nodes, and there history is about as good.
+- [x] Leaf rollout (user's idea, 2026-10-22, branch `leaf-rollout`): at depth <= 0 the decisions
+      up to the next turn are made without search, each the first move of the ordering (TT move,
+      history, rules' order), then the static eval. 5.5x the instructions to depth 10; at 0.5 s
+      per search mean depth 10.37 vs 13.41. SPRT H0: -132.4 +/- 48.0 at 154 games (LLR -2.96).
+      At equal nodes (NODES=2000, the rollouts not counted, 600 games): -47.8 +/- 23.3, so the
+      rollout's values are worse, not only its cost: the ordering's first move is what cuts off,
+      not a good move to play out a turn with.
 - [ ] Eval net forward in f32 / columns (branch `eval-f32`): the same search tree (depth-10
       bench checksum eb7f41e9580dc935 as main), 1.0% fewer instructions. Too small for a [0, 10]
       SPRT; the user's call whether to merge as a pure speedup.
