@@ -468,7 +468,7 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       = main's checksum; on: depth-10 bench 4.6% fewer instructions, +0.9% per node at 3000 nodes
       (depth 13.42 vs 13.34). SPRT H1: +8.5 +/- 6.7 at 5348 games (LLR +3.01), merged (578c0ce).
       Main's depth-10 bench is now 343056 nodes, 331.3G instructions. Next: more card-ref data
-      (the model is data-bound), and the policy's first card in quiescence's greedy moves.
+      (the model is data-bound).
 - [ ] Horizon by action, not by decision type (user, 2026-10-22, branch `horizon-action`): at the
       horizon `do_move` let the rules answer only card selections, so a yes/no or option inside a
       resolution stopped the move and the eval came mid-effect. `action_under_way` (search::movegen)
