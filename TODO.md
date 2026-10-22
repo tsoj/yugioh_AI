@@ -30,6 +30,11 @@ the rerun: longest game 941 decisions).
    often SPRTs reuse openings (and decks) the nets were trained on. Urgent since 2026-10-21: the
    SPRT-data net and the MLP 64 were trained on SPRT games, i.e. on the openings the SPRTs draw
    from (the first 10000). Check their gains on unused openings (lines 12000+) before more of it.
+   [x] Checked 2026-10-22 (main's MLP 64 vs the MLP16 r23os before both SPRT-data nets, 1000
+   openings each, 10+0.1, sprt_branch.sh ELO=none, branch `eval-r23os`): first 10000 +29.8 +/-
+   11.4, lines 12000+ (runs/books/match1_from12000.jsonl) +20.2 +/- 11.5. The gain holds on
+   unseen openings; the gap (9.6 +/- 16) is within noise. (Both below the SPRTs' +17.2 and +35.8
+   summed: early-stopped H1s overestimate.) Keep test and training openings apart anyway.
 
 ## Running now
 
@@ -427,8 +432,9 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       ablation: net arithmetic 2.1%, move features 0.5%). Any gain must come from quality (LMR).
       SPRT H0: -1.1 +/- 8.8 at 3260 games (LLR -3.00). Better top-1 than history buys neither
       nodes nor quality: the order matters at few nodes, and there history is about as good.
-- [ ] Eval net forward in f32 / columns (as PolicyNet): the eval's `dense_relu` collect is
-      ~1.6% of the profile; an NPS-only change.
+- [ ] Eval net forward in f32 / columns (branch `eval-f32`): the same search tree (depth-10
+      bench checksum eb7f41e9580dc935 as main), 1.0% fewer instructions. Too small for a [0, 10]
+      SPRT; the user's call whether to merge as a pure speedup.
 - [x] Chain quiescence (branch `quiesce-chain`): at depth <= 0 with a chain open, the rules
       resolve the chain before the static eval. Depth-10 nodes -2.2%, +12.9% instructions per
       node. SPRT H0: -6.5 +/- 12.2 at 1436 games (LLR -2.98).
