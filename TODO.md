@@ -445,8 +445,9 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       the stand pat. +41% instructions to depth 10. SPRT stopped at 6320 games, +6.5 +/- 6.3,
       LLR +1.42, as contaminated: its gain came in one window, games 3400-5400 (lost/won pairs
       99/159), while eval training also loaded the CPU under 32 games on 32 cores; before (232/233)
-      and after (61/58) even. Less time per move seems to favour it. Rerun on a quiet machine if
-      wanted.
+      and after (61/58) even. Less time per move seems to favour it. Rerun on a quiet machine
+      (2026-10-22, next to the card-policy SPRT): stopped by the user at 2460 games, +1.8 +/- 10.1,
+      LLR -1.18 (penta 164 lost / 171 won pairs), for the strict "action under way" horizon.
 - [x] Eval training target (user's question, 2026-10-22): the default MLP 64 uses --lam 0.5 (half
       the game result with the deck-pair term, half the search value). Same data and settings:
       `eval-lam0` (results alone; held-out pairs res-ll 0.5306, overfits the training games:
