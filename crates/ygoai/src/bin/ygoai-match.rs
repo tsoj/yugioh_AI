@@ -11,7 +11,12 @@
 //! `--nps-nodes N` (NPS-adjusted node limit): the second engine (the base) searches N nodes per
 //! decision, the first N times the ratio of their nodes per second, measured over the match's
 //! searches (`matchrun::NpsNodes`): a fixed-node test that charges a slower engine for its speed.
+//!
+//! `--resume RECORDS` continues a stopped match: the finished pairs of RECORDS (an earlier run's
+//! `--records`, the same engine names) count towards the statistics and the SPRT, their openings
+//! are not played again, and the records file of this run starts with them.
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
@@ -36,13 +41,14 @@ struct Args {
     shuffle: Option<u64>,
     pool: usize,
     nps_nodes: Option<u64>,
+    resume: Option<PathBuf>,
 }
 
 fn usage(msg: &str) -> ! {
     eprintln!("ygoai-match: {msg}");
     eprintln!(
         "usage: ygoai-match --engine NAME=COMMAND --engine NAME=COMMAND --book BOOK [-n N] [--tc BASE+INC] \
-         [--sprt ELO0 ELO1] [--alpha A] [--beta B] [-c J] [--records PATH] [--book-min N] [--shuffle SEED] [--pool N] [--max-turns N] [--nps-nodes N]"
+         [--sprt ELO0 ELO1] [--alpha A] [--beta B] [-c J] [--records PATH] [--book-min N] [--shuffle SEED] [--pool N] [--max-turns N] [--nps-nodes N] [--resume RECORDS]"
     );
     std::process::exit(2)
 }
@@ -62,6 +68,33 @@ fn shuffle<T>(v: &mut [T], seed: u64) {
     }
 }
 
+/// The finished pairs of an earlier run's records, in their order: the opening's seed, the record
+/// lines and `name`'s scores.
+fn finished_pairs(path: &PathBuf, name: &str) -> Vec<(i64, Vec<String>, Vec<f64>)> {
+    let text = std::fs::read_to_string(path).unwrap_or_else(|e| usage(&format!("resume: {e}")));
+    let mut pairs: Vec<(i64, Vec<String>, Vec<f64>)> = Vec::new();
+    let mut at: HashMap<i64, usize> = HashMap::new();
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        let r: serde_json::Value = serde_json::from_str(line).unwrap_or_else(|e| usage(&format!("resume: {e}")));
+        let seed = r["seed"].as_i64().unwrap_or_else(|| usage("resume: a record without a seed"));
+        let seat = r["agents"].as_array().and_then(|a| a.iter().position(|n| n.as_str() == Some(name)));
+        let seat = seat.unwrap_or_else(|| usage(&format!("resume: a record without the engine {name}")));
+        let score = match r["result"]["winner"].as_u64() {
+            None => 0.5,
+            Some(w) if w as usize == seat => 1.0,
+            Some(_) => 0.0,
+        };
+        let k = *at.entry(seed).or_insert_with(|| {
+            pairs.push((seed, Vec::new(), Vec::new()));
+            pairs.len() - 1
+        });
+        pairs[k].1.push(line.to_string());
+        pairs[k].2.push(score);
+    }
+    pairs.retain(|p| p.2.len() == 2);
+    pairs
+}
+
 fn parse_args() -> Args {
     let mut a = Args {
         engines: Vec::new(),
@@ -78,6 +111,7 @@ fn parse_args() -> Args {
         shuffle: None,
         pool: usize::MAX,
         nps_nodes: None,
+        resume: None,
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -112,6 +146,7 @@ fn parse_args() -> Args {
             "--book-min" => a.book_min = num(next(&mut i, &arg), &arg) as i64,
             // (only the book's first N lines: the eval's training pairs come from later ones)
             "--pool" => a.pool = num(next(&mut i, &arg), &arg) as usize,
+            "--resume" => a.resume = Some(next(&mut i, &arg).into()),
             "--nps-nodes" => a.nps_nodes = Some(num(next(&mut i, &arg), &arg) as u64),
             "--shuffle" => a.shuffle = Some(next(&mut i, &arg).parse().unwrap_or_else(|_| usage("--shuffle takes an integer seed"))),
             // (accepted for scripts/match.py's command lines: only random openings use them)
@@ -160,6 +195,30 @@ fn main() {
     };
     let mut out = args.records.as_ref().map(|p| std::fs::File::create(p).unwrap_or_else(|e| usage(&format!("records: {e}"))));
     let (lo, hi) = args.sprt.map(|_| sprt_bounds(args.alpha, args.beta)).unwrap_or((0.0, 0.0));
+    let mut stats = MatchStats::default();
+    if let Some(path) = &args.resume {
+        let pairs = finished_pairs(path, &a.name);
+        let done: std::collections::HashSet<i64> = pairs.iter().map(|p| p.0).collect();
+        for (_, lines, scores) in &pairs {
+            stats.add_pair(scores);
+            if let Some(f) = out.as_mut() {
+                for l in lines {
+                    let _ = writeln!(f, "{l}");
+                }
+            }
+        }
+        openings.retain(|o| !done.contains(&o.seed));
+        println!("resumed {} pairs from {}: {}", pairs.len(), path.display(), stats.summary(args.sprt));
+        println!("{} openings left", openings.len());
+        if let Some((e0, e1)) = args.sprt {
+            let llr = stats.llr(e0, e1);
+            if llr <= lo || llr >= hi {
+                println!("SPRT finished: {} (LLR {llr:.2}, bounds [{lo:.2}, {hi:.2}])", if llr >= hi { "H1 accepted" } else { "H0 accepted" });
+                println!("final: {} errors: 0", stats.summary(args.sprt));
+                std::process::exit(0);
+            }
+        }
+    }
     let openings = Arc::new(openings);
     let next_task = Arc::new(AtomicUsize::new(0));
     let stop = Arc::new(AtomicBool::new(false));
@@ -181,7 +240,6 @@ fn main() {
         });
     }
     drop(tx);
-    let mut stats = MatchStats::default();
     let mut errors = 0;
     let t0 = Instant::now();
     for (i, (seed, res)) in rx.iter().enumerate() {
