@@ -483,7 +483,11 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       replayed games: idle/battle commands, chain windows and trigger yes/no all on boundary stacks;
       resolution: 847 card / 92 yes-no / 45 option, activation (AddChain) ~500 card / 28 option.
       Bench: depth 10 355577 nodes (main 353436), +1.9% instructions; 3000n depth 13.33 (13.34).
-      (horizon-action-ext: 353580 nodes, +1.7%; 13.35.) SPRT running.
+      (horizon-action-ext: 353580 nodes, +1.7%; 13.35.) SPRT against the old main stopped at
+      2850 games, +7.6 +/- 9.0 (LLR +1.21), once the card policy was merged: rebased onto it
+      (51e423a; at the horizon one-card selections take the policy's first card, inside an action
+      too, the rest the rules) and continued against the new main with those 1425 pairs counted
+      (user's call, knowingly mixed: RESUME=), 32 at a time. SPRT running.
 - [ ] Eval net forward in f32 / columns (branch `eval-f32`): the same search tree (depth-10
       bench checksum eb7f41e9580dc935 as main), 1.0% fewer instructions. Too small for a [0, 10]
       SPRT; the user's call whether to merge as a pure speedup.
@@ -533,7 +537,7 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
 - [ ] Repo cleanup: what is still needed of `ygoai/` (Python), `ygoai_rs/` and the other folders.
 - [ ] Remove the worktrees `wt-old` (main repo) and `wt-old-rust` (rust repo) in the scratchpad.
 - [ ] Push the rust submodule commits 2b7f988, 1354870, 935783d, 658b359 (ask first).
-- [ ] Resumable SPRTs (idea, 2026-10-22): `ygoai-match --resume RECORDS` (the finished pairs of the
+- [x] Resumable SPRTs (idea, 2026-10-22; done 04fa423): `ygoai-match --resume RECORDS` (the finished pairs of the
       records into the pentanomial, their openings skipped, same shuffle seed, records appended) and
       `RESUME=<log name>` in sprt_branch.sh (the old run's seed and binaries). Only under the same
       conditions (commits, tc, no load).
