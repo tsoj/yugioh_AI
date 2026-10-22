@@ -133,7 +133,7 @@ pub fn card_features(d: &Duel, prompt: &Msg, hint: Option<u64>, rules: &[usize])
         // its copies with the selecting player (not itself)
         let k = data.map_or(0, |c| c.code);
         let field = mine.list_mzone.iter().chain(&mine.list_szone).flatten().copied();
-        let mut copies_in = |list: &mut dyn Iterator<Item = ygo_core::types::CardId>| copies(&mut list.filter(|&o| Some(o) != id), k);
+        let copies_in = |list: &mut dyn Iterator<Item = ygo_core::types::CardId>| copies(&mut list.filter(|&o| Some(o) != id), k);
         put(copies_in(&mut mine.list_hand.iter().copied()));
         put(copies_in(&mut field.into_iter()));
         put(copies_in(&mut mine.list_grave.iter().copied()));
