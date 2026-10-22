@@ -151,6 +151,13 @@ pub fn card_features(d: &Duel, prompt: &Msg, hint: Option<u64>, rules: &[usize])
     out
 }
 
+/// The default policy (scripts/train_card_policy.py --hidden 16 --epochs 12 on
+/// runs/data/card_refs/r1.jsonl: 20093 selections of the games of runs/sprt/evalcheck-from12000_*
+/// and noshuffle_*, references at 2000 nodes; 14698 with a spread). Held out (1466): the best card
+/// first 0.482 (rules 0.428), in the first 3 0.849 (0.808), in the first 5 0.932 (0.898); regret of
+/// the best of the first 3 251 LP (342).
+const DEFAULT_POLICY: &str = include_str!("../../models/card_policy_cp1_h16.json");
+
 /// The network: score = w2 . relu(W1 x + b1) + b2 (the features' standardization folded into W1, b1).
 #[derive(serde::Deserialize)]
 pub struct CardPolicy {
@@ -162,14 +169,18 @@ pub struct CardPolicy {
 }
 
 impl CardPolicy {
-    /// The policy in use (read once): $YGOAI_CARD_POLICY's JSON file if set, else none (the rules' order).
+    /// The policy in use (read once): $YGOAI_CARD_POLICY's JSON file if set ("none": the rules'
+    /// order), the built-in DEFAULT_POLICY otherwise.
     pub fn get() -> Option<&'static CardPolicy> {
         static P: std::sync::OnceLock<Option<CardPolicy>> = std::sync::OnceLock::new();
         P.get_or_init(|| {
-            let path = std::env::var("YGOAI_CARD_POLICY").ok().filter(|p| !p.is_empty())?;
-            let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("YGOAI_CARD_POLICY {path}: {e}"));
-            let p: CardPolicy = serde_json::from_str(&text).unwrap_or_else(|e| panic!("YGOAI_CARD_POLICY {path}: {e}"));
-            assert_eq!(p.features, CARD_FEATURES, "YGOAI_CARD_POLICY {path}: features");
+            let (text, path) = match std::env::var("YGOAI_CARD_POLICY").ok().filter(|p| !p.is_empty()) {
+                Some(p) if p == "none" => return None,
+                Some(p) => (std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("YGOAI_CARD_POLICY {p}: {e}")), p),
+                None => (DEFAULT_POLICY.to_string(), "models/card_policy_cp1_h16.json".to_string()),
+            };
+            let p: CardPolicy = serde_json::from_str(&text).unwrap_or_else(|e| panic!("card policy {path}: {e}"));
+            assert_eq!(p.features, CARD_FEATURES, "card policy {path}: features");
             Some(p)
         })
         .as_ref()
