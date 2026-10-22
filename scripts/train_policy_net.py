@@ -13,7 +13,8 @@ score w . h + c. Loss: the cross-entropy over each node's moves (the best: the c
 exact value's). Without the hash table's move (searched first anyway) and the nodes where it was
 the best. Trained on the nodes with an exact value only (--cutoffs: the cutoffs too): a cutoff is
 logged only when its first move did not cut (one searched move is no data), so the cutoffs are the
-order's failures alone, and the moves after the cutoff's were not searched. Held out: every 10th game by a hash. Reports top-1 against the search's own order
+order's failures alone, and the moves after the cutoff's were not searched (read for the held-out
+games only then). Held out: every 10th game by a hash. Reports top-1 against the search's own order
 (history, "first") and the rules' order, at the nodes with an exact value (all moves searched: the
 fair comparison) and at the cutoffs. The parsed data are cached next to NODES as .npz.
 """
@@ -40,22 +41,35 @@ def hist_inputs(h):
     hs = np.sign(h) * np.log1p(np.abs(h))
     return np.stack([hs, hs - hs.max(), (hs == hs.max()).astype(np.float64)], 1)
 
+def held_game(g):
+    return zlib.crc32(str(g).encode()) % 10 == 0
+
 def parse(lines):
-    """(game, prompt, position, [features per move], hist inputs, chosen, rules first, cut) of the
-    rows, without the hash table's move."""
-    out = []
+    """A chunk's nodes as arrays, without the hash table's move (the cutoffs of training games
+    only with --cutoffs): games, prompts, positions, moves per node, the move features' names,
+    values and count per move, hist inputs, chosen, rules' first, cut."""
+    games, prompts_, pos, nmoves, keys, vals, nfeat, hist, chosen, rules, cut = ([] for _ in range(11))
     for l in lines:
         r = json.loads(l)
         p = r["policy"]
-        moves, chosen, tt = p["moves"], p["chosen"], p.get("tt_move")
+        if p["cut"] and not args.cutoffs and not held_game(r["game"]):
+            continue
+        moves, ch, tt = p["moves"], p["chosen"], p.get("tt_move")
         keep = [j for j in range(len(moves)) if j != tt]
-        if chosen not in keep or len(keep) < 2:
+        if ch not in keep or len(keep) < 2:
             continue
         new = {j: i for i, j in enumerate(keep)}
-        hist = hist_inputs(np.array([p["history"][j] for j in keep], dtype=np.float64))
-        rules = [new[j] for j in p["rules"] if j in new]
-        out.append((r["game"], p["prompt"], p["position"], [moves[j] for j in keep], hist, new[chosen], rules[0], p["cut"]))
-    return out
+        hist.append(hist_inputs(np.array([p["history"][j] for j in keep], dtype=np.float64)))
+        games.append(r["game"]); prompts_.append(p["prompt"]); pos.append(p["position"]); nmoves.append(len(keep))
+        for j in keep:
+            m = moves[j]
+            keys.extend(m.keys()); vals.extend(m.values()); nfeat.append(len(m))
+        chosen.append(new[ch]); rules.append([new[j] for j in p["rules"] if j in new][0]); cut.append(p["cut"])
+    if not games:
+        return None
+    return (games, prompts_, np.array(pos, dtype=np.float32), np.array(nmoves, dtype=np.int64), keys,
+            np.array(vals, dtype=np.float32), np.array(nfeat, dtype=np.int64), np.concatenate(hist).astype(np.float32),
+            np.array(chosen), np.array(rules), np.array(cut))
 
 def chunks(path, size=5000):
     buf = []
@@ -65,7 +79,7 @@ def chunks(path, size=5000):
             if len(buf) == size: yield buf; buf = []
     if buf: yield buf
 
-cache = os.path.splitext(args.rows)[0] + ".policynet.npz"
+cache = os.path.splitext(args.rows)[0] + (".cutoffs" if args.cutoffs else "") + ".policynet2.npz"
 if os.path.exists(cache) and os.path.getmtime(cache) > os.path.getmtime(args.rows):
     c = np.load(cache, allow_pickle=True)
     pos, mfirst, fidx, fval, foff, hist, dgame, dprompt, dchosen, drules, dcut = (c[k] for k in
@@ -73,30 +87,29 @@ if os.path.exists(cache) and os.path.getmtime(cache) > os.path.getmtime(args.row
     vocab = {k: i for i, k in enumerate(c["vocab"])}; prompts = {k: i for i, k in enumerate(c["prompts"])}
 else:
     vocab, prompts = {}, {}
-    pos, mfirst, fidx, fval, foff, hist = [], [0], [], [], [0], []
-    dgame, dprompt, dchosen, drules, dcut = [], [], [], [], []
+    parts = collections.defaultdict(list)
     with mp.get_context("fork").Pool(24) as pool:
         for part in pool.imap(parse, chunks(args.rows), chunksize=1):
-            for game, prompt, position, moves, h, chosen, rules, cut in part:
-                dgame.append(game); dprompt.append(prompts.setdefault(prompt, len(prompts)))
-                dchosen.append(chosen); drules.append(rules); dcut.append(cut); pos.append(position)
-                hist.append(h)
-                for m in moves:
-                    for k, v in m.items():
-                        fidx.append(vocab.setdefault(k, len(vocab))); fval.append(v)
-                    foff.append(len(fidx))
-                mfirst.append(mfirst[-1] + len(moves))
-    pos = np.array(pos, dtype=np.float32); hist = np.concatenate(hist).astype(np.float32)
-    mfirst, foff = np.array(mfirst, dtype=np.int64), np.array(foff, dtype=np.int64)
-    fidx, fval = np.array(fidx, dtype=np.int64), np.array(fval, dtype=np.float32)
-    dgame, dprompt, dchosen, drules, dcut = (np.array(x) for x in (dgame, dprompt, dchosen, drules, dcut))
+            if part is None: continue
+            games, ps, position, nmoves, keys, vals, nfeat, h, chosen, rules, cut = part
+            parts["dgame"].append(np.array(games)); parts["dprompt"].append(np.array([prompts.setdefault(p, len(prompts)) for p in ps]))
+            parts["pos"].append(position); parts["nmoves"].append(nmoves); parts["nfeat"].append(nfeat)
+            parts["fidx"].append(np.fromiter((vocab.setdefault(k, len(vocab)) for k in keys), np.int64, len(keys)))
+            parts["fval"].append(vals); parts["hist"].append(h)
+            parts["dchosen"].append(chosen); parts["drules"].append(rules); parts["dcut"].append(cut)
+    cat = {k: np.concatenate(v) for k, v in parts.items()}; del parts
+    pos, fidx, fval, hist = cat["pos"], cat["fidx"], cat["fval"], cat["hist"]
+    dgame, dprompt, dchosen, drules, dcut = cat["dgame"], cat["dprompt"], cat["dchosen"], cat["drules"], cat["dcut"]
+    mfirst = np.concatenate([[0], np.cumsum(cat["nmoves"])]).astype(np.int64)
+    foff = np.concatenate([[0], np.cumsum(cat["nfeat"])]).astype(np.int64)
+    del cat
     np.savez(cache, pos=pos, mfirst=mfirst, fidx=fidx, fval=fval, foff=foff, hist=hist, dgame=dgame, dprompt=dprompt,
              dchosen=dchosen, drules=drules, dcut=dcut, vocab=np.array(list(vocab)), prompts=np.array(list(prompts)))
 nd, nm, nf = len(dgame), int(mfirst[-1]), len(vocab)
 print(f"{nd} nodes ({int(dcut.sum())} cutoffs), {nm} moves, {nf} move features, prompts {dict(collections.Counter(dprompt.tolist()))} = {prompts}", flush=True)
 
 dev = "cuda" if torch.cuda.is_available() else "cpu"
-held = np.array([zlib.crc32(str(g).encode()) % 10 == 0 for g in dgame])
+held = np.array([held_game(g) for g in dgame])
 mu = pos[~held].mean(0); sd = pos[~held].std(0) + 1e-3
 T = lambda x, **k: torch.tensor(x, device=dev, **k)
 z = T((pos - mu) / sd); H = T(hist); FI = T(fidx); FV = T(fval); FO = T(foff); MF = T(mfirst); CH = T(dchosen)
