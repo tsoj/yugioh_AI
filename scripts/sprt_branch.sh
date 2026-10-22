@@ -12,8 +12,9 @@
 # runs/sprt/results.jsonl.
 #
 # Environment: ALLOW_DIVERGED=1 (NEW need not contain BASE); TC (default 10+0.1); NODES=N for fixed-node searches (YGOAI_SEARCH_NODES, --tc
-# 60+1); CONC (16 games at once); OPENINGS (5000); ELO ("0 10"); NAME (default NEW); SHUF (the
-# book's shuffle seed, random by default); BUILD_ONLY=1 builds and stops.
+# 60+1); CONC (16 games at once); OPENINGS (5000); ELO ("0 10"; "none": all OPENINGS, no SPRT);
+# NAME (default NEW); SHUF (the book's shuffle seed, random by default); BOOK (runs/books/match1.jsonl)
+# and POOL (10000: the openings drawn from are the book's first POOL); BUILD_ONLY=1 builds and stops.
 # (all in one function, read whole before it runs, and the call and exit on one line: editing the
 # file during a run cannot change it; still, replace it by a rename rather than in place)
 main() {
@@ -28,6 +29,8 @@ TC=${TC:-10+0.1}
 CONC=${CONC:-16}
 OPENINGS=${OPENINGS:-5000}
 ELO=${ELO:-0 10}
+BOOK=${BOOK:-runs/books/match1.jsonl}
+POOL=${POOL:-10000}
 NAME=${NAME:-$(echo "$NEW" | tr '/' '-')}
 SHUF=${SHUF:-$(od -An -N4 -tu4 /dev/urandom | tr -d " ")}
 
@@ -108,12 +111,12 @@ log=runs/sprt/${NAME}_$T.log
 mkdir -p runs/sprt
 echo "$(date) start $NAME: $NEW ($new_sha) vs $BASE ($base_sha), tc $TC${NODES:+, $NODES nodes} -> $log"
 YGOAI_ROOT=$base_dir/root "$base_dir/ygoai-match" --engine "new=$new_env $new_dir/ygoai-engine alphabeta" --engine "base=$base_env $base_dir/ygoai-engine alphabeta" \
-    --book runs/books/match1.jsonl --pool 10000 --shuffle "$SHUF" -n "$OPENINGS" -c "$CONC" --tc "$TC" --sprt $ELO \
+    --book "$BOOK" --pool "$POOL" --shuffle "$SHUF" -n "$OPENINGS" -c "$CONC" --tc "$TC" $([ "$ELO" = none ] || echo --sprt $ELO) \
     --records "runs/sprt/${NAME}_$T.jsonl" > "$log" 2>&1 || true
 final=$(grep -E "^(SPRT finished|final:)" "$log" | tr '\n' ' ' || true)
 [ -z "$final" ] && final="stopped: $(grep "games" "$log" | tail -1)"
-python3 -c "import json,sys; a=sys.argv; print(json.dumps({'new': a[2], 'new_sha': a[3], 'base': a[4], 'base_sha': a[5], 'agent': {'new': 'alphabeta', 'base': 'alphabeta'}, 'tc': a[6], 'nodes': int(a[7]) if a[7] else None, 'elo': [float(x) for x in a[8].split()], 'verdict': a[1], 'engine': 'rust', 'shuffle': int(a[9]), 'pool': 10000}))" \
-    "$final" "$NAME" "$new_sha" "$BASE" "$base_sha" "$TC" "${NODES:-}" "$ELO" "$SHUF" >> runs/sprt/results.jsonl
+python3 -c "import json,sys; a=sys.argv; print(json.dumps({'new': a[2], 'new_sha': a[3], 'base': a[4], 'base_sha': a[5], 'agent': {'new': 'alphabeta', 'base': 'alphabeta'}, 'tc': a[6], 'nodes': int(a[7]) if a[7] else None, 'elo': [float(x) for x in a[8].split()] if a[8] != 'none' else None, 'verdict': a[1], 'engine': 'rust', 'shuffle': int(a[9]), 'pool': int(a[11]), **({'book': a[10]} if a[10] != 'runs/books/match1.jsonl' else {})}))" \
+    "$final" "$NAME" "$new_sha" "$BASE" "$base_sha" "$TC" "${NODES:-}" "$ELO" "$SHUF" "$BOOK" "$POOL" >> runs/sprt/results.jsonl
 echo "$(date) done $NAME: $final"
 }
 main "$@"; exit
