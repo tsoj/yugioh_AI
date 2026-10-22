@@ -429,9 +429,9 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       nodes nor quality: the order matters at few nodes, and there history is about as good.
 - [ ] Eval net forward in f32 / columns (as PolicyNet): the eval's `dense_relu` collect is
       ~1.6% of the profile; an NPS-only change.
-- [ ] Chain quiescence (branch `quiesce-chain`): at depth <= 0 with a chain open, the rules
+- [x] Chain quiescence (branch `quiesce-chain`): at depth <= 0 with a chain open, the rules
       resolve the chain before the static eval. Depth-10 nodes -2.2%, +12.9% instructions per
-      node. SPRT after policy-net.
+      node. SPRT H0: -6.5 +/- 12.2 at 1436 games (LLR -2.98).
 
 ## Engine and core correctness
 
