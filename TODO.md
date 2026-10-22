@@ -531,3 +531,7 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
 - [ ] Repo cleanup: what is still needed of `ygoai/` (Python), `ygoai_rs/` and the other folders.
 - [ ] Remove the worktrees `wt-old` (main repo) and `wt-old-rust` (rust repo) in the scratchpad.
 - [ ] Push the rust submodule commits 2b7f988, 1354870, 935783d, 658b359 (ask first).
+- [ ] Resumable SPRTs (idea, 2026-10-22): `ygoai-match --resume RECORDS` (the finished pairs of the
+      records into the pentanomial, their openings skipped, same shuffle seed, records appended) and
+      `RESUME=<log name>` in sprt_branch.sh (the old run's seed and binaries). Only under the same
+      conditions (commits, tc, no load).
