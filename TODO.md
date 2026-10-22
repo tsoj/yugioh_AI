@@ -414,7 +414,7 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       offered to the search; the search picked it in 10.6% of idle decisions (~4 per game). Bench
       depth 13.73 vs 13.35. SPRT stopped at 5660 games, +2.8 +/- 6.4, LLR -2.02 (a simplification,
       merged as neutral).
-- [ ] Policy network on the search's inner nodes (2026-10-22, branch `policy-net`): node log
+- [x] Policy network on the search's inner nodes (2026-10-22, branch `policy-net`): node log
       (`ygoai-datagen --node-log 8`: every 8th node with a policy prompt, position mover2 features,
       move features, history, best move), 6000 games at 2000 nodes per decision from openings
       12000+ (runs/data/policy_nodes/n2000, 8.2M rows). Net: first layer = position part (once
@@ -425,7 +425,8 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       ones ~85-95% cut at the first move, so ordering saves few nodes: depth-10 nodes -0.4%;
       cost +2.8% instructions per node after f32 + columns + ReLU-zero skipping (was +3.8%;
       ablation: net arithmetic 2.1%, move features 0.5%). Any gain must come from quality (LMR).
-      SPRT running at CONC 32.
+      SPRT H0: -1.1 +/- 8.8 at 3260 games (LLR -3.00). Better top-1 than history buys neither
+      nodes nor quality: the order matters at few nodes, and there history is about as good.
 - [ ] Eval net forward in f32 / columns (as PolicyNet): the eval's `dense_relu` collect is
       ~1.6% of the profile; an NPS-only change.
 - [ ] Chain quiescence (branch `quiesce-chain`): at depth <= 0 with a chain open, the rules
