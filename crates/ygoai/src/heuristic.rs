@@ -53,7 +53,7 @@ const OWN_BEST: [u64; 6] = [ATOHAND, SUMMON, SPSUMMON, FACEUP, EQUIP, TOFIELD];
 /// the opponent's cards: the least valuable first (else the most valuable: removal)
 const OPP_WORST: [u64; 1] = [EQUIP];
 /// hints with a rule (the others, or none: as listed)
-const RULED: [u64; 26] = [
+pub const RULED: [u64; 26] = [
     RELEASE, DISCARD, DESTROY, REMOVE, TOGRAVE, RTOHAND, ATOHAND, TODECK, SUMMON, SPSUMMON, FMATERIAL, SMATERIAL, XMATERIAL, FACEUP, FACEDOWN,
     EQUIP, REMOVEXYZ, CONTROL, TOFIELD, POSCHANGE, TRIBUTE, DEATTACHFROM, LMATERIAL, ATTACKTARGET, TARGET, NEGATE,
 ];

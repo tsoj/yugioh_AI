@@ -16,6 +16,7 @@ use std::time::Instant;
 use ygo_core::constants::*;
 use ygo_core::duel::Duel;
 
+use super::cardpolicy::{CardPolicy, applies};
 use super::evaluate::evaluate_at;
 use super::history::HistoryTable;
 use super::movegen::{candidates, is_searched};
@@ -168,7 +169,7 @@ impl AlphaBeta {
         let max_nodes = p.max_nodes.map(|n| self.nodes + n);
         (self.seldepth, self.pv_height) = (0, 0);
         let mut state = SearchState { tables: self, policies, stop_time, max_nodes };
-        let card_order = state.rules_card_order(root_prompt);
+        let card_order = state.card_order(duel, root_prompt);
         let preference = ordered(root_prompt, turn_player, card_order.as_deref());
         let mut move_order: Vec<usize> = (0..root_moves.len()).collect();
         move_order.sort_by_key(|&k| preference.iter().position(|c| *c == root_moves[k]).unwrap_or(preference.len()));
@@ -207,17 +208,20 @@ impl SearchState<'_> {
         self.stop_time.is_some_and(|d| Instant::now() > d) || self.max_nodes.is_some_and(|n| self.tables.nodes >= n)
     }
 
-    /// For a card selection: the rules' order of its cards (by the select hint the player got,
-    /// which belongs to this selection only).
-    fn rules_card_order(&mut self, m: &Msg) -> Option<Vec<usize>> {
+    /// For a card selection: the order of its cards, the rules' (by the select hint the player
+    /// got, which belongs to this selection only), for a one-card selection the card policy's.
+    fn card_order(&mut self, duel: &Duel, m: &Msg) -> Option<Vec<usize>> {
         let (cards, player) = match m {
             Msg::SelectCard { cards, player, .. } => (cards, player),
             _ => return None,
         };
         let policy = &mut self.policies[*player as usize];
-        let order = policy.card_order(cards);
+        let (order, hint) = (policy.card_order(cards), policy.hint);
         policy.hint = None;
-        Some(order)
+        Some(match CardPolicy::get() {
+            Some(p) if applies(m) => p.order(duel, m, hint, &order),
+            _ => order,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -340,7 +344,7 @@ impl SearchState<'_> {
         let depth = if extended { 1.0 } else { depth };
 
         // (moves are indices into the rules' order: the hash table keeps one, the history reorders them)
-        let card_order = self.rules_card_order(prompt);
+        let card_order = self.card_order(duel, prompt);
         let mut moves = ordered(prompt, duel.ext_get_info()[1], card_order.as_deref());
         if moves.is_empty() {
             return Ok(evaluate_at(duel, us, Some(prompt)));
@@ -579,6 +583,9 @@ impl SearchState<'_> {
             let player = prompt.player().unwrap_or(0);
             let response = if is_hidden_prompt(&prompt) {
                 auto_response()
+            } else if applies(&prompt) && depth <= 0.0 && CardPolicy::get().is_some() {
+                let first = self.card_order(duel, &prompt).unwrap()[0];
+                Response { indices: Some(vec![first as i64]), ..Response::default() }
             } else if matches!(prompt, Msg::SelectCard { .. }) && depth <= 0.0 {
                 self.policies[player as usize].respond_to(&prompt, None).map_err(|_| Stop::Broken)?
             } else if is_searched(&prompt) {
