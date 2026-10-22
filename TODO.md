@@ -439,6 +439,14 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       At equal nodes (NODES=2000, the rollouts not counted, 600 games): -47.8 +/- 23.3, so the
       rollout's values are worse, not only its cost: the ordering's first move is what cuts off,
       not a good move to play out a turn with.
+- [ ] Greedy quiescence (user's idea, 2026-10-22, branch `quiesce-greedy`): at depth <= 0 the
+      decision's player stands pat (static eval) or makes the ordering's first move (TT move,
+      history, rules' order), the same at the next decisions, up to the next turn; beta cutoff on
+      the stand pat. +41% instructions to depth 10. SPRT stopped at 6320 games, +6.5 +/- 6.3,
+      LLR +1.42, as contaminated: its gain came in one window, games 3400-5400 (lost/won pairs
+      99/159), while eval training also loaded the CPU under 32 games on 32 cores; before (232/233)
+      and after (61/58) even. Less time per move seems to favour it. Rerun on a quiet machine if
+      wanted.
 - [ ] Eval net forward in f32 / columns (branch `eval-f32`): the same search tree (depth-10
       bench checksum eb7f41e9580dc935 as main), 1.0% fewer instructions. Too small for a [0, 10]
       SPRT; the user's call whether to merge as a pure speedup.
