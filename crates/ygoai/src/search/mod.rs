@@ -5,9 +5,11 @@
 //! - `history`: the history heuristic
 //! - `movegen`: the searched decisions and their moves
 //! - `movepick`: move ordering
+//! - `cardpolicy`: the order of the cards of a card selection (a trained network)
 //! - `evaluate`: the static evaluation (hand-written and learned) and its features
 //! - `params`: constants
 
+pub mod cardpolicy;
 pub mod evaluate;
 pub mod history;
 pub mod movegen;
