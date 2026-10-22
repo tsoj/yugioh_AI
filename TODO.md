@@ -474,12 +474,14 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       the question other than Turn/IdleCommand/BattleCommand/PointEvent/PhaseEvent/QuickEffect/
       SolveChain/DamageStep/ForcedBattle/bookkeeping (AddChain = cost/targets, summon procedures,
       DiscardHand, OperationReplace, SolveContinuous ...). At the horizon such decisions are answered
-      by the rules; on the main line searched one ply deeper (as card selections). The strict
-      variant: an open chain's response window still stops. Stacks at searched decisions in 100
+      by the rules, also on the main line, whose extension stays with card selections. The strict
+      variant: an open chain's response window still stops. (A first version also extended those
+      decisions on the main line, now branch `horizon-action-ext`: stopped at 0 games so that the
+      stopping rule is tested alone first, user.) Stacks at searched decisions in 100
       replayed games: idle/battle commands, chain windows and trigger yes/no all on boundary stacks;
       resolution: 847 card / 92 yes-no / 45 option, activation (AddChain) ~500 card / 28 option.
-      Bench: depth 10 353580 nodes (main 353436), +1.7% instructions; 3000n depth 13.35 (13.34).
-      SPRT running.
+      Bench: depth 10 355577 nodes (main 353436), +1.9% instructions; 3000n depth 13.33 (13.34).
+      (horizon-action-ext: 353580 nodes, +1.7%; 13.35.) SPRT running.
 - [ ] Eval net forward in f32 / columns (branch `eval-f32`): the same search tree (depth-10
       bench checksum eb7f41e9580dc935 as main), 1.0% fewer instructions. Too small for a [0, 10]
       SPRT; the user's call whether to merge as a pure speedup.
