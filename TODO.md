@@ -142,9 +142,11 @@ See `docs/search-decisions.md` for what is and isn't searched.
         there the rules' answer and the policy's best other; else and at the horizon the rules;
         the root every zone. Bench: depth 10 441109 nodes in 446 searches (main 342737 in 370;
         +7% per search), 438.7G instructions; 3000n depth 13.27 (13.41; tree-place 12.88). SPRT
-        running since 19:53.
-  - [ ] The same first-candidate bias is in the card and set refs (r2_state, s1): regenerate with
-        --independent and retrain the card and set policies.
+        stopped by the user at 2520 games, +0.6 +/- 9.6, LLR -1.84 (for the refs below).
+  - [ ] The same first-candidate bias is in the card and set refs (r1, s1: main's policies'):
+        regenerate with --independent (one-card mode now honours it, f0bcd8a) and retrain the card
+        and set policies. Running: runs/data/card_refs/r3_indep.jsonl (60k, per-game 2, seed 5),
+        then runs/data/set_refs/s2_indep.jsonl (60k, per-game 4, seed 6), SPRT games 10-19..23.
 - [ ] Search the decisions that have no feature yet:
   - [ ] `SelectDisfield` (zones to disable)
   - [ ] `SelectPlace` with several zones
