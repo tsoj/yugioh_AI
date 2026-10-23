@@ -504,13 +504,14 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       too, the rest the rules) and continued against the new main with those 1425 pairs counted
       (user's call, knowingly mixed: RESUME=), 32 at a time: stopped by the user at 8570 games,
       +3.8 +/- 5.2 (LLR -1.76), drifting to H0 (the 2860 new games about even).
-  - [ ] Wide variant (branch `horizon-action-wide`, 184d9e4, user 2026-10-23): an open chain counts
+  - [x] Wide variant (branch `horizon-action-wide`, 184d9e4, user 2026-10-23): an open chain counts
         as under way too, so at the horizon the rules answer its response windows until it has
         resolved. Bench: depth 10 324175 nodes (main 343056, -5.5%), 353.6G instructions (+6.7%);
-        3000n depth 13.43 (13.42). SPRT running (32 at a time).
+        3000n depth 13.43 (13.42). SPRT H0: +1.1 +/- 7.1 at 4392 games (LLR -2.95).
   - [ ] Then with the main-line extension: branch `horizon-action-ext2` (c27e70e) = horizon-action
         rebased onto main + the main-line extension of under-way decisions (search one ply deep
-        on the main line instead of the rules' answer); against main. Queued after the wide test.
+        on the main line instead of the rules' answer); against main. Next, after the gap jobs (the
+        strict variant, since wide was even).
 - [ ] Eval net forward in f32 / columns (branch `eval-f32`): the same search tree (depth-10
       bench checksum eb7f41e9580dc935 as main), 1.0% fewer instructions. Too small for a [0, 10]
       SPRT; the user's call whether to merge as a pure speedup.
