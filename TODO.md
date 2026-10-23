@@ -70,10 +70,11 @@ See `docs/search-decisions.md` for what is and isn't searched.
         the bench searches positions too), 322.6G instructions; 3000n depth 13.49. SPRT after
         horizon-action-ext2: H0, -2.1 +/- 9.6 at 2604 games (LLR -2.95). Then tribute,
         announcements, cards, unselect, each against main (chained).
-  - [ ] Tributes (branch `tree-tribute`, 2ec2a5f): the root's candidates in the tree (the rules'
+  - [x] Tributes (branch `tree-tribute`, 2ec2a5f): the root's candidates in the tree (the rules'
         answer, then the least valuable sets that release enough, at most ROOT_COMBO_WIDTH),
         inside a move at the horizon. (`heuristic::tribute_answer` shared.) Bench: depth 10 342951
-        nodes in 370 searches, 331.5G instructions; 3000n depth 13.44.
+        nodes in 370 searches, 331.5G instructions; 3000n depth 13.44. SPRT H0: +0.9 +/- 7.3 at
+        4336 games (LLR -2.96).
   - [ ] Announcements (branch `tree-announce`, 2083990): a number, one type or one attribute,
         each a move (the rules: the first number, a random type or attribute), inside a move at
         the horizon. Bench: depth 10 344893 nodes in 369 searches, 334.4G instructions (+0.9%);
