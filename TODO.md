@@ -154,6 +154,18 @@ See `docs/search-decisions.md` for what is and isn't searched.
         0.552/0.877/153; sums 0.590/0.948/93 vs 0.596/0.957/62; tributes equal. Branch
         `indep-policies` (a1854c0: cp4_h16 + s2_h16). Bench: 10d 356184 nodes (342737), 3000n depth
         13.34 (13.41). SPRT H1: +26.7 +/- 16.7 at 822 games, LLR +3.00 -> merged.
+- [ ] The policies in place of the rules (user, 2026-10-24: where there is a policy, no rules).
+      Branch `set-pool` (e623952): the set policy builds its own pool from its cards' order (every
+      set of its first 8 cards; sums searched in its order, up to 64; every valid tribute set) and
+      chooses from it at the root (from the agent's reconstruction, `root_set_moves`, mapped back to
+      the agent's indices), in a node (best 3) and at the horizon; tributes now too (below the root
+      the set policy's answer). Before: the rules' first 5 sets (27% of several-card selections
+      have more than 8 cards). Bench: 10d 354983 nodes (356184), 3000n depth 13.33 (13.34); smoke
+      128 games, 0 errors. SPRT running since 01:16.
+      The rules' rank as an input feature kept: without it (--zero 95,96) held out card top3 0.846
+      (0.854), regret3 262 (240); sets about equal; tributes top1 0.645 (0.666).
+      Remaining with a policy but rules: none on main (zones: the place policy only on
+      `tree-place-policy`, stopped).
 - [ ] Search the decisions that have no feature yet:
   - [ ] `SelectDisfield` (zones to disable)
   - [ ] `SelectPlace` with several zones
