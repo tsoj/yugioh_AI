@@ -64,12 +64,12 @@ See `docs/search-decisions.md` for what is and isn't searched.
       sort 504 / 1.6 / 0.956 / 60 / 117; number 411 / 1.2 / 0.786 / 621 / 768; tribute
       289 / 1.2 / 0.941 / 109 / 112; sum 167 / 1.6 / 0.743 / 939 / 1267; attribute 95 / 2.1 /
       0.926 / 350 / 369; disfield, race, counter, sort chain: rare.
-  - [ ] Position (branch `tree-position`, 73a42e5): a searched decision, the rules' order; at
+  - [x] Position (branch `tree-position`, 73a42e5): a searched decision, the rules' order; at
         the horizon the rules answer it like a card selection (inside a move), on the main line
         searched one ply deeper. Bench: depth 10 344964 nodes in 388 searches (main 343056 in 369:
         the bench searches positions too), 322.6G instructions; 3000n depth 13.49. SPRT after
-        horizon-action-ext2: running since 07:10 (32 at a time). Then tribute, announcements,
-        cards, unselect, each against main.
+        horizon-action-ext2: H0, -2.1 +/- 9.6 at 2604 games (LLR -2.95). Then tribute,
+        announcements, cards, unselect, each against main (chained).
   - [ ] Tributes (branch `tree-tribute`, 2ec2a5f): the root's candidates in the tree (the rules'
         answer, then the least valuable sets that release enough, at most ROOT_COMBO_WIDTH),
         inside a move at the horizon. (`heuristic::tribute_answer` shared.) Bench: depth 10 342951
