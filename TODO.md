@@ -109,7 +109,7 @@ See `docs/search-decisions.md` for what is and isn't searched.
       random answer 0.431 / 0.947 / 1255 / 94), tributes 0.676 (0.676: not used). Branch
       `set-policy` (727cf9f): several cards ordered in the tree and answered at the horizon,
       sums answered, by the policy. Bench: depth 10 342737 nodes (342760), +0.1% instructions;
-      3000n depth 13.41. SPRT running since 15:4x.
+      3000n depth 13.41. SPRT running since 15:07.
   - [ ] Zones (branch `tree-place`, 6a8df12): the root's places (as listed, the rules take the
         first) in the tree, the first CARD_WIDTH, inside a move at the horizon (d1: 26 per game,
         rules' answer best 0.967, 39 LP mean regret). Rebased onto c644ee2 (35a1522): depth 10
