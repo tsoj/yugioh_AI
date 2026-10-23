@@ -3,8 +3,8 @@
 //! every card: the depth a search of REF nodes completes, then every card searched with the full
 //! window to it (as ygoai-spsa's references), on the true duel.
 //!
-//!   ygoai-card-refs OUT.jsonl --games FILE [--games FILE ...] [--positions N] [--per-game N]
-//!       [--ref-nodes N] [--jobs N] [--seed N]
+//!   ygoai-card-refs OUT.jsonl --games FILE [--games FILE ...] [--independent] [--positions N]
+//!       [--per-game N] [--ref-nodes N] [--jobs N] [--seed N]
 //!
 //! FILE: ygoai-datagen's OUT.games.jsonl or ygoai-match's records; the games shuffled, up to
 //! --per-game selections of each at random. A row: {"file", "line", "k": the decision's index,
@@ -298,8 +298,7 @@ fn game_rows(file: &str, line: usize, text: &str, a: &Args) -> Vec<String> {
         let rules = rules_player.card_order(cards);
         let moves = candidates(&prompt);
         let (_, depth) = search(&duel, &prompt, &moves, hint, a.ref_nodes, None, false);
-        let (values, _) = search(&duel, &prompt, &moves, hint, REF_EXACT_NODES_FACTOR * a.ref_nodes, Some(depth.max(1)), true);
-        let Some(values) = values.into_iter().collect::<Option<Vec<f64>>>() else { continue };
+        let Some(values) = exact_values(&duel, &prompt, &moves, hint, a.ref_nodes, depth, a.independent) else { continue };
         let features: Vec<Vec<f32>> = card_features(&duel, &prompt, hint, &rules).iter().map(|x| x.to_vec()).collect();
         rows.push(
             json!({"file": file, "line": line, "k": k, "hint": hint, "player": player, "values": values, "rules": rules, "depth": depth, "features": features})
