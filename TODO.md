@@ -119,7 +119,9 @@ See `docs/search-decisions.md` for what is and isn't searched.
         first) in the tree, the first CARD_WIDTH, inside a move at the horizon (d1: 26 per game,
         rules' answer best 0.967, 39 LP mean regret). Rebased onto c644ee2 (35a1522): depth 10
         520481 nodes in 446 searches (main 342760 in 370, +52%), 522.8G instructions (+58%);
-        3000n depth 12.88 (13.41). Expensive; SPRT after the set policy.
+        3000n depth 12.88 (13.41). Rebased onto the merged sums (42ef645; the same bench: 520443
+        nodes, 523.0G instructions vs main 342737 / 331.3G; 3000n 12.88 vs 13.41). SPRT running
+        since 17:58.
 - [ ] Search the decisions that have no feature yet:
   - [ ] `SelectDisfield` (zones to disable)
   - [ ] `SelectPlace` with several zones
