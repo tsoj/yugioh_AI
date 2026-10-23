@@ -66,13 +66,17 @@ See `docs/search-decisions.md` for what is and isn't searched.
       0.926 / 350 / 369; disfield, race, counter, sort chain: rare.
   - [ ] Position (branch `tree-position`, 73a42e5): a searched decision, the rules' order; at
         the horizon the rules answer it like a card selection (inside a move), on the main line
-        searched one ply deeper. Bench and SPRT after horizon-action-ext2.
+        searched one ply deeper. Bench: depth 10 344964 nodes in 388 searches (main 343056 in 369:
+        the bench searches positions too), 322.6G instructions; 3000n depth 13.49. SPRT after
+        horizon-action-ext2.
   - [ ] Tributes (branch `tree-tribute`, 2ec2a5f): the root's candidates in the tree (the rules'
         answer, then the least valuable sets that release enough, at most ROOT_COMBO_WIDTH),
-        inside a move at the horizon. (`heuristic::tribute_answer` shared.)
+        inside a move at the horizon. (`heuristic::tribute_answer` shared.) Bench: depth 10 342951
+        nodes in 370 searches, 331.5G instructions; 3000n depth 13.44.
   - [ ] Announcements (branch `tree-announce`, 2083990): a number, one type or one attribute,
         each a move (the rules: the first number, a random type or attribute), inside a move at
-        the horizon.
+        the horizon. Bench: depth 10 344893 nodes in 369 searches, 334.4G instructions (+0.9%);
+        3000n depth 13.41.
 - [ ] Search the decisions that have no feature yet:
   - [ ] `SelectDisfield` (zones to disable)
   - [ ] `SelectPlace` with several zones
@@ -501,6 +505,11 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
         On r1 alone no gain (data-bound): held out top1 0.480 / top3 0.855 / regret3 255 (old
         features 0.482 / 0.849 / 251); train fit better. More refs (r2_state, 60k from the SPRT
         records since 2026-10-19) in the gap after the wide test, then retrain and SPRT.
+        r2_state: 60061 rows (65 min). r1 + r2 (58644 with a spread; held out every 10th game,
+        epoch 60): old features h16 0.495 / 0.845 / 260, state h16 0.493 / 0.853 / 243, state h32
+        0.490 / 0.851 / 246 (epoch 50: 0.491 / 0.851 / 246, 0.486 / 0.846 / 259, 0.491 / 0.847 /
+        252: the differences are within the epoch-to-epoch noise). Neither the state features nor
+        4x the data move the held-out numbers: not SPRTed (models runs/nn/card/cp3_*).
 - [ ] Horizon by action, not by decision type (user, 2026-10-22, branch `horizon-action`): at the
       horizon `do_move` let the rules answer only card selections, so a yes/no or option inside a
       resolution stopped the move and the eval came mid-effect. `action_under_way` (search::movegen)
@@ -527,8 +536,9 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
         3000n depth 13.43 (13.42). SPRT H0: +1.1 +/- 7.1 at 4392 games (LLR -2.95).
   - [ ] Then with the main-line extension: branch `horizon-action-ext2` (c27e70e) = horizon-action
         rebased onto main + the main-line extension of under-way decisions (search one ply deep
-        on the main line instead of the rules' answer); against main. Next, after the gap jobs (the
-        strict variant, since wide was even).
+        on the main line instead of the rules' answer); against main (the strict variant, since
+        wide was even). Bench: depth 10 332434 nodes (main 343056, -3.1%), 324.5G instructions
+        (-2.0%); 3000n depth 13.41 (13.42). SPRT running (32 at a time, since 06:15).
 - [ ] Eval net forward in f32 / columns (branch `eval-f32`): the same search tree (depth-10
       bench checksum eb7f41e9580dc935 as main), 1.0% fewer instructions. Too small for a [0, 10]
       SPRT; the user's call whether to merge as a pure speedup.
