@@ -94,8 +94,9 @@ See `docs/search-decisions.md` for what is and isn't searched.
         (least valuable cards first) in the tree, the first CARD_WIDTH, inside a move at the
         horizon (d1: rules' answer best 0.743, 939 LP mean regret, in ~5% of games). Bench: the
         same tree as main (no sum in the bench's searches). SPRT paused (user) at 3780 games,
-        +3.8 +/- 7.6 (LLR -0.83; +13.9 at 1000 games) for the set policy: restart from scratch
-        after it, with the policy's sum order if the policy passes.
+        +3.8 +/- 7.6 (LLR -0.83; +13.9 at 1000 games) for the set policy: if it passes, restart
+        from scratch with the policy's sum order against the new main; else resume with these
+        counts (RESUME=runs/sprt/tree-sum_20261023-124136.jsonl).
 - [ ] Set policy (user, 2026-10-23): the card policy for selections whose candidates are sets of
       cards (several cards, sums, tributes): a set's score is its cards' scores summed (plus a
       weight per card). Data: `ygoai-card-refs --decisions --types ...` rows now carry each
