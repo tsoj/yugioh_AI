@@ -15,6 +15,7 @@ pub mod history;
 pub mod movegen;
 pub mod movepick;
 pub mod params;
+pub mod placepolicy;
 #[allow(clippy::module_inception)]
 pub mod search;
 pub mod tt;

@@ -21,7 +21,10 @@
 //! how much searching them would change the rules' answers. A card selection's rows (several
 //! cards, one at a time, a sum, tributes) also have "hint", "order": the rules' order of its
 //! cards, "features": each card's `cardpolicy::card_features`, and "sets": each candidate's cards
-//! (finishing: none), the data of a policy for these. --types T,T: only these types (as "type").
+//! (finishing: none), the data of a policy for these. A zone selection's rows (every zone the
+//! candidates if one is chosen) have "hint", "features": each zone's
+//! `placepolicy::place_features` (`available_places`' order), and "sets": each candidate's zones.
+//! --types T,T: only these types (as "type").
 
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -40,7 +43,9 @@ use ygoai::observe::to_core_response;
 use ygoai::pyrandom::PyRandom;
 use ygoai::search::cardpolicy::{applies, card_features, selection_cards};
 use ygoai::actions::Response;
+use ygoai::actions::available_places;
 use ygoai::search::movegen::{is_searched, root_candidates};
+use ygoai::search::placepolicy::place_features;
 use ygoai::search::{AlphaBeta, SearchParams, Tune, candidates};
 
 #[global_allocator]
@@ -165,7 +170,13 @@ fn rules_decision(m: &Msg, hint: Option<u64>) -> Option<(Vec<Response>, usize)> 
     let player = m.player()?;
     let mut rules = Heuristic::new(1, player);
     rules.hint = hint;
-    let mut moves = root_candidates(m, &rules, None);
+    let mut moves = match m {
+        // (one zone: every zone, for the place policy)
+        Msg::SelectPlace { player, count: 1, flag } | Msg::SelectDisfield { player, count: 1, flag } => {
+            available_places(*player, *flag).into_iter().map(|z| Response { places: Some(vec![z]), ..Response::default() }).collect()
+        }
+        _ => root_candidates(m, &rules, None),
+    };
     let answer = rules.respond_to(m, None).ok()?;
     let at = match moves.iter().position(|r| *r == answer) {
         Some(i) => i,
@@ -220,6 +231,14 @@ fn decision_rows(file: &str, line: usize, text: &str, a: &Args) -> Vec<String> {
             let sets: Vec<Vec<i64>> = moves.iter().map(|m| m.indices.clone().or(m.index.map(|i| vec![i])).unwrap_or_default()).collect();
             row["hint"] = json!(hint);
             row["order"] = json!(order);
+            row["features"] = json!(features);
+            row["sets"] = json!(sets);
+        }
+        if let Msg::SelectPlace { player, flag, .. } | Msg::SelectDisfield { player, flag, .. } = &prompt {
+            let places = available_places(*player, *flag);
+            let features: Vec<Vec<f32>> = place_features(&duel, &prompt, hint).iter().map(|x| x.to_vec()).collect();
+            let sets: Vec<Vec<usize>> = moves.iter().map(|m| m.places.iter().flatten().filter_map(|z| places.iter().position(|p| p == z)).collect()).collect();
+            row["hint"] = json!(hint);
             row["features"] = json!(features);
             row["sets"] = json!(sets);
         }
