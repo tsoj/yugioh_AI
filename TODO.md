@@ -55,7 +55,18 @@ See `docs/search-decisions.md` for what is and isn't searched.
       announcements, then several-card selections and unselect, zones/sorts/counters last).
       `ygoai-card-refs --decisions` (main, 45e4833): at the decisions the rules answer below the
       root, every root candidate's reference value and the rules' answer (per type, with the
-      game's count). Measurement (d1, 12000 positions) in the gap after the wide test.
+      game's count). Measurement d1 (12119 positions from the card-policy and horizon-action
+      SPRT records, one decision of each type per game, `scripts/decision_refs_report.py`; won/lost
+      values clipped at 8000 LP): per type, games with it of ~3200, decisions per such game, rules'
+      answer within 50 LP of the best, mean regret LP, regret x count per game:
+      place 3170 / 26.0 / 0.967 / 39 / 1380; position 3140 / 10.3 / 0.945 / 54 / 614;
+      unselect 2931 / 7.2 / 0.946 / 102 / 1002; several cards 1324 / 1.8 / 0.807 / 503 / 935;
+      sort 504 / 1.6 / 0.956 / 60 / 117; number 411 / 1.2 / 0.786 / 621 / 768; tribute
+      289 / 1.2 / 0.941 / 109 / 112; sum 167 / 1.6 / 0.743 / 939 / 1267; attribute 95 / 2.1 /
+      0.926 / 350 / 369; disfield, race, counter, sort chain: rare.
+  - [ ] Position (branch `tree-position`, 73a42e5): a searched decision, the rules' order; at
+        the horizon the rules answer it like a card selection (inside a move), on the main line
+        searched one ply deeper. Bench and SPRT after horizon-action-ext2.
 - [ ] Search the decisions that have no feature yet:
   - [ ] `SelectDisfield` (zones to disable)
   - [ ] `SelectPlace` with several zones
