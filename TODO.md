@@ -516,7 +516,7 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
         0.490 / 0.851 / 246 (epoch 50: 0.491 / 0.851 / 246, 0.486 / 0.846 / 259, 0.491 / 0.847 /
         252: the differences are within the epoch-to-epoch noise). Neither the state features nor
         4x the data move the held-out numbers: not SPRTed (models runs/nn/card/cp3_*).
-- [ ] Horizon by action, not by decision type (user, 2026-10-22, branch `horizon-action`): at the
+- [x] Horizon by action, not by decision type (user, 2026-10-22, branch `horizon-action`): at the
       horizon `do_move` let the rules answer only card selections, so a yes/no or option inside a
       resolution stopped the move and the eval came mid-effect. `action_under_way` (search::movegen)
       reads the core's unit stack: a chain link resolving (`chain_solving`) or any unit behind
@@ -540,11 +540,13 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
         as under way too, so at the horizon the rules answer its response windows until it has
         resolved. Bench: depth 10 324175 nodes (main 343056, -5.5%), 353.6G instructions (+6.7%);
         3000n depth 13.43 (13.42). SPRT H0: +1.1 +/- 7.1 at 4392 games (LLR -2.95).
-  - [ ] Then with the main-line extension: branch `horizon-action-ext2` (c27e70e) = horizon-action
+  - [x] Then with the main-line extension: branch `horizon-action-ext2` (c27e70e) = horizon-action
         rebased onto main + the main-line extension of under-way decisions (search one ply deep
         on the main line instead of the rules' answer); against main (the strict variant, since
         wide was even). Bench: depth 10 332434 nodes (main 343056, -3.1%), 324.5G instructions
-        (-2.0%); 3000n depth 13.41 (13.42). SPRT running (32 at a time, since 06:15).
+        (-2.0%); 3000n depth 13.41 (13.42). SPRT H0: -5.5 +/- 11.6 at 1762 games (LLR -3.00).
+        With the strict variant drifting to H0 and the wide one H0, the horizon-by-action
+        direction is done for now.
 - [ ] Eval net forward in f32 / columns (branch `eval-f32`): the same search tree (depth-10
       bench checksum eb7f41e9580dc935 as main), 1.0% fewer instructions. Too small for a [0, 10]
       SPRT; the user's call whether to merge as a pure speedup.
