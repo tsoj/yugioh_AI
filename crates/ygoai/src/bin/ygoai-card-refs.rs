@@ -10,6 +10,14 @@
 //! --per-game selections of each at random. A row: {"file", "line", "k": the decision's index,
 //! "hint", "player", "values": each card's (LP, for the selecting player), "rules": the rules'
 //! order, "depth", "features": each card's `cardpolicy::card_features`}.
+//!
+//!   ygoai-card-refs OUT.jsonl --games FILE [...] --decisions [options as above]
+//!
+//! The decisions the search leaves to the rules below the root (not `is_searched`, or a card
+//! selection of several cards), with more than one of `root_candidates`, each with every
+//! candidate's reference value as above and the rules' answer: {"file", "line", "k", "type",
+//! "player", "values", "rules": the rules' answer's index (added as a candidate if missing),
+//! "depth"}. How often and by how much searching them would change the rules' answers.
 
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -27,6 +35,8 @@ use ygoai::messages::Msg;
 use ygoai::observe::to_core_response;
 use ygoai::pyrandom::PyRandom;
 use ygoai::search::cardpolicy::{applies, card_features};
+use ygoai::actions::Response;
+use ygoai::search::movegen::{is_searched, root_candidates};
 use ygoai::search::{AlphaBeta, SearchParams, Tune, candidates};
 
 #[global_allocator]
@@ -44,6 +54,7 @@ struct Args {
     ref_nodes: u64,
     jobs: usize,
     seed: u64,
+    decisions: bool,
 }
 
 fn usage(msg: &str) -> ! {
@@ -63,10 +74,16 @@ fn parse_args() -> Args {
         ref_nodes: 2000,
         jobs: std::thread::available_parallelism().map_or(4, |n| n.get()),
         seed: 1,
+        decisions: false,
     };
     let mut i = 1;
     while i < argv.len() {
         let k = argv[i].as_str();
+        if k == "--decisions" {
+            a.decisions = true;
+            i += 1;
+            continue;
+        }
         let v = argv.get(i + 1).cloned().unwrap_or_else(|| usage(&format!("{k} needs a value")));
         let num = |s: &str| -> f64 { s.parse().unwrap_or_else(|_| usage(&format!("bad {k}: {s}"))) };
         match k {
@@ -123,17 +140,75 @@ fn replay(record: &GameRecord, viewer: bool, mut at: impl FnMut(usize, &Msg, Opt
     Some(())
 }
 
-fn search(duel: &Duel, prompt: &Msg, hint: Option<u64>, nodes: u64, depth: Option<i32>, exact_root: bool) -> (Vec<Option<f64>>, i32) {
+fn search(duel: &Duel, prompt: &Msg, moves: &[Response], hint: Option<u64>, nodes: u64, depth: Option<i32>, exact_root: bool) -> (Vec<Option<f64>>, i32) {
     let mut ab = AlphaBeta::default();
     ab.tune = Tune { root_card_width: REF_ROOT_WIDTH, ..Tune::default() };
     ab.prepare();
     let params = SearchParams { budget: None, elapsed: 0.0, clock_remaining: 1000.0, hint, seeds: [1, 2], max_nodes: Some(nodes), depth, exact_root };
-    let (_, done) = ab.search(duel, prompt, &candidates(prompt), &params);
+    let (_, done) = ab.search(duel, prompt, moves, &params);
     (std::mem::take(&mut ab.last_root_values), done)
+}
+
+/// Whether the rules answer `m` below the root (`--decisions`), and its moves at the root with the
+/// rules' answer's index.
+fn rules_decision(m: &Msg, hint: Option<u64>) -> Option<(Vec<Response>, usize)> {
+    if is_searched(m) && !matches!(m, Msg::SelectCard { min, max, .. } if (*min, *max) != (1, 1)) {
+        return None;
+    }
+    let player = m.player()?;
+    let mut rules = Heuristic::new(1, player);
+    rules.hint = hint;
+    let mut moves = root_candidates(m, &rules, None);
+    let answer = rules.respond_to(m, None).ok()?;
+    let at = match moves.iter().position(|r| *r == answer) {
+        Some(i) => i,
+        None => {
+            moves.insert(0, answer);
+            0
+        }
+    };
+    (moves.len() > 1).then_some((moves, at))
+}
+
+/// The rows of a game (`--decisions`): up to `per_game` of the decisions the rules answer below
+/// the root, at random.
+fn decision_rows(file: &str, line: usize, text: &str, a: &Args) -> Vec<String> {
+    let Some((record, viewer)) = parse_game(text) else { return Vec::new() };
+    let mut eligible = Vec::new();
+    replay(&record, viewer, |i, p, hint, _| {
+        if rules_decision(p, hint).is_some() {
+            eligible.push(i);
+        }
+        true
+    });
+    let mut rng = PyRandom::new((a.seed as i128) << 32 | line as i128);
+    rng.shuffle(&mut eligible);
+    eligible.truncate(a.per_game);
+    let mut rows = Vec::new();
+    for k in eligible {
+        let mut found = None;
+        replay(&record, viewer, |i, p, hint, duel| {
+            if i == k {
+                found = Some((duel.clone(), p.clone(), hint));
+            }
+            i < k
+        });
+        let Some((duel, prompt, hint)) = found else { continue };
+        let Some((moves, at)) = rules_decision(&prompt, hint) else { continue };
+        let (_, depth) = search(&duel, &prompt, &moves, hint, a.ref_nodes, None, false);
+        let (values, _) = search(&duel, &prompt, &moves, hint, REF_EXACT_NODES_FACTOR * a.ref_nodes, Some(depth.max(1)), true);
+        let Some(values) = values.into_iter().collect::<Option<Vec<f64>>>() else { continue };
+        let player = prompt.player();
+        rows.push(json!({"file": file, "line": line, "k": k, "type": prompt.name(), "player": player, "values": values, "rules": at, "depth": depth}).to_string());
+    }
+    rows
 }
 
 /// The rows of a game: up to `per_game` of its selections at random.
 fn game_rows(file: &str, line: usize, text: &str, a: &Args) -> Vec<String> {
+    if a.decisions {
+        return decision_rows(file, line, text, a);
+    }
     let Some((record, viewer)) = parse_game(text) else { return Vec::new() };
     let mut eligible = Vec::new();
     replay(&record, viewer, |i, p, _, _| {
@@ -159,8 +234,9 @@ fn game_rows(file: &str, line: usize, text: &str, a: &Args) -> Vec<String> {
         let mut rules_player = Heuristic::new(1, *player);
         rules_player.hint = hint;
         let rules = rules_player.card_order(cards);
-        let (_, depth) = search(&duel, &prompt, hint, a.ref_nodes, None, false);
-        let (values, _) = search(&duel, &prompt, hint, REF_EXACT_NODES_FACTOR * a.ref_nodes, Some(depth.max(1)), true);
+        let moves = candidates(&prompt);
+        let (_, depth) = search(&duel, &prompt, &moves, hint, a.ref_nodes, None, false);
+        let (values, _) = search(&duel, &prompt, &moves, hint, REF_EXACT_NODES_FACTOR * a.ref_nodes, Some(depth.max(1)), true);
         let Some(values) = values.into_iter().collect::<Option<Vec<f64>>>() else { continue };
         let features: Vec<Vec<f32>> = card_features(&duel, &prompt, hint, &rules).iter().map(|x| x.to_vec()).collect();
         rows.push(
