@@ -143,10 +143,17 @@ See `docs/search-decisions.md` for what is and isn't searched.
         the root every zone. Bench: depth 10 441109 nodes in 446 searches (main 342737 in 370;
         +7% per search), 438.7G instructions; 3000n depth 13.27 (13.41; tree-place 12.88). SPRT
         stopped by the user at 2520 games, +0.6 +/- 9.6, LLR -1.84 (for the refs below).
-  - [ ] The same first-candidate bias is in the card and set refs (r1, s1: main's policies'):
-        regenerate with --independent (one-card mode now honours it, f0bcd8a) and retrain the card
-        and set policies. Running: runs/data/card_refs/r3_indep.jsonl (60k, per-game 2, seed 5),
-        then runs/data/set_refs/s2_indep.jsonl (60k, per-game 4, seed 6), SPRT games 10-19..23.
+  - [ ] The same first-candidate bias was in the card and set refs (r1, s1: main's policies').
+        Regenerated with --independent (one-card mode now honours it, f0bcd8a; --decisions keeps
+        sums, searched since tree-sum-policy and so missing from s2 at first, a4967c7):
+        runs/data/card_refs/r3_indep.jsonl (60062, 46 min), set_refs/s2_indep.jsonl (60073 cards
+        and tributes, 66 min) + s2_indep_sums.jsonl (8053). scripts/eval_policy.py scores models on
+        the same held-out rows. Card (one), held out 4739, best first / in first 3 / regret of the
+        best of 3: rules 0.442/0.813/353, main's cp1 0.477/0.840/275, new h16 e12 0.495/0.854/240
+        (h16 e60, h32 the same in the first 3). Set: several cards s1 0.539/0.879/147 vs s2 h16
+        0.552/0.877/153; sums 0.590/0.948/93 vs 0.596/0.957/62; tributes equal. Branch
+        `indep-policies` (a1854c0: cp4_h16 + s2_h16). Bench: 10d 356184 nodes (342737), 3000n depth
+        13.34 (13.41). SPRT running since 23:30.
 - [ ] Search the decisions that have no feature yet:
   - [ ] `SelectDisfield` (zones to disable)
   - [ ] `SelectPlace` with several zones
