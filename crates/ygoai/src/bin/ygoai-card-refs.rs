@@ -17,7 +17,11 @@
 //! selection of several cards), with more than one of `root_candidates`, each with every
 //! candidate's reference value as above and the rules' answer: {"file", "line", "k", "type",
 //! "count": the game's decisions of that type, "player", "values", "rules": the rules' answer's
-//! index (added as a candidate if missing), "depth"}; --per-game of each type. How often and by how much searching them would change the rules' answers.
+//! index (added as a candidate if missing), "depth"}; --per-game of each type. How often and by
+//! how much searching them would change the rules' answers. A card selection's rows (several
+//! cards, one at a time, a sum, tributes) also have "hint", "order": the rules' order of its
+//! cards, "features": each card's `cardpolicy::card_features`, and "sets": each candidate's cards
+//! (finishing: none), the data of a policy for these. --types T,T: only these types (as "type").
 
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -34,7 +38,7 @@ use ygoai::heuristic::Heuristic;
 use ygoai::messages::Msg;
 use ygoai::observe::to_core_response;
 use ygoai::pyrandom::PyRandom;
-use ygoai::search::cardpolicy::{applies, card_features};
+use ygoai::search::cardpolicy::{applies, card_features, selection_cards};
 use ygoai::actions::Response;
 use ygoai::search::movegen::{is_searched, root_candidates};
 use ygoai::search::{AlphaBeta, SearchParams, Tune, candidates};
@@ -55,6 +59,7 @@ struct Args {
     jobs: usize,
     seed: u64,
     decisions: bool,
+    types: Option<Vec<String>>,
 }
 
 fn usage(msg: &str) -> ! {
@@ -75,6 +80,7 @@ fn parse_args() -> Args {
         jobs: std::thread::available_parallelism().map_or(4, |n| n.get()),
         seed: 1,
         decisions: false,
+        types: None,
     };
     let mut i = 1;
     while i < argv.len() {
@@ -93,6 +99,7 @@ fn parse_args() -> Args {
             "--ref-nodes" => a.ref_nodes = num(&v) as u64,
             "--jobs" => a.jobs = num(&v) as usize,
             "--seed" => a.seed = num(&v) as u64,
+            "--types" => a.types = Some(v.split(',').map(str::to_string).collect()),
             _ => usage(&format!("unknown option {k}")),
         }
         i += 2;
@@ -175,8 +182,9 @@ fn rules_decision(m: &Msg, hint: Option<u64>) -> Option<(Vec<Response>, usize)> 
 fn decision_rows(file: &str, line: usize, text: &str, a: &Args) -> Vec<String> {
     let Some((record, viewer)) = parse_game(text) else { return Vec::new() };
     let mut by_type: std::collections::BTreeMap<&'static str, Vec<usize>> = Default::default();
+    let wanted = |p: &Msg| a.types.as_ref().is_none_or(|t| t.iter().any(|t| t == p.name()));
     replay(&record, viewer, |i, p, hint, _| {
-        if rules_decision(p, hint).is_some() {
+        if wanted(p) && rules_decision(p, hint).is_some() {
             by_type.entry(p.name()).or_default().push(i);
         }
         true
@@ -203,7 +211,19 @@ fn decision_rows(file: &str, line: usize, text: &str, a: &Args) -> Vec<String> {
         let (values, _) = search(&duel, &prompt, &moves, hint, REF_EXACT_NODES_FACTOR * a.ref_nodes, Some(depth.max(1)), true);
         let Some(values) = values.into_iter().collect::<Option<Vec<f64>>>() else { continue };
         let player = prompt.player();
-        rows.push(json!({"file": file, "line": line, "k": k, "type": prompt.name(), "count": count, "player": player, "values": values, "rules": at, "depth": depth}).to_string());
+        let mut row = json!({"file": file, "line": line, "k": k, "type": prompt.name(), "count": count, "player": player, "values": values, "rules": at, "depth": depth});
+        if let Some((cards, &p)) = selection_cards(&prompt) {
+            let mut rules_player = Heuristic::new(1, p);
+            rules_player.hint = hint;
+            let order = rules_player.card_order(cards);
+            let features: Vec<Vec<f32>> = card_features(&duel, &prompt, hint, &order).iter().map(|x| x.to_vec()).collect();
+            let sets: Vec<Vec<i64>> = moves.iter().map(|m| m.indices.clone().or(m.index.map(|i| vec![i])).unwrap_or_default()).collect();
+            row["hint"] = json!(hint);
+            row["order"] = json!(order);
+            row["features"] = json!(features);
+            row["sets"] = json!(sets);
+        }
+        rows.push(row.to_string());
     }
     rows
 }

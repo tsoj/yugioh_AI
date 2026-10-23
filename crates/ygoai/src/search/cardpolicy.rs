@@ -27,15 +27,26 @@ const CATEGORIES: usize = 33;
 /// The number of features of a card.
 pub const CARD_FEATURES: usize = TYPES.len() + 7 + 5 + LOCATIONS.len() + 2 + 1 + 2 * RANGES.len() + 7 + CATEGORIES + 4 + 2 + RULED.len() + 2 + 1 + PHASES.len() + 6;
 
+/// The cards to choose from of a card selection (several cards, one at a time, a sum, tributes)
+/// and its player.
+pub fn selection_cards(prompt: &Msg) -> Option<(&[crate::messages::Card], &u32)> {
+    match prompt {
+        Msg::SelectCard { cards, player, .. } | Msg::SelectSum { cards, player, .. } | Msg::SelectTribute { cards, player, .. } => Some((cards, player)),
+        Msg::SelectUnselectCard { select_cards, player, .. } => Some((select_cards, player)),
+        _ => None,
+    }
+}
+
 /// Whether the policy orders this selection.
 pub fn applies(prompt: &Msg) -> bool {
     matches!(prompt, Msg::SelectCard { min: 1, max: 1, cards, .. } if cards.len() >= 2)
 }
 
-/// The features of each card of the selection `prompt` (`applies`), with the select hint `hint`
-/// and the rules' order `rules` (the cards' indices, the preferred first).
+/// The features of each card of the selection `prompt` (`applies`; also of several cards, one at
+/// a time, a sum or tributes: `selection_cards`), with the select hint `hint` and the rules' order
+/// `rules` (the cards' indices, the preferred first).
 pub fn card_features(d: &Duel, prompt: &Msg, hint: Option<u64>, rules: &[usize]) -> Vec<[f32; CARD_FEATURES]> {
-    let Msg::SelectCard { cards, player, .. } = prompt else { return Vec::new() };
+    let Some((cards, player)) = selection_cards(prompt) else { return Vec::new() };
     let me = *player as usize;
     let info = d.ext_get_info();
     // (the selection's and the position's features, the same for every card)
