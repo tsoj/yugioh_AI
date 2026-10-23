@@ -77,6 +77,12 @@ See `docs/search-decisions.md` for what is and isn't searched.
         each a move (the rules: the first number, a random type or attribute), inside a move at
         the horizon. Bench: depth 10 344893 nodes in 369 searches, 334.4G instructions (+0.9%);
         3000n depth 13.41.
+  - [ ] Several cards (branch `tree-cards`, 11eaa7a): the root's sets (`movegen::card_sets`)
+        in the tree, ordered by the rules' order of the cards, the first CARD_WIDTH (d1: the best
+        set is among the first 3 in 0.949, the first 2 0.903, the first 0.807).
+  - [ ] One card at a time (branch `tree-unselect`, 63d3099): the first CARD_WIDTH cards by the
+        rules' order and finishing, inside a move at the horizon (d1: the best among the first 3
+        cards 0.987). The root as before (at most ROOT_COMBO_WIDTH cards).
 - [ ] Search the decisions that have no feature yet:
   - [ ] `SelectDisfield` (zones to disable)
   - [ ] `SelectPlace` with several zones
