@@ -86,8 +86,9 @@ See `docs/search-decisions.md` for what is and isn't searched.
         11.2 at 1696 games (LLR +3.02): merged (20d7b31).
   - [ ] One card at a time (branch `tree-unselect`, 63d3099): the first CARD_WIDTH cards by the
         rules' order and finishing, inside a move at the horizon (d1: the best among the first 3
-        cards 0.987). The root as before (at most ROOT_COMBO_WIDTH cards). Bench: depth 10 336184
-        nodes in 383 searches, 325.6G instructions; 3000n depth 13.55.
+        cards 0.987). The root as before (at most ROOT_COMBO_WIDTH cards). Rebased onto main with
+        tree-cards (2e5ee60): depth 10 334139 nodes in 384 searches (main 342760 in 370), 323.6G
+        instructions (331.1G); 3000n depth 13.56 (13.41). SPRT running since 12:20.
 - [ ] Search the decisions that have no feature yet:
   - [ ] `SelectDisfield` (zones to disable)
   - [ ] `SelectPlace` with several zones
