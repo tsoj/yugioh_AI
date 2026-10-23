@@ -16,7 +16,7 @@ import numpy as np
 import torch
 
 
-def load(paths, clamp):
+def load(paths, clamp, features=None):
     rows = []
     for path in paths:
         with open(path) as f:
@@ -29,7 +29,7 @@ def load(paths, clamp):
                 rank = np.empty(len(v), dtype=np.int64)
                 rank[np.array(r["rules"])] = np.arange(len(v))
                 game = f"{r['file']}:{r['line']}"
-                rows.append((np.array(r["features"], dtype=np.float32), v, rank, game, r["hint"]))
+                rows.append((np.array(r["features"], dtype=np.float32)[:, :features], v, rank, game, r["hint"]))
     return rows
 
 
@@ -82,10 +82,11 @@ def main():
     ap.add_argument("--lr", type=float, default=3e-3)
     ap.add_argument("--wd", type=float, default=1e-4)
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--features", type=int, help="only each card's first N features (an older feature set's)")
     a = ap.parse_args()
     torch.manual_seed(a.seed)
 
-    rows = load(a.refs, a.clamp)
+    rows = load(a.refs, a.clamp, a.features)
     held = [r for r in rows if zlib.crc32(r[3].encode()) % a.held == 0]
     train = [r for r in rows if zlib.crc32(r[3].encode()) % a.held != 0]
     print(f"{len(rows)} positions with a spread ({len(train)} train, {len(held)} held out), cards per position {np.mean([len(r[1]) for r in rows]):.1f}")
