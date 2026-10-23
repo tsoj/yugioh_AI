@@ -98,7 +98,8 @@ See `docs/search-decisions.md` for what is and isn't searched.
         from scratch with the policy's sum order against the new main; else resume with these
         counts (RESUME=runs/sprt/tree-sum_20261023-124136.jsonl); but if the set policy fails
         with positive Elo, `tree-sum-policy` from scratch against the current main instead
-        (user, 16:59). Ready for all: `tree-sum`
+        (user, 16:59). Set policy H0 (+1.5 +/- 6.6, 4842 games) → `tree-sum-policy` SPRT vs main
+        running since 17:15. Ready for all: `tree-sum`
         rebased onto main (c2fbafd, the search unchanged), `tree-sum-policy` (6a857de) = set-policy
         + sums in the tree ordered by the set policy.
 - [ ] Set policy (user, 2026-10-23): the card policy for selections whose candidates are sets of
@@ -113,7 +114,7 @@ See `docs/search-decisions.md` for what is and isn't searched.
       random answer 0.431 / 0.947 / 1255 / 94), tributes 0.676 (0.676: not used). Branch
       `set-policy` (727cf9f): several cards ordered in the tree and answered at the horizon,
       sums answered, by the policy. Bench: depth 10 342737 nodes (342760), +0.1% instructions;
-      3000n depth 13.41. SPRT running since 15:07.
+      3000n depth 13.41. SPRT: H0, +1.5 +/- 6.6 at 4842 games (not merged; kept in `tree-sum-policy`).
   - [ ] Zones (branch `tree-place`, 6a8df12): the root's places (as listed, the rules take the
         first) in the tree, the first CARD_WIDTH, inside a move at the horizon (d1: 26 per game,
         rules' answer best 0.967, 39 LP mean regret). Rebased onto c644ee2 (35a1522): depth 10
