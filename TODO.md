@@ -102,10 +102,12 @@ See `docs/search-decisions.md` for what is and isn't searched.
       weight per card). Data: `ygoai-card-refs --decisions --types ...` rows now carry each
       card's features, the rules' order and each candidate's cards (c644ee2); trainer
       scripts/train_set_policy.py. Refs s1 (60k decisions of SELECT_CARD/SUM/TRIBUTE from the
-      SPRT records since 10-19) generating.
+      SPRT records since 10-19): 60083 rows in 37 min.
   - [ ] Zones (branch `tree-place`, 6a8df12): the root's places (as listed, the rules take the
         first) in the tree, the first CARD_WIDTH, inside a move at the horizon (d1: 26 per game,
-        rules' answer best 0.967, 39 LP mean regret). After tree-sum.
+        rules' answer best 0.967, 39 LP mean regret). Rebased onto c644ee2 (35a1522): depth 10
+        520481 nodes in 446 searches (main 342760 in 370, +52%), 522.8G instructions (+58%);
+        3000n depth 12.88 (13.41). Expensive; SPRT after the set policy.
 - [ ] Search the decisions that have no feature yet:
   - [ ] `SelectDisfield` (zones to disable)
   - [ ] `SelectPlace` with several zones
