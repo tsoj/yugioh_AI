@@ -83,10 +83,14 @@ def main():
     ap.add_argument("--wd", type=float, default=1e-4)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--features", type=int, help="only each card's first N features (an older feature set's)")
+    ap.add_argument("--zero", help="features (indices, comma-separated) set to 0, unused by the policy (e.g. 95,96: the rules' rank)")
     a = ap.parse_args()
     torch.manual_seed(a.seed)
 
     rows = load(a.refs, a.clamp, a.features)
+    zero = [int(i) for i in a.zero.split(",")] if a.zero else []
+    for r in rows:
+        r[0][:, zero] = 0.0
     held = [r for r in rows if zlib.crc32(r[3].encode()) % a.held == 0]
     train = [r for r in rows if zlib.crc32(r[3].encode()) % a.held != 0]
     print(f"{len(rows)} positions with a spread ({len(train)} train, {len(held)} held out), cards per position {np.mean([len(r[1]) for r in rows]):.1f}")
@@ -126,6 +130,7 @@ def main():
 
     # (the standardization folded into the first layer)
     w = net.l1.weight.detach() / sd
+    w[:, zero] = 0.0  # (inputs always 0 in training: no effect there)
     b = net.l1.bias.detach() - (net.l1.weight.detach() * (mu / sd)).sum(1)
     model = {
         "features": xt.shape[2],
