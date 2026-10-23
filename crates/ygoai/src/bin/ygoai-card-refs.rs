@@ -13,8 +13,8 @@
 //!
 //!   ygoai-card-refs OUT.jsonl --games FILE [...] --decisions [--independent] [options as above]
 //!
-//! The decisions the search leaves to the rules below the root (not `is_searched`, or a card
-//! selection of several cards), with more than one of `root_candidates`, each with every
+//! The decisions the search leaves to the rules below the root (not `is_searched`), or a set
+//! policy orders (a card selection of several cards, a sum), with more than one of `root_candidates`, each with every
 //! candidate's reference value as above and the rules' answer: {"file", "line", "k", "type",
 //! "count": the game's decisions of that type, "player", "values", "rules": the rules' answer's
 //! index (added as a candidate if missing), "depth"}; --per-game of each type. How often and by
@@ -181,10 +181,10 @@ fn exact_values(duel: &Duel, prompt: &Msg, moves: &[Response], hint: Option<u64>
     }
 }
 
-/// Whether the rules answer `m` below the root (`--decisions`), and its moves at the root with the
-/// rules' answer's index.
+/// Whether the rules answer `m` below the root (`--decisions`), or a set policy orders it (several
+/// cards, a sum), and its moves at the root with the rules' answer's index.
 fn rules_decision(m: &Msg, hint: Option<u64>) -> Option<(Vec<Response>, usize)> {
-    if is_searched(m) && !matches!(m, Msg::SelectCard { min, max, .. } if (*min, *max) != (1, 1)) {
+    if is_searched(m) && !matches!(m, Msg::SelectCard { min, max, .. } if (*min, *max) != (1, 1)) && !matches!(m, Msg::SelectSum { .. }) {
         return None;
     }
     let player = m.player()?;
