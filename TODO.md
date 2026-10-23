@@ -135,8 +135,14 @@ See `docs/search-decisions.md` for what is and isn't searched.
         search biases the first candidate: of single odd ones out 1090 the first, 762 another
         (~410 expected). `--independent` (6e0115f, each candidate in its own search) on 3000 of
         the same decisions: spread 4.3% (9.1%), the bias gone. p2.jsonl (50k, --independent)
-        running. Branch `tree-place-policy`: the policy's first PLACE_WIDTH in the tree, the
-        policy's answer at the horizon and where the gate stays closed (no node); models pending.
+        (50192, 1670 s): spread > 50 4.4%; gate (g2_s50) held out AUC 0.86, opening for 25% catches
+        82% of those that matter; policy h16 (p2_h16) top1/2 0.60/0.80 (rules 0.63/0.73), regret
+        of the best of 2 200 LP (286); the rules' answer + the policy's best other 0.80 / 206.
+        Branch `tree-place-policy` (187b6dd): below the root a node only where the gate opens,
+        there the rules' answer and the policy's best other; else and at the horizon the rules;
+        the root every zone. Bench: depth 10 441109 nodes in 446 searches (main 342737 in 370;
+        +7% per search), 438.7G instructions; 3000n depth 13.27 (13.41; tree-place 12.88). SPRT
+        running since 19:53.
   - [ ] The same first-candidate bias is in the card and set refs (r2_state, s1): regenerate with
         --independent and retrain the card and set policies.
 - [ ] Search the decisions that have no feature yet:
