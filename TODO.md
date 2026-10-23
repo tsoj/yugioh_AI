@@ -51,6 +51,11 @@ See `docs/search-decisions.md` for what is and isn't searched.
 - [x] SPRT each decision feature vs `lmr` (`unselect`, `tribute`, `multicard`, `position`,
       `place`, `sum`): obsolete, the features were removed with the other failed ones in the
       2026-10-18 cleanup (see the retest item below).
+- [ ] In-tree decisions in small steps (user, 2026-10-23; order: position, tribute,
+      announcements, then several-card selections and unselect, zones/sorts/counters last).
+      `ygoai-card-refs --decisions` (main, 45e4833): at the decisions the rules answer below the
+      root, every root candidate's reference value and the rules' answer (per type, with the
+      game's count). Measurement (d1, 12000 positions) in the gap after the wide test.
 - [ ] Search the decisions that have no feature yet:
   - [ ] `SelectDisfield` (zones to disable)
   - [ ] `SelectPlace` with several zones
@@ -469,6 +474,16 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       (depth 13.42 vs 13.34). SPRT H1: +8.5 +/- 6.7 at 5348 games (LLR +3.01), merged (578c0ce).
       Main's depth-10 bench is now 343056 nodes, 331.3G instructions. Next: more card-ref data
       (the model is data-bound).
+  - [ ] Duel-state features (user, 2026-10-23; branch `card-policy-state`): what asks (the effect at
+        work: `core.reason_effect`, else the resolving link; its card's kind, categories, effect
+        type; cost or resolution; chain length), the duel (turn, both sides' best battle stat,
+        best attacker, face-down monsters, backrow, hand/grave/banished/deck/extra, Normal Summon
+        left) and the card against it (the asking card or its name, ATK now, beats the opponent's
+        best, could be Normal Summoned, duplicates among the cards): 210 features (137).
+        `ygoai-card-refs --refeature` recomputes r1's features (20093 rows, identical old ones).
+        On r1 alone no gain (data-bound): held out top1 0.480 / top3 0.855 / regret3 255 (old
+        features 0.482 / 0.849 / 251); train fit better. More refs (r2_state, 60k from the SPRT
+        records since 2026-10-19) in the gap after the wide test, then retrain and SPRT.
 - [ ] Horizon by action, not by decision type (user, 2026-10-22, branch `horizon-action`): at the
       horizon `do_move` let the rules answer only card selections, so a yes/no or option inside a
       resolution stopped the move and the eval came mid-effect. `action_under_way` (search::movegen)
@@ -493,8 +508,9 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
         as under way too, so at the horizon the rules answer its response windows until it has
         resolved. Bench: depth 10 324175 nodes (main 343056, -5.5%), 353.6G instructions (+6.7%);
         3000n depth 13.43 (13.42). SPRT running (32 at a time).
-  - [ ] Then with the main-line extension (horizon-action-ext rebuilt on whichever variant fares
-        better, against main).
+  - [ ] Then with the main-line extension: branch `horizon-action-ext2` (c27e70e) = horizon-action
+        rebased onto main + the main-line extension of under-way decisions (search one ply deep
+        on the main line instead of the rules' answer); against main. Queued after the wide test.
 - [ ] Eval net forward in f32 / columns (branch `eval-f32`): the same search tree (depth-10
       bench checksum eb7f41e9580dc935 as main), 1.0% fewer instructions. Too small for a [0, 10]
       SPRT; the user's call whether to merge as a pure speedup.
