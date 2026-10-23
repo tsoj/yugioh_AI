@@ -487,7 +487,14 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       2850 games, +7.6 +/- 9.0 (LLR +1.21), once the card policy was merged: rebased onto it
       (51e423a; at the horizon one-card selections take the policy's first card, inside an action
       too, the rest the rules) and continued against the new main with those 1425 pairs counted
-      (user's call, knowingly mixed: RESUME=), 32 at a time. SPRT running.
+      (user's call, knowingly mixed: RESUME=), 32 at a time: stopped by the user at 8570 games,
+      +3.8 +/- 5.2 (LLR -1.76), drifting to H0 (the 2860 new games about even).
+  - [ ] Wide variant (branch `horizon-action-wide`, 184d9e4, user 2026-10-23): an open chain counts
+        as under way too, so at the horizon the rules answer its response windows until it has
+        resolved. Bench: depth 10 324175 nodes (main 343056, -5.5%), 353.6G instructions (+6.7%);
+        3000n depth 13.43 (13.42). SPRT running (32 at a time).
+  - [ ] Then with the main-line extension (horizon-action-ext rebuilt on whichever variant fares
+        better, against main).
 - [ ] Eval net forward in f32 / columns (branch `eval-f32`): the same search tree (depth-10
       bench checksum eb7f41e9580dc935 as main), 1.0% fewer instructions. Too small for a [0, 10]
       SPRT; the user's call whether to merge as a pure speedup.
