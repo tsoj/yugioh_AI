@@ -120,8 +120,16 @@ See `docs/search-decisions.md` for what is and isn't searched.
         rules' answer best 0.967, 39 LP mean regret). Rebased onto c644ee2 (35a1522): depth 10
         520481 nodes in 446 searches (main 342760 in 370, +52%), 522.8G instructions (+58%);
         3000n depth 12.88 (13.41). Rebased onto the merged sums (42ef645; the same bench: 520443
-        nodes, 523.0G instructions vs main 342737 / 331.3G; 3000n 12.88 vs 13.41). SPRT running
-        since 17:58.
+        nodes, 523.0G instructions vs main 342737 / 331.3G; 3000n 12.88 vs 13.41). SPRT: H0,
+        -7.6 +/- 12.8 at 1454 games.
+  - [ ] Zones with a place policy (user, 2026-10-23): narrow in the tree (the policy's first
+        PLACE_WIDTH = 2), the policy's answer at the horizon, the root all zones by the policy.
+        Features per zone (`search::placepolicy`, on main 03796be): whose and which zone, the
+        column, what is in the column and next to it, the link arrows pointing to it, the card
+        placed (the hint's code: types, link arrows) and where its arrows point from there. d1:
+        20% of zone decisions have a spread, among them the rules' answer best 53%. Data
+        runs/data/place_refs/p1.jsonl (50k, --per-game 6, seed 4) running; branch
+        `tree-place-policy` (on tree-place) written, the model pending.
 - [ ] Search the decisions that have no feature yet:
   - [ ] `SelectDisfield` (zones to disable)
   - [ ] `SelectPlace` with several zones
