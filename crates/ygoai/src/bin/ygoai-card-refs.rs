@@ -16,8 +16,8 @@
 //! The decisions the search leaves to the rules below the root (not `is_searched`, or a card
 //! selection of several cards), with more than one of `root_candidates`, each with every
 //! candidate's reference value as above and the rules' answer: {"file", "line", "k", "type",
-//! "player", "values", "rules": the rules' answer's index (added as a candidate if missing),
-//! "depth"}. How often and by how much searching them would change the rules' answers.
+//! "count": the game's decisions of that type, "player", "values", "rules": the rules' answer's
+//! index (added as a candidate if missing), "depth"}; --per-game of each type. How often and by how much searching them would change the rules' answers.
 
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -170,22 +170,26 @@ fn rules_decision(m: &Msg, hint: Option<u64>) -> Option<(Vec<Response>, usize)> 
     (moves.len() > 1).then_some((moves, at))
 }
 
-/// The rows of a game (`--decisions`): up to `per_game` of the decisions the rules answer below
-/// the root, at random.
+/// The rows of a game (`--decisions`): up to `per_game` of each type of the decisions the rules
+/// answer below the root, at random ("count": the game's decisions of that type).
 fn decision_rows(file: &str, line: usize, text: &str, a: &Args) -> Vec<String> {
     let Some((record, viewer)) = parse_game(text) else { return Vec::new() };
-    let mut eligible = Vec::new();
+    let mut by_type: std::collections::BTreeMap<&'static str, Vec<usize>> = Default::default();
     replay(&record, viewer, |i, p, hint, _| {
         if rules_decision(p, hint).is_some() {
-            eligible.push(i);
+            by_type.entry(p.name()).or_default().push(i);
         }
         true
     });
     let mut rng = PyRandom::new((a.seed as i128) << 32 | line as i128);
-    rng.shuffle(&mut eligible);
-    eligible.truncate(a.per_game);
+    let mut eligible = Vec::new();
+    for ks in by_type.values_mut() {
+        let count = ks.len();
+        rng.shuffle(ks);
+        eligible.extend(ks.iter().take(a.per_game).map(|&k| (k, count)));
+    }
     let mut rows = Vec::new();
-    for k in eligible {
+    for (k, count) in eligible {
         let mut found = None;
         replay(&record, viewer, |i, p, hint, duel| {
             if i == k {
@@ -199,7 +203,7 @@ fn decision_rows(file: &str, line: usize, text: &str, a: &Args) -> Vec<String> {
         let (values, _) = search(&duel, &prompt, &moves, hint, REF_EXACT_NODES_FACTOR * a.ref_nodes, Some(depth.max(1)), true);
         let Some(values) = values.into_iter().collect::<Option<Vec<f64>>>() else { continue };
         let player = prompt.player();
-        rows.push(json!({"file": file, "line": line, "k": k, "type": prompt.name(), "player": player, "values": values, "rules": at, "depth": depth}).to_string());
+        rows.push(json!({"file": file, "line": line, "k": k, "type": prompt.name(), "count": count, "player": player, "values": values, "rules": at, "depth": depth}).to_string());
     }
     rows
 }
