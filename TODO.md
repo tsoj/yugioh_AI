@@ -94,6 +94,9 @@ See `docs/search-decisions.md` for what is and isn't searched.
         (least valuable cards first) in the tree, the first CARD_WIDTH, inside a move at the
         horizon (d1: rules' answer best 0.743, 939 LP mean regret, in ~5% of games). Bench: the
         same tree as main (no sum in the bench's searches). SPRT running since 12:42.
+  - [ ] Zones (branch `tree-place`, 6a8df12): the root's places (as listed, the rules take the
+        first) in the tree, the first CARD_WIDTH, inside a move at the horizon (d1: 26 per game,
+        rules' answer best 0.967, 39 LP mean regret). After tree-sum.
 - [ ] Search the decisions that have no feature yet:
   - [ ] `SelectDisfield` (zones to disable)
   - [ ] `SelectPlace` with several zones
