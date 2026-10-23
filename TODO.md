@@ -67,6 +67,12 @@ See `docs/search-decisions.md` for what is and isn't searched.
   - [ ] Position (branch `tree-position`, 73a42e5): a searched decision, the rules' order; at
         the horizon the rules answer it like a card selection (inside a move), on the main line
         searched one ply deeper. Bench and SPRT after horizon-action-ext2.
+  - [ ] Tributes (branch `tree-tribute`, 2ec2a5f): the root's candidates in the tree (the rules'
+        answer, then the least valuable sets that release enough, at most ROOT_COMBO_WIDTH),
+        inside a move at the horizon. (`heuristic::tribute_answer` shared.)
+  - [ ] Announcements (branch `tree-announce`, 2083990): a number, one type or one attribute,
+        each a move (the rules: the first number, a random type or attribute), inside a move at
+        the horizon.
 - [ ] Search the decisions that have no feature yet:
   - [ ] `SelectDisfield` (zones to disable)
   - [ ] `SelectPlace` with several zones
