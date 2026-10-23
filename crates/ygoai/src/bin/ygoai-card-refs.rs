@@ -11,7 +11,7 @@
 //! "hint", "player", "values": each card's (LP, for the selecting player), "rules": the rules'
 //! order, "depth", "features": each card's `cardpolicy::card_features`}.
 //!
-//!   ygoai-card-refs OUT.jsonl --games FILE [...] --decisions [options as above]
+//!   ygoai-card-refs OUT.jsonl --games FILE [...] --decisions [--independent] [options as above]
 //!
 //! The decisions the search leaves to the rules below the root (not `is_searched`, or a card
 //! selection of several cards), with more than one of `root_candidates`, each with every
@@ -24,7 +24,8 @@
 //! (finishing: none), the data of a policy for these. A zone selection's rows (every zone the
 //! candidates if one is chosen) have "hint", "features": each zone's
 //! `placepolicy::place_features` (`available_places`' order), and "sets": each candidate's zones.
-//! --types T,T: only these types (as "type").
+//! --types T,T: only these types (as "type"). --independent: each candidate's value in a search of
+//! its own (`exact_values`).
 
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -65,6 +66,7 @@ struct Args {
     seed: u64,
     decisions: bool,
     types: Option<Vec<String>>,
+    independent: bool,
 }
 
 fn usage(msg: &str) -> ! {
@@ -86,12 +88,17 @@ fn parse_args() -> Args {
         seed: 1,
         decisions: false,
         types: None,
+        independent: false,
     };
     let mut i = 1;
     while i < argv.len() {
         let k = argv[i].as_str();
-        if k == "--decisions" {
-            a.decisions = true;
+        if k == "--decisions" || k == "--independent" {
+            if k == "--decisions" {
+                a.decisions = true;
+            } else {
+                a.independent = true;
+            }
             i += 1;
             continue;
         }
@@ -161,6 +168,19 @@ fn search(duel: &Duel, prompt: &Msg, moves: &[Response], hint: Option<u64>, node
     (std::mem::take(&mut ab.last_root_values), done)
 }
 
+/// Every move's value searched with the full window to `depth`: in one search, or with
+/// `independent` each in a search of its own (fresh tables: a move searched first in a shared
+/// search ends up with another value than the same move later, where the moves' choice does not
+/// matter, by the tables' state).
+fn exact_values(duel: &Duel, prompt: &Msg, moves: &[Response], hint: Option<u64>, ref_nodes: u64, depth: i32, independent: bool) -> Option<Vec<f64>> {
+    let exact = |ms: &[Response]| search(duel, prompt, ms, hint, REF_EXACT_NODES_FACTOR * ref_nodes, Some(depth.max(1)), true).0;
+    if independent {
+        moves.iter().map(|m| exact(std::slice::from_ref(m)).into_iter().next().flatten()).collect()
+    } else {
+        exact(moves).into_iter().collect()
+    }
+}
+
 /// Whether the rules answer `m` below the root (`--decisions`), and its moves at the root with the
 /// rules' answer's index.
 fn rules_decision(m: &Msg, hint: Option<u64>) -> Option<(Vec<Response>, usize)> {
@@ -219,8 +239,7 @@ fn decision_rows(file: &str, line: usize, text: &str, a: &Args) -> Vec<String> {
         let Some((duel, prompt, hint)) = found else { continue };
         let Some((moves, at)) = rules_decision(&prompt, hint) else { continue };
         let (_, depth) = search(&duel, &prompt, &moves, hint, a.ref_nodes, None, false);
-        let (values, _) = search(&duel, &prompt, &moves, hint, REF_EXACT_NODES_FACTOR * a.ref_nodes, Some(depth.max(1)), true);
-        let Some(values) = values.into_iter().collect::<Option<Vec<f64>>>() else { continue };
+        let Some(values) = exact_values(&duel, &prompt, &moves, hint, a.ref_nodes, depth, a.independent) else { continue };
         let player = prompt.player();
         let mut row = json!({"file": file, "line": line, "k": k, "type": prompt.name(), "count": count, "player": player, "values": values, "rules": at, "depth": depth});
         if let Some((cards, &p)) = selection_cards(&prompt) {
