@@ -75,10 +75,10 @@ See `docs/search-decisions.md` for what is and isn't searched.
         inside a move at the horizon. (`heuristic::tribute_answer` shared.) Bench: depth 10 342951
         nodes in 370 searches, 331.5G instructions; 3000n depth 13.44. SPRT H0: +0.9 +/- 7.3 at
         4336 games (LLR -2.96).
-  - [ ] Announcements (branch `tree-announce`, 2083990): a number, one type or one attribute,
+  - [x] Announcements (branch `tree-announce`, 2083990): a number, one type or one attribute,
         each a move (the rules: the first number, a random type or attribute), inside a move at
         the horizon. Bench: depth 10 344893 nodes in 369 searches, 334.4G instructions (+0.9%);
-        3000n depth 13.41.
+        3000n depth 13.41. SPRT H0: -2.5 +/- 9.8 at 2198 games (LLR -3.04).
   - [ ] Several cards (branch `tree-cards`, 11eaa7a): the root's sets (`movegen::card_sets`)
         in the tree, ordered by the rules' order of the cards, the first CARD_WIDTH (d1: the best
         set is among the first 3 in 0.949, the first 2 0.903, the first 0.807). Bench: depth 10
