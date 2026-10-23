@@ -62,7 +62,7 @@ def metrics(score, v, mask):
     order = score.argsort(1, descending=True)
     ranked = v.gather(1, order)
     out = {}
-    for k in (1, 3):
+    for k in (1, 2, 3):
         top = ranked[:, :k].max(1).values
         out[f"top{k}"] = (top >= best - 1e-6).float().mean().item()
         out[f"regret{k}"] = (best - top).mean().item()
@@ -146,8 +146,8 @@ def main():
             with torch.no_grad():
                 for t, (xh, mh, vh, kh, _) in held_by_type.items():
                     m = metrics(net((xh - mu) / sd, mh, kh), vh, kh)
-                    report.append(f"{t} {m['top1']:.3f}/{m['top3']:.3f}/{m['regret1']:.0f}/{m['regret3']:.0f}")
-            print(f"epoch {epoch + 1}: train loss {total / len(xt):.4f}; held out top1/top3/regret1/regret3: " + ", ".join(report))
+                    report.append(f"{t} {m['top1']:.3f}/{m['top2']:.3f}/{m['top3']:.3f}/{m['regret1']:.0f}/{m['regret2']:.0f}/{m['regret3']:.0f}")
+            print(f"epoch {epoch + 1}: train loss {total / len(xt):.4f}; held out top1/2/3, regret1/2/3: " + ", ".join(report))
 
     # (the standardization folded into the first layer)
     w = net.l1.weight.detach() / sd
