@@ -163,21 +163,23 @@ pub fn card_features(d: &Duel, prompt: &Msg, hint: Option<u64>, rules: &[usize])
 }
 
 /// The default policy (scripts/train_card_policy.py --hidden 16 --epochs 12 on
-/// runs/data/card_refs/r1.jsonl: 20093 selections of the games of runs/sprt/evalcheck-from12000_*
-/// and noshuffle_*, references at 2000 nodes; 14698 with a spread). Held out (1466): the best card
-/// first 0.482 (rules 0.428), in the first 3 0.849 (0.808), in the first 5 0.932 (0.898); regret of
-/// the best of the first 3 251 LP (342).
-const DEFAULT_POLICY: &str = include_str!("../../models/card_policy_cp1_h16.json");
+/// runs/data/card_refs/r3_indep.jsonl: 60062 selections of the SPRT records since 2026-10-19,
+/// references at 2000 nodes, each card in a search of its own (--independent); 47333 with a
+/// spread). Held out (4739): the best card first 0.495 (rules 0.442; the policy of r1's shared
+/// references 0.477), in the first 3 0.854 (0.813; 0.840); regret of the best of the first 3 240
+/// LP (353; 275).
+const DEFAULT_POLICY: &str = include_str!("../../models/card_policy_cp4_h16.json");
 
 /// The default set policy (`set_policy`): scripts/train_set_policy.py --hidden 16 on
-/// runs/data/set_refs/s1.jsonl (60083 decisions of several cards, sums and tributes of the SPRT
-/// records since 2026-10-19, references at 2000 nodes; 42777 with a spread). Held out, the best
-/// set first / in the first 3 / regret of the first and of the best of the first 3 (LP): several
-/// cards 0.513 / 0.872 / 825 / 164 (the candidates' order, the rules' cards first: 0.345 / 0.825 /
-/// 1287 / 265), sums 0.639 / 0.967 / 604 / 65 (the rules' random answer: 0.431 / 0.947 / 1255 /
-/// 94), tributes 0.676 / 0.967 / 678 / 80 (the rules: 0.676 / 0.952 / 660 / 109: not used for
-/// them).
-const DEFAULT_SET_POLICY: &str = include_str!("../../models/set_policy_s1_h16.json");
+/// runs/data/set_refs/s2_indep.jsonl + s2_indep_sums.jsonl (60073 decisions of several cards and
+/// tributes and 8053 sums of the SPRT records since 2026-10-19, references at 2000 nodes, each
+/// candidate in a search of its own (--independent); 53904 with a spread). Held out, the best set
+/// first / in the first 3 / regret of the first and of the best of the first 3 (LP): several cards
+/// 0.552 / 0.877 / 755 / 153 (the rules' cards first: 0.327 / 0.827 / 1348 / 261; the policy of
+/// s1's shared references: 0.539 / 0.879 / 777 / 147), sums 0.596 / 0.957 / 775 / 62 (the rules:
+/// 0.391 / 0.937 / 1398 / 107; s1's: 0.590 / 0.948 / 770 / 93), tributes 0.666 / 0.962 / 675 / 69
+/// (the rules: 0.668 / 0.943 / 647 / 103: not used for them).
+const DEFAULT_SET_POLICY: &str = include_str!("../../models/set_policy_s2_h16.json");
 
 /// The network: score = w2 . relu(W1 x + b1) + b2 (the features' standardization folded into W1, b1).
 /// A set policy's set of cards: its cards' scores, plus `size` per card and `finish` for none.
@@ -204,7 +206,7 @@ pub fn set_applies(prompt: &Msg) -> bool {
 /// built-in DEFAULT_SET_POLICY otherwise.
 pub fn set_policy() -> Option<&'static CardPolicy> {
     static P: std::sync::OnceLock<Option<CardPolicy>> = std::sync::OnceLock::new();
-    P.get_or_init(|| CardPolicy::load("YGOAI_SET_POLICY", DEFAULT_SET_POLICY, "models/set_policy_s1_h16.json")).as_ref()
+    P.get_or_init(|| CardPolicy::load("YGOAI_SET_POLICY", DEFAULT_SET_POLICY, "models/set_policy_s2_h16.json")).as_ref()
 }
 
 impl CardPolicy {
@@ -212,7 +214,7 @@ impl CardPolicy {
     /// order), the built-in DEFAULT_POLICY otherwise.
     pub fn get() -> Option<&'static CardPolicy> {
         static P: std::sync::OnceLock<Option<CardPolicy>> = std::sync::OnceLock::new();
-        P.get_or_init(|| CardPolicy::load("YGOAI_CARD_POLICY", DEFAULT_POLICY, "models/card_policy_cp1_h16.json")).as_ref()
+        P.get_or_init(|| CardPolicy::load("YGOAI_CARD_POLICY", DEFAULT_POLICY, "models/card_policy_cp4_h16.json")).as_ref()
     }
 
     /// $`var`'s JSON file if set ("none": none), else the built-in `default` (from `path`).
