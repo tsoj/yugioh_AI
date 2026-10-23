@@ -93,7 +93,15 @@ See `docs/search-decisions.md` for what is and isn't searched.
   - [ ] Sums (branch `tree-sum`, deacbd2, on main with tree-cards): the root's valid selections
         (least valuable cards first) in the tree, the first CARD_WIDTH, inside a move at the
         horizon (d1: rules' answer best 0.743, 939 LP mean regret, in ~5% of games). Bench: the
-        same tree as main (no sum in the bench's searches). SPRT running since 12:42.
+        same tree as main (no sum in the bench's searches). SPRT paused (user) at 3780 games,
+        +3.8 +/- 7.6 (LLR -0.83; +13.9 at 1000 games) for the set policy: restart from scratch
+        after it, with the policy's sum order if the policy passes.
+- [ ] Set policy (user, 2026-10-23): the card policy for selections whose candidates are sets of
+      cards (several cards, sums, tributes): a set's score is its cards' scores summed (plus a
+      weight per card). Data: `ygoai-card-refs --decisions --types ...` rows now carry each
+      card's features, the rules' order and each candidate's cards (c644ee2); trainer
+      scripts/train_set_policy.py. Refs s1 (60k decisions of SELECT_CARD/SUM/TRIBUTE from the
+      SPRT records since 10-19) generating.
   - [ ] Zones (branch `tree-place`, 6a8df12): the root's places (as listed, the rules take the
         first) in the tree, the first CARD_WIDTH, inside a move at the horizon (d1: 26 per game,
         rules' answer best 0.967, 39 LP mean regret). After tree-sum.
