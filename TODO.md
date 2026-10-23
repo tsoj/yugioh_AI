@@ -68,7 +68,8 @@ See `docs/search-decisions.md` for what is and isn't searched.
         the horizon the rules answer it like a card selection (inside a move), on the main line
         searched one ply deeper. Bench: depth 10 344964 nodes in 388 searches (main 343056 in 369:
         the bench searches positions too), 322.6G instructions; 3000n depth 13.49. SPRT after
-        horizon-action-ext2.
+        horizon-action-ext2: running since 07:10 (32 at a time). Then tribute, announcements,
+        cards, unselect, each against main.
   - [ ] Tributes (branch `tree-tribute`, 2ec2a5f): the root's candidates in the tree (the rules'
         answer, then the least valuable sets that release enough, at most ROOT_COMBO_WIDTH),
         inside a move at the horizon. (`heuristic::tribute_answer` shared.) Bench: depth 10 342951
@@ -79,10 +80,12 @@ See `docs/search-decisions.md` for what is and isn't searched.
         3000n depth 13.41.
   - [ ] Several cards (branch `tree-cards`, 11eaa7a): the root's sets (`movegen::card_sets`)
         in the tree, ordered by the rules' order of the cards, the first CARD_WIDTH (d1: the best
-        set is among the first 3 in 0.949, the first 2 0.903, the first 0.807).
+        set is among the first 3 in 0.949, the first 2 0.903, the first 0.807). Bench: depth 10
+        342760 nodes in 370 searches, 331.1G instructions; 3000n depth 13.41.
   - [ ] One card at a time (branch `tree-unselect`, 63d3099): the first CARD_WIDTH cards by the
         rules' order and finishing, inside a move at the horizon (d1: the best among the first 3
-        cards 0.987). The root as before (at most ROOT_COMBO_WIDTH cards).
+        cards 0.987). The root as before (at most ROOT_COMBO_WIDTH cards). Bench: depth 10 336184
+        nodes in 383 searches, 325.6G instructions; 3000n depth 13.55.
 - [ ] Search the decisions that have no feature yet:
   - [ ] `SelectDisfield` (zones to disable)
   - [ ] `SelectPlace` with several zones
