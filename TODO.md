@@ -90,7 +90,7 @@ See `docs/search-decisions.md` for what is and isn't searched.
         tree-cards (2e5ee60): depth 10 334139 nodes in 384 searches (main 342760 in 370), 323.6G
         instructions (331.1G); 3000n depth 13.56 (13.41). SPRT H0: -23.0 +/- 18.9 at 666 games
         (LLR -3.04), as with one ply per node (-19.8).
-  - [ ] Sums (branch `tree-sum`, deacbd2, on main with tree-cards): the root's valid selections
+  - [x] Sums (branch `tree-sum`, deacbd2, on main with tree-cards): the root's valid selections
         (least valuable cards first) in the tree, the first CARD_WIDTH, inside a move at the
         horizon (d1: rules' answer best 0.743, 939 LP mean regret, in ~5% of games). Bench: the
         same tree as main (no sum in the bench's searches). SPRT paused (user) at 3780 games,
@@ -99,7 +99,7 @@ See `docs/search-decisions.md` for what is and isn't searched.
         counts (RESUME=runs/sprt/tree-sum_20261023-124136.jsonl); but if the set policy fails
         with positive Elo, `tree-sum-policy` from scratch against the current main instead
         (user, 16:59). Set policy H0 (+1.5 +/- 6.6, 4842 games) → `tree-sum-policy` SPRT vs main
-        running since 17:15. Ready for all: `tree-sum`
+        running since 17:15: **H1, +16.0 +/- 11.9 at 1438 games (LLR +2.98) → merged**. Ready for all: `tree-sum`
         rebased onto main (c2fbafd, the search unchanged), `tree-sum-policy` (6a857de) = set-policy
         + sums in the tree ordered by the set policy.
 - [ ] Set policy (user, 2026-10-23): the card policy for selections whose candidates are sets of
