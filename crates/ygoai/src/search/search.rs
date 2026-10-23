@@ -16,10 +16,10 @@ use std::time::Instant;
 use ygo_core::constants::*;
 use ygo_core::duel::Duel;
 
-use super::cardpolicy::{CardPolicy, applies};
+use super::cardpolicy::{CardPolicy, applies, selection_cards, set_applies, set_policy};
 use super::evaluate::evaluate_at;
 use super::history::HistoryTable;
-use super::movegen::{candidates, is_searched};
+use super::movegen::{candidates, is_searched, root_candidates};
 use super::movepick::{listed, move_key, move_kind, ordered, prompt_label};
 use super::params::*;
 use super::tt::{NodeType, TranspositionTable, hash_key};
@@ -211,6 +211,11 @@ impl SearchState<'_> {
     /// For a card selection: the order of its cards, the rules' (by the select hint the player
     /// got, which belongs to this selection only), for a one-card selection the card policy's.
     fn card_order(&mut self, duel: &Duel, m: &Msg) -> Option<Vec<usize>> {
+        self.card_order_hint(duel, m).map(|(order, _)| order)
+    }
+
+    /// (`card_order`, and the select hint)
+    fn card_order_hint(&mut self, duel: &Duel, m: &Msg) -> Option<(Vec<usize>, Option<u64>)> {
         let (cards, player) = match m {
             Msg::SelectCard { cards, player, .. } => (cards, player),
             _ => return None,
@@ -219,9 +224,22 @@ impl SearchState<'_> {
         let (order, hint) = (policy.card_order(cards), policy.hint);
         policy.hint = None;
         Some(match CardPolicy::get() {
-            Some(p) if applies(m) => p.order(duel, m, hint, &order),
-            _ => order,
+            Some(p) if applies(m) => (p.order(duel, m, hint, &order), hint),
+            _ => (order, hint),
         })
+    }
+
+    /// The set policy's answer to a selection of sets of cards (`set_applies`) among the root's
+    /// candidates (the rules' answer among them), None without either.
+    fn set_answer(&mut self, duel: &Duel, m: &Msg) -> Option<Response> {
+        let sp = set_policy()?;
+        let (cards, player) = selection_cards(m)?;
+        let rules = &mut self.policies[*player as usize];
+        let (order, hint) = (rules.card_order(cards), rules.hint);
+        let moves = root_candidates(m, rules, None);
+        let best = *sp.order_sets(duel, m, hint, &order, &moves).first()?;
+        rules.hint = None;
+        Some(moves[best].clone())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -344,10 +362,16 @@ impl SearchState<'_> {
         let depth = if extended { 1.0 } else { depth };
 
         // (moves are indices into the rules' order: the hash table keeps one, the history reorders them)
-        let card_order = self.card_order(duel, prompt);
-        let mut moves = ordered(prompt, duel.ext_get_info()[1], card_order.as_deref());
+        let card_order = self.card_order_hint(duel, prompt);
+        let mut moves = ordered(prompt, duel.ext_get_info()[1], card_order.as_ref().map(|(o, _)| o.as_slice()));
         if moves.is_empty() {
             return Ok(evaluate_at(duel, us, Some(prompt)));
+        }
+        if set_applies(prompt)
+            && let (Some(sp), Some((order, hint))) = (set_policy(), &card_order)
+        {
+            // (sets of cards: the set policy's order)
+            moves = sp.order_sets(duel, prompt, *hint, order, &moves).into_iter().map(|i| moves[i].clone()).collect();
         }
         if matches!(prompt, Msg::SelectCard { .. }) {
             moves.truncate(self.tables.tune.card_width);
@@ -557,7 +581,7 @@ impl SearchState<'_> {
     /// Makes the move: the response, then the core runs on, the rules answering the decisions
     /// the search does not make (hidden ones, the only move, and at the horizon the decisions
     /// inside a move, so that it completes first, unless `extend`: on the main line, see `search`),
-    /// up to the next searched decision.
+    /// up to the next searched decision. Sets of cards the set policy chooses, if there is one.
     fn do_move(&mut self, duel: &mut Duel, prompt: &Msg, mv: &Response, depth: f64, extend: bool) -> Result<NewPosition, Stop> {
         let depth = if extend && depth <= 0.0 { 1.0 } else { depth };
         duel.ocg_set_response(&encode(prompt, mv).map_err(|_| Stop::Broken)?);
@@ -586,6 +610,11 @@ impl SearchState<'_> {
             } else if applies(&prompt) && depth <= 0.0 && CardPolicy::get().is_some() {
                 let first = self.card_order(duel, &prompt).unwrap()[0];
                 Response { indices: Some(vec![first as i64]), ..Response::default() }
+            } else if set_applies(&prompt)
+                && (depth <= 0.0 || !is_searched(&prompt))
+                && let Some(answer) = self.set_answer(duel, &prompt)
+            {
+                answer
             } else if matches!(prompt, Msg::SelectCard { .. }) && depth <= 0.0 {
                 self.policies[player as usize].respond_to(&prompt, None).map_err(|_| Stop::Broken)?
             } else if is_searched(&prompt) {

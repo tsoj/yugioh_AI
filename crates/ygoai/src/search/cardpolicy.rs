@@ -169,7 +169,18 @@ pub fn card_features(d: &Duel, prompt: &Msg, hint: Option<u64>, rules: &[usize])
 /// the best of the first 3 251 LP (342).
 const DEFAULT_POLICY: &str = include_str!("../../models/card_policy_cp1_h16.json");
 
+/// The default set policy (`set_policy`): scripts/train_set_policy.py --hidden 16 on
+/// runs/data/set_refs/s1.jsonl (60083 decisions of several cards, sums and tributes of the SPRT
+/// records since 2026-10-19, references at 2000 nodes; 42777 with a spread). Held out, the best
+/// set first / in the first 3 / regret of the first and of the best of the first 3 (LP): several
+/// cards 0.513 / 0.872 / 825 / 164 (the candidates' order, the rules' cards first: 0.345 / 0.825 /
+/// 1287 / 265), sums 0.639 / 0.967 / 604 / 65 (the rules' random answer: 0.431 / 0.947 / 1255 /
+/// 94), tributes 0.676 / 0.967 / 678 / 80 (the rules: 0.676 / 0.952 / 660 / 109: not used for
+/// them).
+const DEFAULT_SET_POLICY: &str = include_str!("../../models/set_policy_s1_h16.json");
+
 /// The network: score = w2 . relu(W1 x + b1) + b2 (the features' standardization folded into W1, b1).
+/// A set policy's set of cards: its cards' scores, plus `size` per card and `finish` for none.
 #[derive(serde::Deserialize)]
 pub struct CardPolicy {
     features: usize,
@@ -177,6 +188,23 @@ pub struct CardPolicy {
     b1: Vec<f32>,
     w2: Vec<f32>,
     b2: f32,
+    #[serde(default)]
+    size: f32,
+    #[serde(default)]
+    finish: f32,
+}
+
+/// Whether the set policy orders this selection's candidates (sets of cards: several cards, a
+/// sum; tributes not, see DEFAULT_SET_POLICY).
+pub fn set_applies(prompt: &Msg) -> bool {
+    matches!(prompt, Msg::SelectCard { min, max, .. } if (*min, *max) != (1, 1)) || matches!(prompt, Msg::SelectSum { .. })
+}
+
+/// The set policy in use (read once): $YGOAI_SET_POLICY's JSON file if set ("none": none), the
+/// built-in DEFAULT_SET_POLICY otherwise.
+pub fn set_policy() -> Option<&'static CardPolicy> {
+    static P: std::sync::OnceLock<Option<CardPolicy>> = std::sync::OnceLock::new();
+    P.get_or_init(|| CardPolicy::load("YGOAI_SET_POLICY", DEFAULT_SET_POLICY, "models/set_policy_s1_h16.json")).as_ref()
 }
 
 impl CardPolicy {
@@ -184,17 +212,19 @@ impl CardPolicy {
     /// order), the built-in DEFAULT_POLICY otherwise.
     pub fn get() -> Option<&'static CardPolicy> {
         static P: std::sync::OnceLock<Option<CardPolicy>> = std::sync::OnceLock::new();
-        P.get_or_init(|| {
-            let (text, path) = match std::env::var("YGOAI_CARD_POLICY").ok().filter(|p| !p.is_empty()) {
-                Some(p) if p == "none" => return None,
-                Some(p) => (std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("YGOAI_CARD_POLICY {p}: {e}")), p),
-                None => (DEFAULT_POLICY.to_string(), "models/card_policy_cp1_h16.json".to_string()),
-            };
-            let p: CardPolicy = serde_json::from_str(&text).unwrap_or_else(|e| panic!("card policy {path}: {e}"));
-            assert_eq!(p.features, CARD_FEATURES, "card policy {path}: features");
-            Some(p)
-        })
-        .as_ref()
+        P.get_or_init(|| CardPolicy::load("YGOAI_CARD_POLICY", DEFAULT_POLICY, "models/card_policy_cp1_h16.json")).as_ref()
+    }
+
+    /// $`var`'s JSON file if set ("none": none), else the built-in `default` (from `path`).
+    fn load(var: &str, default: &str, path: &str) -> Option<CardPolicy> {
+        let (text, path) = match std::env::var(var).ok().filter(|p| !p.is_empty()) {
+            Some(p) if p == "none" => return None,
+            Some(p) => (std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{var} {p}: {e}")), p),
+            None => (default.to_string(), path.to_string()),
+        };
+        let p: CardPolicy = serde_json::from_str(&text).unwrap_or_else(|e| panic!("card policy {path}: {e}"));
+        assert_eq!(p.features, CARD_FEATURES, "card policy {path}: features");
+        Some(p)
     }
 
     pub fn score(&self, x: &[f32; CARD_FEATURES]) -> f32 {
@@ -213,6 +243,23 @@ impl CardPolicy {
         let scores: Vec<f32> = card_features(d, prompt, hint, rules).iter().map(|x| self.score(x)).collect();
         let mut order = rules.to_vec();
         order.sort_by(|&a, &b| scores[b].total_cmp(&scores[a]));
+        order
+    }
+
+    /// The indices of `sets` (responses choosing cards of the selection `prompt`, `set_applies`) by
+    /// score, the best first (ties: as given).
+    pub fn order_sets(&self, d: &Duel, prompt: &Msg, hint: Option<u64>, rules: &[usize], sets: &[crate::actions::Response]) -> Vec<usize> {
+        let scores: Vec<f32> = card_features(d, prompt, hint, rules).iter().map(|x| self.score(x)).collect();
+        let set_score: Vec<f32> = sets
+            .iter()
+            .map(|r| {
+                let cards = r.indices.as_deref().unwrap_or(&[]);
+                let sum: f32 = cards.iter().map(|&i| scores.get(i as usize).copied().unwrap_or(0.0)).sum();
+                sum + self.size * cards.len() as f32 + if cards.is_empty() { self.finish } else { 0.0 }
+            })
+            .collect();
+        let mut order: Vec<usize> = (0..sets.len()).collect();
+        order.sort_by(|&a, &b| set_score[b].total_cmp(&set_score[a]));
         order
     }
 }
