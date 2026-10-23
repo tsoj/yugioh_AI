@@ -102,7 +102,14 @@ See `docs/search-decisions.md` for what is and isn't searched.
       weight per card). Data: `ygoai-card-refs --decisions --types ...` rows now carry each
       card's features, the rules' order and each candidate's cards (c644ee2); trainer
       scripts/train_set_policy.py. Refs s1 (60k decisions of SELECT_CARD/SUM/TRIBUTE from the
-      SPRT records since 10-19): 60083 rows in 37 min.
+      SPRT records since 10-19): 60083 rows in 37 min. Held out (scripts/train_set_policy.py,
+      h16, all types; h32 and several-cards-only no better), best first / in the first 3 /
+      regret of the first / of the best of the first 3: several cards 0.513 / 0.872 / 825 / 164
+      (candidates' order 0.345 / 0.825 / 1287 / 265), sums 0.639 / 0.967 / 604 / 65 (rules'
+      random answer 0.431 / 0.947 / 1255 / 94), tributes 0.676 (0.676: not used). Branch
+      `set-policy` (727cf9f): several cards ordered in the tree and answered at the horizon,
+      sums answered, by the policy. Bench: depth 10 342737 nodes (342760), +0.1% instructions;
+      3000n depth 13.41. SPRT running since 15:4x.
   - [ ] Zones (branch `tree-place`, 6a8df12): the root's places (as listed, the rules take the
         first) in the tree, the first CARD_WIDTH, inside a move at the horizon (d1: 26 per game,
         rules' answer best 0.967, 39 LP mean regret). Rebased onto c644ee2 (35a1522): depth 10
