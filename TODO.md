@@ -128,8 +128,17 @@ See `docs/search-decisions.md` for what is and isn't searched.
         column, what is in the column and next to it, the link arrows pointing to it, the card
         placed (the hint's code: types, link arrows) and where its arrows point from there. d1:
         20% of zone decisions have a spread, among them the rules' answer best 53%. Data
-        runs/data/place_refs/p1.jsonl (50k, --per-game 6, seed 4) running; branch
-        `tree-place-policy` (on tree-place) written, the model pending.
+        runs/data/place_refs/p1.jsonl (50k, --per-game 6, seed 4): 8.3% spread > 50 LP (values
+        clipped at 8000); policy h16 held out top1/2 0.54/0.83 (rules 0.55/0.82), regret of the
+        best of 2 175 LP (206); gate (user: predict whether the zone matters; the zones'
+        features' mean and max, scripts/train_place_gate.py) AUC 0.70. But the refs' shared
+        search biases the first candidate: of single odd ones out 1090 the first, 762 another
+        (~410 expected). `--independent` (6e0115f, each candidate in its own search) on 3000 of
+        the same decisions: spread 4.3% (9.1%), the bias gone. p2.jsonl (50k, --independent)
+        running. Branch `tree-place-policy`: the policy's first PLACE_WIDTH in the tree, the
+        policy's answer at the horizon and where the gate stays closed (no node); models pending.
+  - [ ] The same first-candidate bias is in the card and set refs (r2_state, s1): regenerate with
+        --independent and retrain the card and set policies.
 - [ ] Search the decisions that have no feature yet:
   - [ ] `SelectDisfield` (zones to disable)
   - [ ] `SelectPlace` with several zones
