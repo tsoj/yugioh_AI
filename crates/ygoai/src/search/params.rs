@@ -6,8 +6,9 @@ pub const WIN: f64 = 10_000_000.0;
 pub const MAX_DEPTH: i32 = 100;
 /// (without a time control: a fixed depth)
 pub const DEPTH_NO_CLOCK: i32 = 2;
-/// (a one-card selection: the rules' first choices only, below the root and at the root; the root's
-/// width 3 -> 5 by SPSA run 1, see FUTILITY_MARGIN)
+/// (a card selection: the first choices only, below the root (of several cards: the first sets,
+/// `card_sets`), and a one-card selection at the root; the root's width 3 -> 5 by SPSA run 1, see
+/// FUTILITY_MARGIN)
 pub const CARD_WIDTH: usize = 3;
 pub const ROOT_CARD_WIDTH: usize = 5;
 /// (the root's other decisions, `root_candidates`: at most this many choices of several cards,

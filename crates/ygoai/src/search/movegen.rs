@@ -9,8 +9,7 @@ use crate::heuristic::{Heuristic, card, card_value};
 use crate::messages::Msg;
 use crate::state::Snapshot;
 
-/// The prompts searched over (belief_mc.SEARCHED) when they have more than one candidate (a
-/// selection of several cards has none: the rules make it).
+/// The prompts searched over (belief_mc.SEARCHED) when they have more than one candidate.
 pub fn is_searched(m: &Msg) -> bool {
     matches!(
         m,
@@ -47,6 +46,8 @@ pub fn candidates(m: &Msg) -> Vec<Response> {
         Msg::SelectCard { min: 1, max: 1, cards, .. } => {
             (0..cards.len()).map(|i| Response { indices: Some(vec![i as i64]), ..Response::default() }).collect()
         }
+        // (several cards: the sets as listed; the search orders them by the rules' order, `card_sets`)
+        Msg::SelectCard { cards, .. } => card_sets(m, &(0..cards.len()).collect::<Vec<_>>()),
         _ => vec![],
     }
 }
@@ -67,28 +68,7 @@ pub fn root_candidates(m: &Msg, rules: &Heuristic, state: Option<&Snapshot>) -> 
     };
     let mut out: Vec<Response> = match m {
         Msg::SelectCard { min: 1, max: 1, .. } => return candidates(m),
-        Msg::SelectCard { min, max, cards, .. } if *max >= 1 && !cards.is_empty() => {
-            // (the rules' count of their first cards, then subsets of the first few cards by how far
-            // they are from the best of their size)
-            let order = rules.card_order(cards);
-            let n = cards.len();
-            let lo = (*min).max(1).min(*max).min(n as u32) as usize;
-            let hi = (*max as usize).min(n);
-            let top = &order[..n.min(ROOT_COMBO_CARDS)];
-            let mut sets: Vec<(usize, usize, Vec<usize>)> = Vec::new();
-            for k in lo..=hi.min(top.len()) {
-                for c in combinations(top.len(), k) {
-                    let rank_sum: usize = c.iter().sum();
-                    sets.push((rank_sum - k * (k - 1) / 2, k - lo, c.into_iter().map(|j| top[j]).collect()));
-                }
-            }
-            sets.sort_by_key(|(far, more, _)| (*far, *more));
-            let mut out: Vec<Response> = sets.into_iter().map(|(_, _, s)| indices(s)).collect();
-            if lo > top.len() {
-                out.push(indices(order[..lo].to_vec()));
-            }
-            out
-        }
+        Msg::SelectCard { cards, .. } => card_sets(m, &rules.card_order(cards)),
         Msg::SelectUnselectCard { finishable, cancelable, select_cards, .. } => {
             let mut out: Vec<Response> = rules.card_order(select_cards).into_iter().take(ROOT_COMBO_WIDTH).map(idx).collect();
             if *finishable != 0 || (*cancelable != 0 && select_cards.is_empty()) {
@@ -182,6 +162,39 @@ pub fn root_candidates(m: &Msg, rules: &Heuristic, state: Option<&Snapshot>) -> 
     if !matches!(m, Msg::SelectPosition { .. } | Msg::AnnounceNumber { .. } | Msg::AnnounceRace { .. } | Msg::AnnounceAttrib { .. }) {
         out.truncate(ROOT_COMBO_WIDTH);
     }
+    out
+}
+
+/// The candidates of a selection of several cards, best first by `order` (the cards' indices,
+/// the preferred first): the first cards, as many as the rules take, then subsets of the first
+/// ROOT_COMBO_CARDS cards by how far they are from the best of their size (at most
+/// ROOT_COMBO_WIDTH).
+pub fn card_sets(m: &Msg, order: &[usize]) -> Vec<Response> {
+    let Msg::SelectCard { min, max, cards, .. } = m else { return vec![] };
+    if *max < 1 || cards.is_empty() {
+        return vec![];
+    }
+    let indices = |mut idx: Vec<usize>| {
+        idx.sort();
+        Response { indices: Some(idx.into_iter().map(|i| i as i64).collect()), ..Response::default() }
+    };
+    let n = cards.len();
+    let lo = (*min).max(1).min(*max).min(n as u32) as usize;
+    let hi = (*max as usize).min(n);
+    let top = &order[..n.min(ROOT_COMBO_CARDS)];
+    let mut sets: Vec<(usize, usize, Vec<usize>)> = Vec::new();
+    for k in lo..=hi.min(top.len()) {
+        for c in combinations(top.len(), k) {
+            let rank_sum: usize = c.iter().sum();
+            sets.push((rank_sum - k * (k - 1) / 2, k - lo, c.into_iter().map(|j| top[j]).collect()));
+        }
+    }
+    sets.sort_by_key(|(far, more, _)| (*far, *more));
+    let mut out: Vec<Response> = sets.into_iter().map(|(_, _, s)| indices(s)).collect();
+    if lo > top.len() {
+        out.push(indices(order[..lo].to_vec()));
+    }
+    out.truncate(ROOT_COMBO_WIDTH);
     out
 }
 

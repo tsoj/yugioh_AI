@@ -349,7 +349,7 @@ impl SearchState<'_> {
         if moves.is_empty() {
             return Ok(evaluate_at(duel, us, Some(prompt)));
         }
-        if matches!(prompt, Msg::SelectCard { min: 1, max: 1, .. }) {
+        if matches!(prompt, Msg::SelectCard { .. }) {
             moves.truncate(self.tables.tune.card_width);
         }
 
