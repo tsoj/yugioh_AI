@@ -89,6 +89,9 @@ See `docs/search-decisions.md` for what is and isn't searched.
         cards 0.987). The root as before (at most ROOT_COMBO_WIDTH cards). Rebased onto main with
         tree-cards (2e5ee60): depth 10 334139 nodes in 384 searches (main 342760 in 370), 323.6G
         instructions (331.1G); 3000n depth 13.56 (13.41). SPRT running since 12:20.
+  - [ ] Sums (branch `tree-sum`, deacbd2, on main with tree-cards): the root's valid selections
+        (least valuable cards first) in the tree, the first CARD_WIDTH, inside a move at the
+        horizon (d1: rules' answer best 0.743, 939 LP mean regret, in ~5% of games). After unselect.
 - [ ] Search the decisions that have no feature yet:
   - [ ] `SelectDisfield` (zones to disable)
   - [ ] `SelectPlace` with several zones
