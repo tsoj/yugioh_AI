@@ -96,7 +96,9 @@ See `docs/search-decisions.md` for what is and isn't searched.
         same tree as main (no sum in the bench's searches). SPRT paused (user) at 3780 games,
         +3.8 +/- 7.6 (LLR -0.83; +13.9 at 1000 games) for the set policy: if it passes, restart
         from scratch with the policy's sum order against the new main; else resume with these
-        counts (RESUME=runs/sprt/tree-sum_20261023-124136.jsonl).
+        counts (RESUME=runs/sprt/tree-sum_20261023-124136.jsonl). Ready for both: `tree-sum`
+        rebased onto main (c2fbafd, the search unchanged), `tree-sum-policy` (6a857de) = set-policy
+        + sums in the tree ordered by the set policy.
 - [ ] Set policy (user, 2026-10-23): the card policy for selections whose candidates are sets of
       cards (several cards, sums, tributes): a set's score is its cards' scores summed (plus a
       weight per card). Data: `ygoai-card-refs --decisions --types ...` rows now carry each
