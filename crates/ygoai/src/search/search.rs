@@ -208,8 +208,9 @@ impl SearchState<'_> {
         self.stop_time.is_some_and(|d| Instant::now() > d) || self.max_nodes.is_some_and(|n| self.tables.nodes >= n)
     }
 
-    /// For a card selection: the order of its cards, the rules' (by the select hint the player
-    /// got, which belongs to this selection only), for a one-card selection the card policy's.
+    /// For a card selection (or a sum): the order of its cards, the rules' (by the select hint the
+    /// player got, which belongs to this selection only), for a one-card selection the card
+    /// policy's.
     fn card_order(&mut self, duel: &Duel, m: &Msg) -> Option<Vec<usize>> {
         self.card_order_hint(duel, m).map(|(order, _)| order)
     }
@@ -217,7 +218,7 @@ impl SearchState<'_> {
     /// (`card_order`, and the select hint)
     fn card_order_hint(&mut self, duel: &Duel, m: &Msg) -> Option<(Vec<usize>, Option<u64>)> {
         let (cards, player) = match m {
-            Msg::SelectCard { cards, player, .. } => (cards, player),
+            Msg::SelectCard { cards, player, .. } | Msg::SelectSum { cards, player, .. } => (cards, player),
             _ => return None,
         };
         let policy = &mut self.policies[*player as usize];
@@ -350,11 +351,11 @@ impl SearchState<'_> {
     fn search(&mut self, duel: &mut Duel, prompt: &Msg, mut alpha: f64, mut beta: f64, depth: f64, height: i32, pv: bool) -> Result<f64, Stop> {
         let us = prompt.player().unwrap_or(0);
         if depth <= 0.0 {
-            // (the main-line horizon extension: on the main line a card selection, a decision
-            // inside a move, is searched one ply deep at the horizon too, so that the search
-            // finishes the move, not the rules; SPRT at 10+0.1 H1, +25.4 +/- 16.4 at 890 games,
-            // 2026-10-19)
-            if !(extends(pv, height) && matches!(prompt, Msg::SelectCard { .. })) {
+            // (the main-line horizon extension: on the main line a card selection or sum, a
+            // decision inside a move, is searched one ply deep at the horizon too, so that the
+            // search finishes the move, not the rules; SPRT at 10+0.1 H1, +25.4 +/- 16.4 at 890
+            // games, 2026-10-19)
+            if !(extends(pv, height) && inside_move(prompt)) {
                 return Ok(evaluate_at(duel, us, Some(prompt)));
             }
         }
@@ -373,7 +374,7 @@ impl SearchState<'_> {
             // (sets of cards: the set policy's order)
             moves = sp.order_sets(duel, prompt, *hint, order, &moves).into_iter().map(|i| moves[i].clone()).collect();
         }
-        if matches!(prompt, Msg::SelectCard { .. }) {
+        if matches!(prompt, Msg::SelectCard { .. } | Msg::SelectSum { .. }) {
             moves.truncate(self.tables.tune.card_width);
         }
 
@@ -580,8 +581,9 @@ impl SearchState<'_> {
 
     /// Makes the move: the response, then the core runs on, the rules answering the decisions
     /// the search does not make (hidden ones, the only move, and at the horizon the decisions
-    /// inside a move, so that it completes first, unless `extend`: on the main line, see `search`),
-    /// up to the next searched decision. Sets of cards the set policy chooses, if there is one.
+    /// inside a move (`inside_move`), so that it completes first, unless `extend`: on the main
+    /// line, see `search`), up to the next searched decision. Sets of cards the set policy
+    /// chooses, if there is one.
     fn do_move(&mut self, duel: &mut Duel, prompt: &Msg, mv: &Response, depth: f64, extend: bool) -> Result<NewPosition, Stop> {
         let depth = if extend && depth <= 0.0 { 1.0 } else { depth };
         duel.ocg_set_response(&encode(prompt, mv).map_err(|_| Stop::Broken)?);
@@ -615,7 +617,7 @@ impl SearchState<'_> {
                 && let Some(answer) = self.set_answer(duel, &prompt)
             {
                 answer
-            } else if matches!(prompt, Msg::SelectCard { .. }) && depth <= 0.0 {
+            } else if inside_move(&prompt) && depth <= 0.0 {
                 self.policies[player as usize].respond_to(&prompt, None).map_err(|_| Stop::Broken)?
             } else if is_searched(&prompt) {
                 let moves = candidates(&prompt);
@@ -633,6 +635,12 @@ impl SearchState<'_> {
         }
         Ok(NewPosition::StepLimit(prompt))
     }
+}
+
+/// A decision inside a move (a card selection, a sum of cards): at the horizon the rules answer
+/// it, so that the move completes before the eval.
+fn inside_move(m: &Msg) -> bool {
+    matches!(m, Msg::SelectCard { .. } | Msg::SelectSum { .. })
 }
 
 /// (the main-line horizon extension applies at `height` on the main line `pv`)

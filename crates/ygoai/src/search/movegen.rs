@@ -20,6 +20,7 @@ pub fn is_searched(m: &Msg) -> bool {
             | Msg::SelectYesno { .. }
             | Msg::SelectOption { .. }
             | Msg::SelectCard { .. }
+            | Msg::SelectSum { .. }
     )
 }
 
@@ -48,6 +49,17 @@ pub fn candidates(m: &Msg) -> Vec<Response> {
         }
         // (several cards: the sets as listed; the search orders them by the rules' order, `card_sets`)
         Msg::SelectCard { cards, .. } => card_sets(m, &(0..cards.len()).collect::<Vec<_>>()),
+        Msg::SelectSum { cards, .. } => {
+            // (valid selections, the least valuable cards tried first; the rules' answer is random)
+            let mut by_value: Vec<usize> = (0..cards.len()).collect();
+            let v = |i: usize| card_value(&cards[i], card(cards[i].code));
+            by_value.sort_by(|&a, &b| v(a).partial_cmp(&v(b)).unwrap_or(std::cmp::Ordering::Equal));
+            let indices = |mut idx: Vec<usize>| {
+                idx.sort();
+                Response { indices: Some(idx.into_iter().map(|i| i as i64).collect()), ..Response::default() }
+            };
+            sum_selections(m, &by_value).into_iter().map(indices).collect()
+        }
         _ => vec![],
     }
 }
@@ -91,13 +103,6 @@ pub fn root_candidates(m: &Msg, rules: &Heuristic, state: Option<&Snapshot>) -> 
             }
             sets.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
             rules_answer().into_iter().chain(sets.into_iter().map(|(_, s)| indices(s))).collect()
-        }
-        Msg::SelectSum { cards, .. } if !cards.is_empty() => {
-            // (valid selections, the least valuable cards tried first; the rules' answer is random)
-            let mut by_value: Vec<usize> = (0..cards.len()).collect();
-            let v = |i: usize| card_value(&cards[i], card(cards[i].code));
-            by_value.sort_by(|&a, &b| v(a).partial_cmp(&v(b)).unwrap_or(std::cmp::Ordering::Equal));
-            sum_selections(m, &by_value).into_iter().map(indices).collect()
         }
         Msg::SelectPosition { code, positions, .. } => {
             let order = if card(*code).is_some_and(|c| c.attack <= 0) {

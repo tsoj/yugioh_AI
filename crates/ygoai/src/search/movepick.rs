@@ -83,6 +83,7 @@ fn type_id(m: &Msg) -> u128 {
         Msg::SelectYesno { .. } => 5,
         Msg::SelectOption { .. } => 6,
         Msg::SelectCard { .. } => 7,
+        Msg::SelectSum { .. } => 14,
         _ => 0,
     }
 }
@@ -98,6 +99,7 @@ pub fn prompt_label(m: &Msg) -> &'static str {
         Msg::SelectOption { .. } => "option",
         Msg::SelectCard { min: 1, max: 1, .. } => "card1",
         Msg::SelectCard { .. } => "cards",
+        Msg::SelectSum { .. } => "sum",
         _ => "other",
     }
 }
@@ -163,7 +165,7 @@ pub fn move_key(m: &Msg, c: &Response) -> usize {
         }
     } else if let Some(ind) = &c.indices {
         kind = 1;
-        if let Msg::SelectCard { cards, .. } = m {
+        if let Msg::SelectCard { cards, .. } | Msg::SelectSum { cards, .. } = m {
             // (the cards' codes)
             code = ind.iter().map(|&i| cards.get(i as usize).map_or(0, |e| e.code as u128)).fold(0, |h: u128, c| h.wrapping_mul(1000003).wrapping_add(c));
         }
