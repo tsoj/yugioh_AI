@@ -463,6 +463,12 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       height 2 * the iteration's depth): mean depth at 3000 nodes 12.71 -> 10.13 (in games 10.9 ->
       9.5); SPRT vs the default stopped heading to H0 at 1120 games, -6.5 +/- 14.6, LLR -2.07.
       Untried: the fractional (0.5 ply) version, or only at nodes with exactly 1 child.
+      Branches (user, 2026-10-24): `tt-ext` (9eb7d1e: the TT move of a node with at most 2 moves a
+      ply deeper; not at the horizon's extension, below twice the iteration's depth) and
+      `tt-ext-half` (da61632: half a ply). Bench (6 openings): depth 10 356184 nodes (main) ->
+      832600 (+134%) / 557839 (+57%); at 3000 nodes mean nominal depth 13.34 -> 10.40 (tt-ext).
+      Two moves are common here (every yes/no, a chain of one card plus pass). SPRTs after
+      eval-sprt2.
 - [ ] qsearch, if retried: a TT in quiescence, cheaper chain windows (pass plus the best few
       answers), pruning of hopeless attacks.
 - Retested at the Rust speed and stopped near zero: PVS (H0), qsearch, futility, conthist,
