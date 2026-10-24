@@ -144,11 +144,12 @@ pub fn move_key(m: &Msg, c: &Response, ctx: &KeyContext) -> usize {
     slot(move_identity(m, c, ctx))
 }
 
-/// The history slot of a move identity.
+/// The history slot of a move identity (all its 128 bits mixed: splitmix64's finalizer).
 fn slot(identity: u128) -> usize {
-    let mut h = identity;
-    h ^= h >> 17;
-    let h = (h as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let mut h = (identity as u64) ^ ((identity >> 64) as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    h = (h ^ (h >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    h = (h ^ (h >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    h ^= h >> 31;
     (h >> (64 - HIST_BITS)) as usize
 }
 
