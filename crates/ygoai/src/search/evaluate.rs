@@ -579,7 +579,7 @@ impl LearnedEval {
     }
 
     /// The trained evaluation in use (read once): $YGOAI_EVAL's JSON file if set, the built-in
-    /// models/eval_mover2_sprtr23os_64.json otherwise.
+    /// models/eval_mover2_sprt2r23os_64.json otherwise.
     pub fn from_env() -> &'static LearnedEval {
         static E: std::sync::OnceLock<LearnedEval> = std::sync::OnceLock::new();
         E.get_or_init(|| match std::env::var("YGOAI_EVAL").ok().filter(|p| !p.is_empty()) {
@@ -587,16 +587,18 @@ impl LearnedEval {
                 let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("YGOAI_EVAL {path}: {e}"));
                 LearnedEval::from_json(&text, &path)
             }
-            None => LearnedEval::from_json(DEFAULT_EVAL, "models/eval_mover2_sprtr23os_64.json"),
+            None => LearnedEval::from_json(DEFAULT_EVAL, "models/eval_mover2_sprt2r23os_64.json"),
         })
     }
 }
 
-/// The default evaluation (scripts/train_eval_mover.py --dims 64 --held 400 --drop-onesided: an MLP
-/// with hidden layers of 64 on the 87 mover2 features (else as
-/// models/eval_mover2_sprtr23os_mlp16.json, MLP16), trained on the SPRT games with search values from the runs started after the
-/// previous net became the default (2026-10-17 23:22 to 2026-10-21, 86594 games, 13.2M positions,
-/// runs/data/sprt_net/) and on rounds 2 and 3, without the deck pairs where one deck won every game.
+/// The default evaluation (scripts/train_eval_mover.py --dims 64 --held 400 --drop-onesided --lam 0.5:
+/// an MLP with a hidden layer of 64 on the 87 mover2 features), trained on all SPRT games with
+/// search values since the round-2+3 net became the default (2026-10-17 23:22 to 2026-10-24, 184522
+/// games, 28.1M positions, runs/data/sprt_net2/) and on rounds 2 and 3, without the deck pairs where
+/// one deck won every game. The previous one, models/eval_mover2_sprtr23os_64.json, the same on the
+/// SPRT games to 2026-10-21 (86594 games, 13.2M positions, runs/data/sprt_net/); it had SPRT H1
+/// +35.8 +/- 20.0 at 702 games vs the MLP16 on those, models/eval_mover2_sprtr23os_mlp16.json.
 /// The previous one, models/eval_mover2_r23os_mlp16.json, the same on rounds 2 and 3 alone,
 /// runs/data/pairs500x20b_2000n.jsonl and runs/data/pairs500x20c_2000n_all.games.jsonl:
 /// SPRT H1 +21.0 +/- 14.4 at 1242 games vs the same on all pairs,
@@ -604,7 +606,7 @@ impl LearnedEval {
 /// stopped at +6.7 +/- 10.0 after 2540 games.
 /// That one had SPRT +31.9 +/- 18.7 vs the 49-feature MLP16 (on runs/data/pairs500x20_2000n.jsonl),
 /// which had +28.5 +/- 17.6 vs the hand-written eval).
-const DEFAULT_EVAL: &str = include_str!("../../models/eval_mover2_sprtr23os_64.json");
+const DEFAULT_EVAL: &str = include_str!("../../models/eval_mover2_sprt2r23os_64.json");
 
 /// The position's value for `me` (in LP): the trained evaluation (`LearnedEval::from_env`).
 pub fn evaluate(d: &mut Duel, me: u32) -> f64 {
