@@ -267,6 +267,11 @@ See `docs/search-decisions.md` for what is and isn't searched.
         games, +5.7 +/- 5.4, penta [751, 0, 3415, 1, 833], LLR +0.96 [0, 10] (would be +2.11 with
         [0, 5], +1.24 with [0, 2]): undecided, likely a small gain; merged. Next (by the result): the context in the key (own
         turn, phase), continuation history, separate or bigger tables.
+  - [ ] All three at once (user, 2026-10-25): branch `hist-more` (58a9981), the history plus
+        two tables added up in the move order: the move in its turn and phase (mover is the turn
+        player, phase; 2^15) and the move after the one that led to the node (continuation,
+        2^16); same bonus, malus, decay. Bench: depth 10 366742 nodes (main 362311), 3000n depth
+        13.29 (13.05), same NPS. SPRT vs main.
 
 ## Search: features
 
