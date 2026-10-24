@@ -161,7 +161,16 @@ See `docs/search-decisions.md` for what is and isn't searched.
       the agent's indices), in a node (best 3) and at the horizon; tributes now too (below the root
       the set policy's answer). Before: the rules' first 5 sets (27% of several-card selections
       have more than 8 cards). Bench: 10d 354983 nodes (356184), 3000n depth 13.33 (13.34); smoke
-      128 games, 0 errors. SPRT running since 01:16.
+      128 games, 0 errors. SPRT stopped by the user at 5458 games, +2.2 +/- 6.5, LLR -2.55 (pentanomial
+      [326, 0, 2059, 1, 343]: 75% of the opening pairs 1-1). Next: `set-pool-notrib` (993557e:
+      tributes back to the rules), after the book filter test.
+- [ ] Does the book's filter hold for alpha-beta? (user, 2026-10-24) match1.jsonl was filtered by
+      the old Python policy nets (make_match_book.py: up to 20 games per opening, both seats one
+      net at temperature 1; --book-min 2 keeps 15535 of 19996), yet ~75% of the SPRTs' opening
+      pairs go 1-1 (the same seat wins both). Test: main vs main at 10+0.1 on 500 openings the
+      filter removed and 500 it kept, lines 12000+ (runs/books/filtertest_{removed,kept}.jsonl,
+      results runs/sprt/filtertest_*.log), the share of seat-decided pairs. If the same: no filter,
+      random pairs and seat order each time; else a new book filtered with alpha-beta, more decks.
       The rules' rank as an input feature kept: without it (--zero 95,96) held out card top3 0.846
       (0.854), regret3 262 (240); sets about equal; tributes top1 0.645 (0.666).
       Remaining with a policy but rules: none on main (zones: the place policy only on
