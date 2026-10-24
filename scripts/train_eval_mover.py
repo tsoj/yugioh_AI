@@ -126,8 +126,8 @@ bce = torch.nn.functional.binary_cross_entropy_with_logits
 def v_of(idx):
     return net(Z[idx]).squeeze(-1)
 
-def loss_of(idx, use_a=True, weighted=False):
-    v = v_of(idx)
+def loss_of(idx, use_a=True, weighted=False, v=None):
+    v = v_of(idx) if v is None else v
     lr_ = SG[idx] * a[PS[idx]] + v if (use_a and not args.nopair) else v
     m = dec[idx]
     if weighted:
@@ -164,13 +164,16 @@ def all_v():
         return torch.cat([v_of(torch.arange(i, min(i + 200000, len(X)), device=dev)) for i in range(0, len(X), 200000)]).cpu().numpy()
 
 def report(tag):
+    # (v of all rows in chunks first: the network on all training rows at once does not fit on the GPU)
+    v = all_v()
     with torch.no_grad():
+        V = torch.tensor(v, device=dev)
         out = []
         for name, m, ua in [("train", is_tr, True), ("val-games", is_vin, True), ("held-pairs", is_hp, False)]:
             idx = torch.tensor(np.nonzero(m)[0], device=dev)
-            lr_, lv = loss_of(idx, ua)
+            lr_, lv = loss_of(idx, ua, v=V[idx])
             out.append(f"{name} res-ll {lr_.item():.4f} val-bce {lv.item():.4f}")
-    v = all_v()
+        del V
     print(f"{tag}: " + " | ".join(out) + f" | rank held-pairs {ranking(v, is_hp):.4f}", flush=True)
     return v
 
