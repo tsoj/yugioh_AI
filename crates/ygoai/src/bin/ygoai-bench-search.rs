@@ -98,6 +98,9 @@ fn main() {
                 let t = Instant::now();
                 let params = SearchParams { budget, elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2], max_nodes, depth, exact_root: false };
                 let (best, done) = ab.search(&duel, &p, &cands, &params);
+                if let Some(st) = &mut ab.stats {
+                    st.fold_history(false);
+                }
                 if let Some(f) = &mut best_out {
                     // (then the prompt, the extension's nodes in this search, and whether it extended
                     // the last iteration's main line)
@@ -126,7 +129,10 @@ fn main() {
             duel.ocg_set_response(&ygoai::actions::encode(&p, &resp).unwrap());
             prompt = Some(p);
         }
-        if let Some(st) = ab.stats.take() {
+        if let Some(mut st) = ab.stats.take() {
+            st.fold_history(true);
+            merge(&mut stats.hist_search, st.hist_search);
+            merge(&mut stats.hist_game, st.hist_game);
             merge(&mut stats.widths, st.widths);
             merge(&mut stats.lmr, st.lmr);
             merge(&mut stats.subtree, st.subtree);
@@ -171,11 +177,12 @@ fn main() {
     );
 }
 
-fn merge<K: Ord>(into: &mut BTreeMap<K, [u64; 2]>, from: BTreeMap<K, [u64; 2]>) {
+fn merge<K: Ord, const N: usize>(into: &mut BTreeMap<K, [u64; N]>, from: BTreeMap<K, [u64; N]>) {
     for (k, v) in from {
-        let e = into.entry(k).or_default();
-        e[0] += v[0];
-        e[1] += v[1];
+        let e = into.entry(k).or_insert([0; N]);
+        for i in 0..N {
+            e[i] += v[i];
+        }
     }
 }
 
@@ -230,6 +237,17 @@ fn print_stats(st: &NodeStats, path: &str) {
     }
     for (i, [n, re]) in by_i {
         println!("  move {:>2}: {:>9} reduced, {:>5.1}% re-searched", i + 1, n, re as f64 / n as f64 * 100.0);
+    }
+    for (name, by) in [("each search", &st.hist_search), ("each game", &st.hist_game)] {
+        println!("\nhistory collisions within {name}: move identities sharing a slot with another one, lookups in such slots");
+        let mut all = [0u64; 4];
+        for (label, e) in by {
+            println!("  {label:<10} {:>8} identities {:>5.1}% shared, {:>10} lookups {:>5.1}% shared", e[0], 100.0 * e[1] as f64 / e[0] as f64, e[2], 100.0 * e[3] as f64 / e[2].max(1) as f64);
+            for k in 0..4 {
+                all[k] += e[k];
+            }
+        }
+        println!("  {:<10} {:>8} identities {:>5.1}% shared, {:>10} lookups {:>5.1}% shared", "all", all[0], 100.0 * all[1] as f64 / all[0] as f64, all[2], 100.0 * all[3] as f64 / all[2].max(1) as f64);
     }
     println!("\nmean subtree size (nodes) by depth (all prompts)");
     let mut by_d: BTreeMap<i8, [u64; 2]> = BTreeMap::new();

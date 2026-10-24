@@ -10,7 +10,7 @@
 //! negating its value and window only if the other player decides there. Its value is always
 //! the mover's, as `-search(child)` is in chess.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Instant;
 
 use ygo_core::constants::*;
@@ -20,7 +20,7 @@ use super::cardpolicy::{CardPolicy, applies, selection_cards, set_applies, set_p
 use super::evaluate::evaluate_at;
 use super::history::HistoryTable;
 use super::movegen::{candidates, is_searched, root_candidates};
-use super::movepick::{listed, move_key, move_kind, ordered, prompt_label};
+use super::movepick::{listed, move_identity, move_key, move_kind, ordered, prompt_label};
 use super::params::*;
 use super::tt::{NodeType, TranspositionTable, hash_key};
 use crate::actions::{Response, encode};
@@ -51,6 +51,45 @@ pub struct NodeStats {
     /// (futility margins) the moves after the first at depths 1..=4 with a finite alpha: (move
     /// kind, depth, alpha minus the node's static eval, whether the move raised alpha)
     pub gaps: Vec<(String, i8, f32, bool)>,
+    /// (history collisions) the moves' history lookups in the current search and game, by (slot,
+    /// move identity, prompt); folded into `hist_search` per search and `hist_game` per game
+    pub hist_now: HashMap<(usize, u128, &'static str), u64>,
+    pub hist_game_now: HashMap<(usize, u128, &'static str), u64>,
+    /// by prompt: [move identities, of them sharing their slot with another identity, lookups,
+    /// of them in a shared slot], within each search and within each game
+    pub hist_search: BTreeMap<&'static str, [u64; 4]>,
+    pub hist_game: BTreeMap<&'static str, [u64; 4]>,
+}
+
+/// (history collisions) `lookups` by (slot, identity, prompt) into [identities, of them in a
+/// shared slot, lookups, of them in a shared slot] by prompt.
+fn fold_collisions(lookups: &HashMap<(usize, u128, &'static str), u64>, out: &mut BTreeMap<&'static str, [u64; 4]>) {
+    let mut ids: HashMap<usize, HashSet<u128>> = HashMap::new();
+    for &(slot, id, _) in lookups.keys() {
+        ids.entry(slot).or_default().insert(id);
+    }
+    for (&(slot, _, label), &n) in lookups {
+        let shared = ids[&slot].len() > 1;
+        let e = out.entry(label).or_default();
+        e[0] += 1;
+        e[1] += shared as u64;
+        e[2] += n;
+        e[3] += if shared { n } else { 0 };
+    }
+}
+
+impl NodeStats {
+    /// (history collisions) the end of a search, and with `game` of the game.
+    pub fn fold_history(&mut self, game: bool) {
+        fold_collisions(&self.hist_now, &mut self.hist_search);
+        for (k, n) in self.hist_now.drain() {
+            *self.hist_game_now.entry(k).or_default() += n;
+        }
+        if game {
+            fold_collisions(&self.hist_game_now, &mut self.hist_game);
+            self.hist_game_now.clear();
+        }
+    }
 }
 
 /// (`NodeStats::cuts`: no cutoff, all the children searched)
@@ -409,6 +448,11 @@ impl SearchState<'_> {
 
         // move ordering: the TT move first, then by history (the rules' order among equals)
         let history_keys: Vec<usize> = moves.iter().map(|m| move_key(prompt, m)).collect();
+        if let Some(st) = &mut self.tables.stats {
+            for (mv, &k) in moves.iter().zip(&history_keys) {
+                *st.hist_now.entry((k, move_identity(prompt, mv), prompt_label(prompt))).or_default() += 1;
+            }
+        }
         let mut move_order: Vec<usize> = (0..moves.len()).collect();
         move_order.sort_by(|&a, &b| {
             let history = &self.tables.history_table;

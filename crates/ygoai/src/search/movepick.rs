@@ -132,6 +132,20 @@ fn kind_id(kind: &str) -> u128 {
 
 /// The history slot of a move: its player, kind and card (and effect) (alphabeta._move_key).
 pub fn move_key(m: &Msg, c: &Response) -> usize {
+    slot(move_identity(m, c))
+}
+
+/// The history slot of a move identity.
+fn slot(identity: u128) -> usize {
+    let mut h = identity;
+    h ^= h >> 17;
+    let h = (h as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    (h >> (64 - HIST_BITS)) as usize
+}
+
+/// What the history tells apart about a move, before it is hashed to a slot (`move_key`): moves
+/// with the same identity share their history by design, others only by a collision.
+pub fn move_identity(m: &Msg, c: &Response) -> u128 {
     let (mut kind, mut code, mut desc) = (0u128, 0u128, 0u128);
     let entry = |list: &[crate::messages::Card], i: i64| list.get(i as usize).map(|e| (e.code as u128, e.desc.unwrap_or(0) as u128));
     if let Some(k) = &c.kind {
@@ -173,8 +187,5 @@ pub fn move_key(m: &Msg, c: &Response) -> usize {
         kind = (1 + i) as u128;
     }
     let player = m.player().unwrap_or(0) as u128;
-    let mut h = (((type_id(m) * 31 + player) * 31 + kind) * 1000003 + code) * 1000003 + desc;
-    h ^= h >> 17;
-    let h = (h as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    (h >> (64 - HIST_BITS)) as usize
+    (((type_id(m) * 31 + player) * 31 + kind) * 1000003 + code) * 1000003 + desc
 }
