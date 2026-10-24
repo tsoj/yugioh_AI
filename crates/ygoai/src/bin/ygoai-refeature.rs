@@ -30,29 +30,24 @@ fn main() {
         usage();
     }
     let jobs: usize = a.get(5).map_or(8, |s| s.parse().unwrap_or_else(|_| usage()));
-    let games: Vec<GameData> = std::io::BufReader::new(std::fs::File::open(&a[1]).expect("games"))
-        .lines()
-        .enumerate()
-        .map(|(i, l)| {
-            let l = l.unwrap();
-            serde_json::from_str::<GameData>(&l).unwrap_or_else(|_| {
-                let record: GameRecord = serde_json::from_str(&l).expect("a GameData or GameRecord line");
-                GameData { game: i, labels: record.labels.clone(), record, viewer_responses: true }
-            })
-        })
-        .collect();
     init(None).unwrap();
-    let games = Arc::new(games);
+    // (the games are read as the workers go, not all at once: a large file would not fit in memory)
+    let games = Arc::new(Mutex::new(std::io::BufReader::new(std::fs::File::open(&a[1]).expect("games")).lines().enumerate()));
     let out = Arc::new(Mutex::new(std::io::BufWriter::new(std::fs::File::create(&a[2]).expect("output"))));
-    let (next, done, failed) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let (done, failed) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
     let t0 = std::time::Instant::now();
     let threads: Vec<_> = (0..jobs)
         .map(|_| {
-            let (games, out, next, done, failed, sets) = (games.clone(), out.clone(), next.clone(), done.clone(), failed.clone(), sets.clone());
+            let (games, out, done, failed, sets) = (games.clone(), out.clone(), done.clone(), failed.clone(), sets.clone());
             std::thread::spawn(move || {
                 loop {
-                    let i = next.fetch_add(1, Ordering::Relaxed);
-                    let Some(g) = games.get(i) else { break };
+                    let Some((i, l)) = games.lock().unwrap().next() else { break };
+                    let l = l.unwrap();
+                    let g = serde_json::from_str::<GameData>(&l).unwrap_or_else(|_| {
+                        let record: GameRecord = serde_json::from_str(&l).expect("a GameData or GameRecord line");
+                        GameData { game: i, labels: record.labels.clone(), record, viewer_responses: true }
+                    });
+                    let g = &g;
                     match std::panic::catch_unwind(|| replay_rows(g, &sets)) {
                         Ok(Ok(rows)) => {
                             let mut w = out.lock().unwrap();
@@ -71,7 +66,7 @@ fn main() {
                     }
                     let k = done.fetch_add(1, Ordering::Relaxed) + 1;
                     if k % 1000 == 0 {
-                        eprintln!("[{:.0}s] {k}/{} games", t0.elapsed().as_secs_f64(), games.len());
+                        eprintln!("[{:.0}s] {k} games", t0.elapsed().as_secs_f64());
                     }
                 }
             })
