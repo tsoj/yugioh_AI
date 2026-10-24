@@ -272,10 +272,10 @@ See `docs/search-decisions.md` for what is and isn't searched.
         player, phase; 2^15) and the move after the one that led to the node (continuation,
         2^16); same bonus, malus, decay. Bench: depth 10 366742 nodes (main 362311), 3000n depth
         13.29 (13.05), same NPS. SPRT vs main (resumed with [0, 5] and 10000 openings at 902 games).
-  - [ ] Card selections by history (user, 2026-10-25): branch `hist-cards` (16e14ca). Below the
+  - [ ] Card selections by history (user, 2026-10-25): branch `hist-cards` (8bd99ba). Below the
         root a card selection's card_width (3) searched choices are the first by the TT move and
-        the history among the policies' first CARD_POOL (6), not the policies' first 3 (the TT
-        keeps indices into those 6); at the horizon the answer is that first choice (TT move,
+        the history among all its choices (CARD_POOL 127: the TT keeps an i8 index into them; sets
+        and sums have at most 5 anyway), not the policies' first 3; at the horizon the answer is that first choice (TT move,
         else best history, the policy's order among equals) instead of the policy's first. Next
         after hist-more.
 
