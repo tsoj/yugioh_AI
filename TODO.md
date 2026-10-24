@@ -253,6 +253,18 @@ See `docs/search-decisions.md` for what is and isn't searched.
       battle details.
 - [ ] Better move ordering for the new decisions, e.g. history by decision type and card. The
       goal is that LMR and other reductions thin out the unimportant choices.
+  - [ ] Finer history keys (user, 2026-10-24). Collisions measured first (ygoai-bench-search with
+        YGOAI_STATS, 8220394 on main: move identities sharing a history slot, 6 openings at depth
+        10): main within a search 0.3% of identities / 0.1% of lookups, within a game (~250
+        identities) 1.6% / 1.1%. Branch `hist-keys` (b5e8ac8 + 2a374f9): an option by its effect
+        (was its index), a card selection by its select hint and the chosen cards' controller and
+        location (was their codes), a chain pass by the chain's last link (card, whose; was one
+        slot for all passes), activations and chain links by their location; slots from all 128
+        bits of the identity (splitmix64; before only the low 64 bits were mixed, which tripled
+        the collisions with the new keys). Per game ~340 identities: 2.5% / 0.8% at 2^14 (2^15:
+        1.1% / 0.2%), so the table stays 2^14. Bench: depth 10 362311 nodes (main 369443), 3000n
+        depth 13.05 (13.20). SPRT vs main. Next (by the result): the context in the key (own
+        turn, phase), continuation history, separate or bigger tables.
 
 ## Search: features
 
