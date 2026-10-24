@@ -199,6 +199,13 @@ See `docs/search-decisions.md` for what is and isn't searched.
       defaults); the rest for eval data and tests. Then set-pool-notrib on it, then an eval retrain
       on all SPRT games (sprtdata/collect.py from 2026-10-17 23:22 + to_npz.py + train_eval_mover.py
       --dims 64 --held 400 --drop-onesided --lam 0.5), SPRT, merge on H1.
+- [x] RL policy in Rust (user, 2026-10-24): crates/ygoai/src/rl_policy.rs (the self-play policy/value
+      network of runs/nn/rl*, boot1 and its agent; not the search's move-ordering policies) and
+      ygoai-book-test (make_match_book.py's test games on threads, each candidate written as it
+      finishes, resumable; make_match_book.py now also appends and resumes). Same games as the
+      Python agents: 410 of 410 identical (40 candidates). One thread: 12.9s vs 60s; the book build
+      86 candidates/s on 30 threads vs ~6.7/s in Python. Time now: engine ~51%, network ~23%, views
+      and allocation ~24%. match2 was rebuilt with it (the Python run was stopped at 39000/65000).
 - [ ] Rust panic in the policy games of the match2 build (rust/ygo-cards/src/prelude.rs:100,
       effect_card_value: a value function called without a card). It ended the first build after
       16500 candidates (run_parallel now turns panics into Crash, 07f8739); find the card.
