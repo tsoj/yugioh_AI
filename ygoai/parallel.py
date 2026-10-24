@@ -45,6 +45,12 @@ def _run_task(fn, task):
     many tasks, and the heap would otherwise stay at the largest one's peak)."""
     try:
         return fn(task)
+    except BaseException as e:
+        # (a panic in the Rust engine is a crash like one in the native core; its
+        # exception cannot be pickled back to the parent, which would end the whole run)
+        if type(e).__module__ == "pyo3_runtime":
+            return Crash(task, f"panic: {e}")
+        raise
     finally:
         gc.collect()
         try:
