@@ -130,9 +130,18 @@ fn kind_id(kind: &str) -> u128 {
     }
 }
 
+/// What the history keys a move by besides the move itself: the select hint before a card
+/// selection (what it is for), and the chain a response answers (its last link's card and whether
+/// the mover controls it; 0: no chain).
+#[derive(Clone, Copy, Default)]
+pub struct KeyContext {
+    pub hint: Option<u64>,
+    pub chain_top: u128,
+}
+
 /// The history slot of a move: its player, kind and card (and effect) (alphabeta._move_key).
-pub fn move_key(m: &Msg, c: &Response) -> usize {
-    slot(move_identity(m, c))
+pub fn move_key(m: &Msg, c: &Response, ctx: &KeyContext) -> usize {
+    slot(move_identity(m, c, ctx))
 }
 
 /// The history slot of a move identity.
@@ -144,10 +153,16 @@ fn slot(identity: u128) -> usize {
 }
 
 /// What the history tells apart about a move, before it is hashed to a slot (`move_key`): moves
-/// with the same identity share their history by design, others only by a collision.
-pub fn move_identity(m: &Msg, c: &Response) -> u128 {
+/// with the same identity share their history by design, others only by a collision. A command's
+/// or chain link's card, effect and location; a pass by the chain it lets resolve; a yes or no by
+/// its effect; an option by its effect; a card selection by its hint and the cards chosen (code,
+/// whose, where).
+pub fn move_identity(m: &Msg, c: &Response, ctx: &KeyContext) -> u128 {
     let (mut kind, mut code, mut desc) = (0u128, 0u128, 0u128);
-    let entry = |list: &[crate::messages::Card], i: i64| list.get(i as usize).map(|e| (e.code as u128, e.desc.unwrap_or(0) as u128));
+    let me = m.player().unwrap_or(0);
+    let entry = |list: &[crate::messages::Card], i: i64| {
+        list.get(i as usize).map(|e| (e.code as u128, (e.desc.unwrap_or(0) as u128) * 64 + e.loc as u128))
+    };
     if let Some(k) = &c.kind {
         kind = kind_id(k);
         let list = match (m, k.as_str()) {
@@ -165,10 +180,10 @@ pub fn move_identity(m: &Msg, c: &Response) -> u128 {
             (code, desc) = (cd, ds);
         }
     } else if let Msg::SelectChain { chains, .. } = m {
-        if let Some(i) = c.index.filter(|&i| i >= 0)
-            && let Some((cd, ds)) = entry(chains, i)
-        {
-            (kind, code, desc) = (1, cd, ds);
+        match c.index.filter(|&i| i >= 0).and_then(|i| entry(chains, i)) {
+            Some((cd, ds)) => (kind, code, desc) = (1, cd, ds),
+            // (a pass: by what it lets resolve)
+            None => (kind, code) = (2, ctx.chain_top),
         }
     } else if let Some(yes) = c.yes {
         kind = 1 + yes as u128;
@@ -180,12 +195,21 @@ pub fn move_identity(m: &Msg, c: &Response) -> u128 {
     } else if let Some(ind) = &c.indices {
         kind = 1;
         if let Msg::SelectCard { cards, .. } | Msg::SelectSum { cards, .. } = m {
-            // (the cards' codes)
-            code = ind.iter().map(|&i| cards.get(i as usize).map_or(0, |e| e.code as u128)).fold(0, |h: u128, c| h.wrapping_mul(1000003).wrapping_add(c));
+            // (the cards: code, whose and where; what the selection is for)
+            code = ind
+                .iter()
+                .map(|&i| cards.get(i as usize).map_or(0, |e| (e.code as u128 * 2 + (e.con == me) as u128) * 64 + e.loc as u128))
+                .fold(0, |h: u128, c| h.wrapping_mul(1000003).wrapping_add(c));
+            desc = ctx.hint.map_or(0, |h| h as u128 + 1);
         }
     } else if let Some(i) = c.index {
-        kind = (1 + i) as u128;
+        kind = 1;
+        // (an option: its effect)
+        match m {
+            Msg::SelectOption { options, .. } => desc = options.get(i as usize).map_or(i as u128, |&d| d as u128),
+            _ => kind = (1 + i) as u128,
+        }
     }
-    let player = m.player().unwrap_or(0) as u128;
-    (((type_id(m) * 31 + player) * 31 + kind) * 1000003 + code) * 1000003 + desc
+    let player = me as u128;
+    ((((type_id(m) * 31 + player) * 31 + kind) * 1000003).wrapping_add(code).wrapping_mul(1000003)).wrapping_add(desc)
 }
