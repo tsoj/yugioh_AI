@@ -1,7 +1,7 @@
 //! Move ordering: the rules' preference among a decision's moves, and the history slot of a move.
 
 use super::movegen::{candidates, card_sets};
-use super::params::HIST_BITS;
+use super::params::{CONT_HIST_BITS, CONTEXT_HIST_BITS, HIST_BITS};
 use crate::actions::Response;
 use crate::heuristic::db_attack;
 use crate::messages::Msg;
@@ -141,16 +141,29 @@ pub struct KeyContext {
 
 /// The history slot of a move: its player, kind and card (and effect) (alphabeta._move_key).
 pub fn move_key(m: &Msg, c: &Response, ctx: &KeyContext) -> usize {
-    slot(move_identity(m, c, ctx))
+    slot(move_identity(m, c, ctx), HIST_BITS)
 }
 
-/// The history slot of a move identity (all its 128 bits mixed: splitmix64's finalizer).
-fn slot(identity: u128) -> usize {
+/// The slot of a move identity in the history by turn and phase: whether the mover is the turn
+/// player, and the phase.
+pub fn context_key(identity: u128, own_turn: bool, phase: u32) -> usize {
+    slot(identity.wrapping_mul(1000003).wrapping_add(phase as u128 * 2 + own_turn as u128 + 1), CONTEXT_HIST_BITS)
+}
+
+/// The slot of a move identity in the continuation history: after the move `prev` (its identity;
+/// 0: none) that led to the node.
+pub fn continuation_key(prev: u128, identity: u128) -> usize {
+    slot(prev.wrapping_mul(0x2545_F491_4F6C_DD1D_9E37_79B9_7F4A_7C15).wrapping_add(identity), CONT_HIST_BITS)
+}
+
+/// The slot of a move identity in a table of 2^`bits` (all its 128 bits mixed: splitmix64's
+/// finalizer).
+fn slot(identity: u128, bits: u32) -> usize {
     let mut h = (identity as u64) ^ ((identity >> 64) as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     h = (h ^ (h >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     h = (h ^ (h >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     h ^= h >> 31;
-    (h >> (64 - HIST_BITS)) as usize
+    (h >> (64 - bits)) as usize
 }
 
 /// What the history tells apart about a move, before it is hashed to a slot (`move_key`): moves

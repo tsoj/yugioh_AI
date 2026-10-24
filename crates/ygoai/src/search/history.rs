@@ -1,5 +1,6 @@
 //! The history heuristic: a score per move slot (`movepick::move_key`) that cutoffs raise and the
-//! moves tried before a cutoff lower.
+//! moves tried before a cutoff lower. The search keeps three, which add up in the move order: by
+//! the move, by the move in its turn and phase, and by the move after the one that led to the node.
 
 use super::params::HIST_BITS;
 
@@ -9,11 +10,16 @@ pub struct HistoryTable {
 
 impl Default for HistoryTable {
     fn default() -> Self {
-        HistoryTable { table: vec![0.0; 1 << HIST_BITS] }
+        HistoryTable::new(HIST_BITS)
     }
 }
 
 impl HistoryTable {
+    /// A table of 2^`bits` slots.
+    pub fn new(bits: u32) -> Self {
+        HistoryTable { table: vec![0.0; 1 << bits] }
+    }
+
     /// The score of the move with history slot `key`.
     pub fn get(&self, key: usize) -> f64 {
         self.table[key]

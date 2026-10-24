@@ -20,7 +20,7 @@ use super::cardpolicy::{CardPolicy, applies, selection_cards, set_applies, set_p
 use super::evaluate::evaluate_at;
 use super::history::HistoryTable;
 use super::movegen::{candidates, is_searched, root_candidates};
-use super::movepick::{KeyContext, listed, move_identity, move_key, move_kind, ordered, prompt_label};
+use super::movepick::{KeyContext, context_key, continuation_key, listed, move_identity, move_key, move_kind, ordered, prompt_label};
 use super::params::*;
 use super::tt::{NodeType, TranspositionTable, hash_key};
 use crate::actions::{Response, encode};
@@ -99,6 +99,9 @@ pub const NO_CUT: u8 = 255;
 pub struct AlphaBeta {
     hash_table: TranspositionTable,
     history_table: HistoryTable,
+    /// (by the move in its turn and phase, and by the move after the one that led to the node)
+    context_history: HistoryTable,
+    continuation_history: HistoryTable,
     pub nodes: u64,
     /// transposition table lookups, and those that found the position
     pub tt_probes: u64,
@@ -135,6 +138,8 @@ impl Default for AlphaBeta {
         AlphaBeta {
             hash_table: TranspositionTable::default(),
             history_table: HistoryTable::default(),
+            context_history: HistoryTable::new(CONTEXT_HIST_BITS),
+            continuation_history: HistoryTable::new(CONT_HIST_BITS),
             nodes: 0,
             tt_probes: 0,
             tt_hits: 0,
@@ -193,7 +198,9 @@ impl AlphaBeta {
     /// The tables for a new decision.
     pub fn prepare(&mut self) {
         self.hash_table.new_generation();
-        self.history_table.decay(self.tune.hist_decay);
+        for h in [&mut self.history_table, &mut self.context_history, &mut self.continuation_history] {
+            h.decay(self.tune.hist_decay);
+        }
     }
 
     /// The best of `root_moves` (responses to the duel's pending prompt `root_prompt`) and the
@@ -207,7 +214,10 @@ impl AlphaBeta {
         let stop_time = p.budget.map(|b| start_time + std::time::Duration::from_secs_f64(hard_limit(b, p.clock_remaining)));
         let max_nodes = p.max_nodes.map(|n| self.nodes + n);
         (self.seldepth, self.pv_height) = (0, 0);
-        let mut state = SearchState { tables: self, policies, stop_time, max_nodes };
+        // (the root moves' identities: the continuation history's previous move below them)
+        let root_ctx = key_context(duel, root_prompt, p.hint);
+        let root_identities: Vec<u128> = root_moves.iter().map(|m| move_identity(root_prompt, m, &root_ctx)).collect();
+        let mut state = SearchState { tables: self, policies, stop_time, max_nodes, prev_move: 0, root_identities };
         let card_order = state.card_order(duel, root_prompt);
         let preference = ordered(root_prompt, turn_player, card_order.as_deref());
         let mut move_order: Vec<usize> = (0..root_moves.len()).collect();
@@ -228,6 +238,10 @@ struct SearchState<'a> {
     stop_time: Option<Instant>,
     /// (in the count of `tables.nodes`)
     max_nodes: Option<u64>,
+    /// the identity of the move that led to the node about to be searched (continuation history),
+    /// and the root moves'
+    prev_move: u128,
+    root_identities: Vec<u128>,
 }
 
 /// Where `do_move` arrived.
@@ -323,6 +337,7 @@ impl SearchState<'_> {
                 let lower = if exact_root { f64::NEG_INFINITY } else { alpha };
                 let pv = m == move_order[0];
                 let nodes_before = self.tables.nodes;
+                self.prev_move = self.root_identities[m];
                 let result = self.search_move(&mut root_duel, prompt, &moves[m], lower, f64::INFINITY, (depth - 1) as f64, 1, false, pv);
                 root_nodes[m] += self.tables.nodes - nodes_before;
                 match result {
@@ -389,6 +404,7 @@ impl SearchState<'_> {
     #[allow(clippy::too_many_arguments)]
     fn search(&mut self, duel: &mut Duel, prompt: &Msg, mut alpha: f64, mut beta: f64, depth: f64, height: i32, pv: bool) -> Result<f64, Stop> {
         let us = prompt.player().unwrap_or(0);
+        let prev_move = self.prev_move;
         if depth <= 0.0 {
             // (the main-line horizon extension: on the main line a card selection or sum, a
             // decision inside a move, is searched one ply deep at the horizon too, so that the
@@ -449,17 +465,26 @@ impl SearchState<'_> {
         // move ordering: the TT move first, then by history (the rules' order among equals)
         let ctx = key_context(duel, prompt, card_order.as_ref().and_then(|(_, h)| *h));
         let history_keys: Vec<usize> = moves.iter().map(|m| move_key(prompt, m, &ctx)).collect();
+        let identities: Vec<u128> = moves.iter().map(|m| move_identity(prompt, m, &ctx)).collect();
+        let [_, turn_player, phase, ..] = duel.ext_get_info();
+        let context_keys: Vec<usize> = identities.iter().map(|&id| context_key(id, us == turn_player, phase)).collect();
+        let continuation_keys: Vec<usize> = identities.iter().map(|&id| continuation_key(prev_move, id)).collect();
+        // (the three histories added up)
+        let scores: Vec<f64> = (0..moves.len())
+            .map(|k| {
+                self.tables.history_table.get(history_keys[k])
+                    + self.tables.context_history.get(context_keys[k])
+                    + self.tables.continuation_history.get(continuation_keys[k])
+            })
+            .collect();
         if let Some(st) = &mut self.tables.stats {
-            for (mv, &k) in moves.iter().zip(&history_keys) {
-                *st.hist_now.entry((k, move_identity(prompt, mv, &ctx), prompt_label(prompt))).or_default() += 1;
+            for (&id, &k) in identities.iter().zip(&history_keys) {
+                *st.hist_now.entry((k, id, prompt_label(prompt))).or_default() += 1;
             }
         }
         let mut move_order: Vec<usize> = (0..moves.len()).collect();
         move_order.sort_by(|&a, &b| {
-            let history = &self.tables.history_table;
-            ((Some(a) != tt_move), -history.get(history_keys[a]))
-                .partial_cmp(&((Some(b) != tt_move), -history.get(history_keys[b])))
-                .unwrap_or(std::cmp::Ordering::Equal)
+            ((Some(a) != tt_move), -scores[a]).partial_cmp(&((Some(b) != tt_move), -scores[b])).unwrap_or(std::cmp::Ordering::Equal)
         });
 
         let mut node_type = NodeType::AllNode;
@@ -492,6 +517,7 @@ impl SearchState<'_> {
             // raise alpha); the full depth and window after all if it raises alpha
             if depth >= t.lmr_min_depth && i >= t.lmr_min_move_counter {
                 let reduced_beta = if alpha.is_finite() { alpha + NULL_WINDOW } else { beta };
+                self.prev_move = identities[m];
                 let reduced = self.search_move(duel, prompt, mv, alpha, reduced_beta, (new_depth - t.lmr_reduction).max(0.0), height + 1, false, false)?;
                 if reduced <= alpha {
                     value = Some(reduced);
@@ -505,7 +531,10 @@ impl SearchState<'_> {
 
             let value = match value {
                 Some(v) => v,
-                None => self.search_move(duel, prompt, mv, alpha, beta, new_depth, height + 1, last, pv && i == 0)?,
+                None => {
+                    self.prev_move = identities[m];
+                    self.search_move(duel, prompt, mv, alpha, beta, new_depth, height + 1, last, pv && i == 0)?
+                }
             };
 
             if let Some(s) = static_eval
@@ -522,8 +551,15 @@ impl SearchState<'_> {
             if value >= beta {
                 node_type = NodeType::CutNode;
                 // (history: this move up, the ones tried before it down)
-                let tried: Vec<usize> = move_order[..i].iter().map(|&k| history_keys[k]).collect();
-                self.tables.history_table.update(history_keys[m], &tried, depth, t.hist_exponent, t.hist_malus);
+                let tables = &mut *self.tables;
+                for (table, keys) in [
+                    (&mut tables.history_table, &history_keys),
+                    (&mut tables.context_history, &context_keys),
+                    (&mut tables.continuation_history, &continuation_keys),
+                ] {
+                    let tried: Vec<usize> = move_order[..i].iter().map(|&k| keys[k]).collect();
+                    table.update(keys[m], &tried, depth, t.hist_exponent, t.hist_malus);
+                }
                 cut_at = i as u8;
                 break;
             }

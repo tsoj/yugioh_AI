@@ -55,6 +55,10 @@ pub fn hard_limit(budget: f64, remaining: f64) -> f64 {
 pub const MAX_AUTO_STEPS: usize = 300;
 pub const TT_BITS: u32 = 16;
 pub const HIST_BITS: u32 = 14;
+/// (the history by the move in its turn and phase, and the continuation history, by the move
+/// after the move that led to the node: more identities each, so larger tables)
+pub const CONTEXT_HIST_BITS: u32 = 15;
+pub const CONT_HIST_BITS: u32 = 16;
 /// (the history table's decay per decision; a cutoff's bonus is depth^HIST_EXPONENT, the moves
 /// tried before it share HIST_MALUS times that as a penalty)
 pub const HIST_DECAY: f64 = 0.5;
