@@ -467,8 +467,8 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       ply deeper; not at the horizon's extension, below twice the iteration's depth) and
       `tt-ext-half` (da61632: half a ply). Bench (6 openings): depth 10 356184 nodes (main) ->
       832600 (+134%) / 557839 (+57%); at 3000 nodes mean nominal depth 13.34 -> 10.40 (tt-ext).
-      Two moves are common here (every yes/no, a chain of one card plus pass). SPRTs after
-      eval-sprt2.
+      Two moves are common here (every yes/no, a chain of one card plus pass). tt-ext-half
+      (rebased, 7a464b6) SPRT stopped by the user at 1720 games: +0.4 +/- 12.5, LLR -1.13.
 - [ ] qsearch, if retried: a TT in quiescence, cheaper chain windows (pass plus the best few
       answers), pruning of hopeless attacks.
 - Retested at the Rust speed and stopped near zero: PVS (H0), qsearch, futility, conthist,
