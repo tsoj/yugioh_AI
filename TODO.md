@@ -552,7 +552,9 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
     once ran out of memory) + to_npz.py with rounds 2+3: 30.6M rows, 10395 pairs). MLP 64, --held
     400 --drop-onesided --lam 0.5 (train_eval_mover.py's report now chunked: the GPU ran out at
     30M rows): held-pairs rank 0.7209 (search values 0.7348; other held-out pairs than before, not
-    comparable), LP factor 1.021. Branch `eval-sprt2` (models/eval_mover2_sprt2r23os_64.json): SPRT.
+    comparable), LP factor 1.021. Branch `eval-sprt2` (models/eval_mover2_sprt2r23os_64.json): SPRT
+    stopped at 3960 games, +3.2 +/- 8.8 (LLR -0.92; penta [316, 0, 1330, 0, 334]); merged anyway
+    (user: no big effect, unlikely worse), default since e642eb3.
   - Shapes (2026-10-21, mover2 on the same data, `--dims`; the same NPS for all, the features cost
     the time): MLP 64 H1 +35.8 +/- 20.0 at 702 games vs the MLP16, default since 5fd9188
     (models/eval_mover2_sprtr23os_64.json). 32x32 was at +19.8 +/- 17.4 (860 games, LLR +1.89) and
