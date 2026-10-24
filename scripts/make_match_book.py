@@ -6,7 +6,11 @@ seed) whose result is not settled by the decks alone.
   scripts/make_match_book.py --from CANDIDATES.jsonl -o BOOK.jsonl [...]
 
 (--from: the candidates of a file, rows with "seed" and "decks", e.g. scripts/onesided_candidates.py
-score's, in its order; their other fields are kept.)
+score's; their other fields are kept.)
+
+Each tested candidate is appended to the book as it finishes (so in the order they finish), and
+candidates already in it are skipped: a stopped run goes on where it was. The same games with the
+policy agents in Rust, several times faster: ygoai-book-test (--from candidates only).
 
 Each candidate is played up to --games times by policy agents (--policies: each
 game a random one of them for both seats, default nn/policy.npz), sampling at
@@ -85,26 +89,30 @@ def main() -> int:
         extra = [{} for _ in openings]
     from ygoai.agents.policy_agent import DEFAULT_MODEL
     policies = [str(Path(p).resolve()) for p in args.policies.split(",")] if args.policies else [str(DEFAULT_MODEL)]
-    tasks = [(i, op, args.games, args.stop_min, policies) for i, op in enumerate(openings)]
-    wins: list = [None] * len(openings)
-    played = [0] * len(openings)
+    done = set()
+    if args.output.exists():
+        done = {json.loads(line)["seed"] for line in args.output.open() if line.strip()}
+    tasks = [(i, op, args.games, args.stop_min, policies) for i, op in enumerate(openings) if op.seed not in done]
+    print(f"{len(tasks)} candidates to test ({len(done)} already in {args.output})", flush=True)
+    played = 0
     failed = 0
-    for done, (_, res) in enumerate(run_parallel(test_opening, tasks, args.jobs), 1):
-        if isinstance(res, Crash):
-            failed += 1
-        else:
-            i, wins[i], played[i] = res
-        if done % 500 == 0:
-            print(f"{done}/{len(tasks)} candidates, {sum(played)} games", flush=True)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    with args.output.open("w") as f:
-        for op, w, n, more in zip(openings, wins, played, extra):
-            if w is not None:
+    with args.output.open("a") as f:
+        for n, (_, res) in enumerate(run_parallel(test_opening, tasks, args.jobs), 1):
+            if isinstance(res, Crash):
+                failed += 1
+            else:
+                i, w, games = res
+                op = openings[i]
                 f.write(json.dumps({"seed": op.seed, "decks": [d.to_json() for d in op.decks], "wins": w,
-                                    "games": n, **more}) + "\n")
-    tested = [w for w in wins if w is not None]
+                                    "games": games, **extra[i]}) + "\n")
+                f.flush()
+                played += games
+            if n % 500 == 0:
+                print(f"{n}/{len(tasks)} candidates, {played} games", flush=True)
+    tested = [json.loads(line)["wins"] for line in args.output.open() if line.strip()]  # (the whole book)
     minority = [min(w) for w in tested]
-    print(f"{len(openings)} candidates ({failed} failed), {sum(played)} games (at most {args.games} each, "
+    print(f"{len(tasks)} candidates ({failed} failed), {played} games (at most {args.games} each, "
           f"stopped once each seat won {args.stop_min}) -> {args.output}")
     print("  openings by the less winning seat's wins:",
           {k: minority.count(k) for k in range(args.games // 2 + 1) if minority.count(k)})
