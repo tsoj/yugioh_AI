@@ -199,6 +199,9 @@ See `docs/search-decisions.md` for what is and isn't searched.
       defaults); the rest for eval data and tests. Then set-pool-notrib on it, then an eval retrain
       on all SPRT games (sprtdata/collect.py from 2026-10-17 23:22 + to_npz.py + train_eval_mover.py
       --dims 64 --held 400 --drop-onesided --lam 0.5), SPRT, merge on H1.
+- [ ] Rust panic in the policy games of the match2 build (rust/ygo-cards/src/prelude.rs:100,
+      effect_card_value: a value function called without a card). It ended the first build after
+      16500 candidates (run_parallel now turns panics into Crash, 07f8739); find the card.
 - [x] Strength ladder (user, 2026-10-24): main at more vs fewer nodes on the 500 removed / 500 kept
       openings (runs/sprt/ladder_*, --tc 60+1, 32 games at once). Pentanomial [weak both, -,
       seat-decided, -, strong both]:
