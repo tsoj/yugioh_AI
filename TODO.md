@@ -199,11 +199,20 @@ See `docs/search-decisions.md` for what is and isn't searched.
       defaults); the rest for eval data and tests. Then set-pool-notrib on it, then an eval retrain
       on all SPRT games (sprtdata/collect.py from 2026-10-17 23:22 + to_npz.py + train_eval_mover.py
       --dims 64 --held 400 --drop-onesided --lam 0.5), SPRT, merge on H1.
-- [ ] Strength ladder (user, 2026-10-24): main at more vs fewer nodes on the 500 removed / 500 kept
-      openings (runs/sprt/ladder_*): 1000v500 removed [28, 0, 434, 0, 38] (86.8% seat-decided,
-      +6.9), kept [62, 0, 370, 0, 68] (74.0%, +4.2): at this gap the non-seat-decided pairs split
-      evenly (noise, not strength). Fixed-node games are nearly deterministic (13 of 16 identical
-      when replayed).
+- [x] Strength ladder (user, 2026-10-24): main at more vs fewer nodes on the 500 removed / 500 kept
+      openings (runs/sprt/ladder_*, --tc 60+1, 32 games at once). Pentanomial [weak both, -,
+      seat-decided, -, strong both]:
+      | rung      | removed                       | kept                         |
+      | 1000v500  | [28,0,434,0,38] +6.9          | [62,0,370,0,68] +4.2         |
+      | 1500v1000 | [34,0,436,0,30] -2.8          | [54,0,374,0,72] +12.5        |
+      | 2500v1500 | [26,0,448,0,26] 0.0           | [48,0,377,0,75] +18.8        |
+      | 4000v2500 | [56,0,409,0,35] -14.6         | [81,0,357,0,62] -13.2        |
+      4000v2500 is spoiled by the clock: 64 / 70 time forfeits, 47 / 57 lost by the 4000-node side
+      (2500v1500: 19 / 21). Leaving out pairs with a forfeit, summed over the rungs: removed 115
+      weak-both vs 124 strong-both (no strength signal; 87% seat-decided), kept 208 vs 275 (about
+      3 sigma; 74% seat-decided). So the old policy filter works: the openings it removes are
+      seat-decided even between engines of clearly different strength, the kept ones show it.
+      Fixed-node games are nearly deterministic (13 of 16 identical when replayed).
 - [ ] Search the decisions that have no feature yet:
   - [ ] `SelectDisfield` (zones to disable)
   - [ ] `SelectPlace` with several zones
