@@ -162,8 +162,10 @@ See `docs/search-decisions.md` for what is and isn't searched.
       the set policy's answer). Before: the rules' first 5 sets (27% of several-card selections
       have more than 8 cards). Bench: 10d 354983 nodes (356184), 3000n depth 13.33 (13.34); smoke
       128 games, 0 errors. SPRT stopped by the user at 5458 games, +2.2 +/- 6.5, LLR -2.55 (pentanomial
-      [326, 0, 2059, 1, 343]: 75% of the opening pairs 1-1). Next: `set-pool-notrib` (993557e:
-      tributes back to the rules), after the book filter test.
+      [326, 0, 2059, 1, 343]: 75% of the opening pairs 1-1). `set-pool-notrib` (a363f9b, rebased:
+      tributes back to the rules) on match2: H0, -10.8 +/- 14.3 at 1288 games (LLR -2.99, penta
+      [101, 0, 462, 0, 81]). The set policy's own pool does not help: sets stay with the rules'
+      first 5 (indep-policies on main).
 - [ ] Does the book's filter hold for alpha-beta? (user, 2026-10-24) match1.jsonl was filtered by
       the old Python policy nets (make_match_book.py: up to 20 games per opening, both seats one
       net at temperature 1; --book-min 2 keeps 15535 of 19996), yet ~75% of the SPRTs' opening
@@ -191,7 +193,7 @@ See `docs/search-decisions.md` for what is and isn't searched.
       MLP with its draw position before the pooling; plain pooling cancels the positions in the
       mean): seq 0.431 / 0.343, deck+top 0.432 / 0.357, deck 0.425 / 0.348: the draw order adds
       nothing.
-- [ ] New book (user, 2026-10-24, while away): runs/books/match2.jsonl, ~50k lines. 130000 random
+- [x] New book (user, 2026-10-24, while away): runs/books/match2.jsonl, ~50k lines. 130000 random
       candidates (seed 91, scripts/onesided_candidates.py generate), the final predictor
       (runs/nn/onesided/final_pool_decktop.pt: pool, deck+top, all 10385 openings, 5 seeds) keeps
       the less one-sided half, then the old policy games (make_match_book.py --from, rl4/rl3/rl2/
@@ -199,6 +201,11 @@ See `docs/search-decisions.md` for what is and isn't searched.
       defaults); the rest for eval data and tests. Then set-pool-notrib on it, then an eval retrain
       on all SPRT games (sprtdata/collect.py from 2026-10-17 23:22 + to_npz.py + train_eval_mover.py
       --dims 64 --held 400 --drop-onesided --lam 0.5), SPRT, merge on H1.
+      Built with ygoai-book-test in 763s: 64998 tested (2 panicked), 620389 games; less winning
+      seat 0: 5085, 1: 5323, 2+: 54590 (book-min 2 keeps 54590; SPRTs draw from the first 50000,
+      the rows are in finishing order). First SPRT on it (set-pool-notrib): 462 of 644 pairs
+      seat-decided, 71.7% (+/- 1.8) vs 74.7-75.4% on match1: the predictor's expected 0.68 does
+      not carry over, a gain of ~3 points at most. Next book: the predictor stage is optional.
 - [x] RL policy in Rust (user, 2026-10-24): crates/ygoai/src/rl_policy.rs (the self-play policy/value
       network of runs/nn/rl*, boot1 and its agent; not the search's move-ordering policies) and
       ygoai-book-test (make_match_book.py's test games on threads, each candidate written as it
