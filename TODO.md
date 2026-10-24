@@ -175,6 +175,19 @@ See `docs/search-decisions.md` for what is and isn't searched.
       (0.854), regret3 262 (240); sets about equal; tributes top1 0.645 (0.666).
       Remaining with a policy but rules: none on main (zones: the place policy only on
       `tree-place-policy`, stopped).
+- [ ] Predict one-sided openings from their cards (user, 2026-10-24). scripts/build_onesided_data.py:
+      10385 SPRT openings (132417 pairs, ~13 each; 73.7% seat-decided; per opening 16% always, only
+      14.5% at most half). The old filter barely predicts it (book balance >= 0.3: 0.719, else 0.760).
+      Cards: scripts/embed_cards.py (effect1 encoder, one set of pseudo-names; 13748 cards of
+      match1.jsonl; eager attention: SDPA gave NaN). scripts/train_onesided.py: binomial likelihood;
+      splits random and archetype (41 rare archetypes held out: 5108 train openings without their
+      cards, 1017 test with >= 25% of a deck from them, 28% of the test decks' cards unseen).
+      Test r (3-seed ensembles; random / archetype): plain pooling (mean+max of a seat's cards)
+      deck+top 0.439 / 0.351, seq 0.433 / 0.357, deck 0.433 / 0.340, top 0.380 / 0.296; attention
+      0.405-0.423 / 0.280-0.326; grouped pooling unstable on archetypes (0.15-0.19); card ids (control)
+      0.33 / 0.21. Draw order adds nothing; hyperparameters within noise (sweep1). As a filter:
+      dropping the 25% predicted most one-sided 0.734 -> 0.695, 50% -> 0.675 (random split).
+      Ceiling from ~13 pairs per opening: r ~0.8.
 - [ ] Search the decisions that have no feature yet:
   - [ ] `SelectDisfield` (zones to disable)
   - [ ] `SelectPlace` with several zones
