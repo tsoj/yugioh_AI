@@ -541,6 +541,12 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       12.6 at 1680 games (LLR +2.97) vs the round-2+3 net. Bench mean depth 13.35, checksum
       44336e139f6541ec. Next: mover3/mover4 and deeper nets on this data (the engine evaluates only
       mover2 since the cleanup), and keep adding SPRT games as data.
+  - All SPRT games (user, 2026-10-24): 184522 games since 2026-10-17 23:22 (28.1M positions,
+    runs/data/sprt_net2/: collect.py + ygoai-refeature, which now streams its input (all games at
+    once ran out of memory) + to_npz.py with rounds 2+3: 30.6M rows, 10395 pairs). MLP 64, --held
+    400 --drop-onesided --lam 0.5 (train_eval_mover.py's report now chunked: the GPU ran out at
+    30M rows): held-pairs rank 0.7209 (search values 0.7348; other held-out pairs than before, not
+    comparable), LP factor 1.021. Branch `eval-sprt2` (models/eval_mover2_sprt2r23os_64.json): SPRT.
   - Shapes (2026-10-21, mover2 on the same data, `--dims`; the same NPS for all, the features cost
     the time): MLP 64 H1 +35.8 +/- 20.0 at 702 games vs the MLP16, default since 5fd9188
     (models/eval_mover2_sprtr23os_64.json). 32x32 was at +19.8 +/- 17.4 (860 games, LLR +1.89) and
