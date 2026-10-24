@@ -3,6 +3,10 @@
 seed) whose result is not settled by the decks alone.
 
   scripts/make_match_book.py -n 3000 -o runs/books/match1.jsonl [--games 20] [--seed 77]
+  scripts/make_match_book.py --from CANDIDATES.jsonl -o BOOK.jsonl [...]
+
+(--from: the candidates of a file, rows with "seed" and "decks", e.g. scripts/onesided_candidates.py
+score's, in its order; their other fields are kept.)
 
 Each candidate is played up to --games times by policy agents (--policies: each
 game a random one of them for both seats, default nn/policy.npz), sampling at
@@ -67,8 +71,18 @@ def main() -> int:
     ap.add_argument("--policies", default=None, help="comma-separated policy exports (default: nn/policy.npz)")
     ap.add_argument("--seed", type=int, default=77)
     ap.add_argument("-j", "--jobs", type=int, default=30)
+    ap.add_argument("--from", dest="from_file", type=Path, help="the candidates of this file (not random ones)")
     args = ap.parse_args()
-    openings = random_openings(args.candidates, args.seed, 0.0)
+    extra: list = []
+    if args.from_file:
+        from ygoai.decks import Deck
+        from ygoai.match import Opening
+        rows = [json.loads(line) for line in args.from_file.open()]
+        openings = [Opening(seed=r["seed"], decks=[Deck.from_json(d) for d in r["decks"]]) for r in rows]
+        extra = [{k: v for k, v in r.items() if k not in ("seed", "decks", "wins", "games")} for r in rows]
+    else:
+        openings = random_openings(args.candidates, args.seed, 0.0)
+        extra = [{} for _ in openings]
     from ygoai.agents.policy_agent import DEFAULT_MODEL
     policies = [str(Path(p).resolve()) for p in args.policies.split(",")] if args.policies else [str(DEFAULT_MODEL)]
     tasks = [(i, op, args.games, args.stop_min, policies) for i, op in enumerate(openings)]
@@ -84,10 +98,10 @@ def main() -> int:
             print(f"{done}/{len(tasks)} candidates, {sum(played)} games", flush=True)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w") as f:
-        for op, w, n in zip(openings, wins, played):
+        for op, w, n, more in zip(openings, wins, played, extra):
             if w is not None:
                 f.write(json.dumps({"seed": op.seed, "decks": [d.to_json() for d in op.decks], "wins": w,
-                                    "games": n}) + "\n")
+                                    "games": n, **more}) + "\n")
     tested = [w for w in wins if w is not None]
     minority = [min(w) for w in tested]
     print(f"{len(openings)} candidates ({failed} failed), {sum(played)} games (at most {args.games} each, "

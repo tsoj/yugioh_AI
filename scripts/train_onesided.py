@@ -5,7 +5,8 @@ cards no training game had get one too) or, as a control, a learned per-card emb
 cards: none). Data: scripts/build_onesided_data.py (per opening the pairs played and how many
 the seat decided); loss: the binomial likelihood of those counts.
 
-Splits: --split random (every --held-th opening) or archetype: archetypes (setcodes) that are
+Splits: --split none (every opening trains: the model to use, --out), random (every --held-th
+opening held out) or archetype: archetypes (setcodes) that are
 rare (in at most 3% of the decks) are held out at random until --test openings have a deck with
 at least a quarter of its cards from them; training openings have no card of them at all (and
 --match-random gives a random split with as many training openings, the comparison).
@@ -13,7 +14,9 @@ at least a quarter of its cards from them; training openings have no card of the
 Inputs (--inputs): deck+top (the decks as sets, the top cards with their draw positions), deck
 (the decks only), top (the top cards only), seq (each main deck as its draw sequence, every card
 with its position; the extra deck as a set). Models (--model): attn (attention over all cards of
-both decks), set (each group's cards pooled: mean and max), pool (all of a seat's cards pooled).
+both decks), set (each group's cards pooled: mean and max), pool (all of a seat's cards pooled),
+phipool (pool, each card first through an MLP with its group and position: added before the
+pooling without one, the positions cancel out in the mean).
 
 Reports, held out: the likelihood gain per pair over the training rate, the correlation of the
 predicted and the observed rate (openings with >= 8 pairs), and as a filter: the observed
@@ -106,6 +109,8 @@ class Net(torch.nn.Module):
                                                         torch.nn.Sequential(torch.nn.Linear(d, 2 * d), torch.nn.GELU(), torch.nn.Linear(2 * d, d))]))
             self.head = torch.nn.Sequential(torch.nn.LayerNorm(d), torch.nn.Linear(d, 1))
         else:
+            if model == "phipool":
+                self.phi = torch.nn.Sequential(torch.nn.Linear(d, 2 * d), torch.nn.GELU(), torch.nn.Linear(2 * d, d))
             n_pooled = 2 * n_parts if model == "set" else 2
             self.head = torch.nn.Sequential(torch.nn.Linear(2 * n_pooled * d, d), torch.nn.GELU(), torch.nn.Dropout(dropout), torch.nn.Linear(d, 1))
 
@@ -115,6 +120,8 @@ class Net(torch.nn.Module):
         # (an unseen card's learned embedding: none)
         x = x + self.group(group)[None] + self.pos(pos)[None]
         x = self.drop(x) * mask[..., None]
+        if self.model == "phipool":
+            x = self.phi(x) * mask[..., None]
         if self.model == "attn":
             x = torch.cat([self.cls.expand(len(x), -1, -1), x], 1)
             m = torch.cat([torch.ones(len(x), 1, dtype=torch.bool, device=x.device), mask], 1)
@@ -172,10 +179,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("openings")
     ap.add_argument("emb")
-    ap.add_argument("--model", default="attn", choices=["attn", "set", "pool"])
+    ap.add_argument("--model", default="attn", choices=["attn", "set", "pool", "phipool"])
     ap.add_argument("--inputs", default="deck+top", choices=sorted(INPUTS))
     ap.add_argument("--cards", default="text", choices=["text", "id"])
-    ap.add_argument("--split", default="random", choices=["random", "archetype"])
+    ap.add_argument("--split", default="random", choices=["none", "random", "archetype"])
     ap.add_argument("--match-random", action="store_true", help="a random split with the archetype split's sizes")
     ap.add_argument("--held", type=int, default=5)
     ap.add_argument("--test", type=int, default=1000)
@@ -203,12 +210,14 @@ def main():
             random.Random(a.seed).shuffle(perm)
             test_i, train_i = perm[: len(test_i)], perm[len(test_i) : len(test_i) + len(train_i)]
             print(f"random split of the same sizes: {len(train_i)} train, {len(test_i)} test")
+    elif a.split == "none":
+        train_i, test_i = list(range(len(rows))), []
     else:
         test_i = [i for i, r in enumerate(rows) if zlib.crc32(str(r["seed"]).encode()) % a.held == 0]
         train_i = [i for i, r in enumerate(rows) if zlib.crc32(str(r["seed"]).encode()) % a.held != 0]
     train_set = set(train_i)
     seen = {c for i in train_i for d in rows[i]["decks"] for c in d["main"] + d["extra"]}
-    unc = [sum(c not in seen for c in d["main"] + d["extra"]) / len(d["main"] + d["extra"]) for i in test_i for d in rows[i]["decks"]]
+    unc = [0.0] if not test_i else [sum(c not in seen for c in d["main"] + d["extra"]) / len(d["main"] + d["extra"]) for i in test_i for d in rows[i]["decks"]]
     print(f"test decks' cards unseen in training: mean {np.mean(unc):.3f}, decks with any {np.mean([u > 0 for u in unc]):.3f}")
 
     z = np.load(a.emb)
@@ -275,8 +284,13 @@ def main():
         net, best, predict = train_one(a.seed + e)
         nets.append(net)
         vals.append(best)
-        preds.append(predict(test_t))
+        if test_i:
+            preds.append(predict(test_t))
     print(f"val gain mean {np.mean(vals) * 1000:.2f} mnats/pair")
+    if a.out:
+        torch.save({"states": [m.state_dict() for m in nets], "args": vars(a), "base_logit": base_logit}, a.out)
+    if not test_i:
+        return
     logit = torch.stack(preds).mean(0)
     p = torch.sigmoid(logit).cpu().numpy()
     obs = (k[test_t] / n[test_t]).cpu().numpy()
@@ -290,8 +304,6 @@ def main():
         drops.append(f"drop {frac:.0%}: {kk_[keep].sum() / nn_[keep].sum():.3f}")
     print(f"test ({len(test_i)} openings, {int(nn_.sum())} pairs; train rate {base:.3f}, test {kk_.sum() / nn_.sum():.3f}): "
           f"gain {nll_gain(test_t, logit) * 1000:.2f} mnats/pair, r {r:.3f} ({many.sum()} with >= 8 pairs); " + ", ".join(drops))
-    if a.out:
-        torch.save({"states": [m.state_dict() for m in nets], "args": vars(a)}, a.out)
 
 
 if __name__ == "__main__":
