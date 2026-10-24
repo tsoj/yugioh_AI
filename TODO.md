@@ -187,7 +187,23 @@ See `docs/search-decisions.md` for what is and isn't searched.
       0.405-0.423 / 0.280-0.326; grouped pooling unstable on archetypes (0.15-0.19); card ids (control)
       0.33 / 0.21. Draw order adds nothing; hyperparameters within noise (sweep1). As a filter:
       dropping the 25% predicted most one-sided 0.734 -> 0.695, 50% -> 0.675 (random split).
-      Ceiling from ~13 pairs per opening: r ~0.8.
+      Ceiling from ~13 pairs per opening: r ~0.8. Order-aware pooling (phipool: each card through an
+      MLP with its draw position before the pooling; plain pooling cancels the positions in the
+      mean): seq 0.431 / 0.343, deck+top 0.432 / 0.357, deck 0.425 / 0.348: the draw order adds
+      nothing.
+- [ ] New book (user, 2026-10-24, while away): runs/books/match2.jsonl, ~50k lines. 130000 random
+      candidates (seed 91, scripts/onesided_candidates.py generate), the final predictor
+      (runs/nn/onesided/final_pool_decktop.pt: pool, deck+top, all 10385 openings, 5 seeds) keeps
+      the less one-sided half, then the old policy games (make_match_book.py --from, rl4/rl3/rl2/
+      rl1/boot1, book-min 2 at load). SPRTs then use match2 lines 0..49999 (sprt_branch.sh
+      defaults); the rest for eval data and tests. Then set-pool-notrib on it, then an eval retrain
+      on all SPRT games (sprtdata/collect.py from 2026-10-17 23:22 + to_npz.py + train_eval_mover.py
+      --dims 64 --held 400 --drop-onesided --lam 0.5), SPRT, merge on H1.
+- [ ] Strength ladder (user, 2026-10-24): main at more vs fewer nodes on the 500 removed / 500 kept
+      openings (runs/sprt/ladder_*): 1000v500 removed [28, 0, 434, 0, 38] (86.8% seat-decided,
+      +6.9), kept [62, 0, 370, 0, 68] (74.0%, +4.2): at this gap the non-seat-decided pairs split
+      evenly (noise, not strength). Fixed-node games are nearly deterministic (13 of 16 identical
+      when replayed).
 - [ ] Search the decisions that have no feature yet:
   - [ ] `SelectDisfield` (zones to disable)
   - [ ] `SelectPlace` with several zones
