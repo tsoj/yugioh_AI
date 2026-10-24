@@ -22,7 +22,7 @@ pub mod tt;
 
 pub use evaluate::*;
 pub use movegen::{candidates, is_searched, root_candidates};
-pub use movepick::{move_key, ordered, prompt_label};
+pub use movepick::{KeyContext, move_key, ordered, prompt_label};
 pub use params::*;
 pub use search::{AlphaBeta, NO_CUT, NodeStats, SearchParams, panic_messages_once};
 pub use tt::hash_key;

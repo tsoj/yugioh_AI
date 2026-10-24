@@ -20,7 +20,7 @@ use super::cardpolicy::{CardPolicy, applies, selection_cards, set_applies, set_p
 use super::evaluate::evaluate_at;
 use super::history::HistoryTable;
 use super::movegen::{candidates, is_searched, root_candidates};
-use super::movepick::{listed, move_identity, move_key, move_kind, ordered, prompt_label};
+use super::movepick::{KeyContext, listed, move_identity, move_key, move_kind, ordered, prompt_label};
 use super::params::*;
 use super::tt::{NodeType, TranspositionTable, hash_key};
 use crate::actions::{Response, encode};
@@ -447,10 +447,11 @@ impl SearchState<'_> {
         let futility_value = static_eval.filter(|_| depth <= t.futility_max_depth).map(|s| s + t.futility_margin + t.futility_margin_per_ply * depth);
 
         // move ordering: the TT move first, then by history (the rules' order among equals)
-        let history_keys: Vec<usize> = moves.iter().map(|m| move_key(prompt, m)).collect();
+        let ctx = key_context(duel, prompt, card_order.as_ref().and_then(|(_, h)| *h));
+        let history_keys: Vec<usize> = moves.iter().map(|m| move_key(prompt, m, &ctx)).collect();
         if let Some(st) = &mut self.tables.stats {
             for (mv, &k) in moves.iter().zip(&history_keys) {
-                *st.hist_now.entry((k, move_identity(prompt, mv), prompt_label(prompt))).or_default() += 1;
+                *st.hist_now.entry((k, move_identity(prompt, mv, &ctx), prompt_label(prompt))).or_default() += 1;
             }
         }
         let mut move_order: Vec<usize> = (0..moves.len()).collect();
@@ -679,6 +680,19 @@ impl SearchState<'_> {
         }
         Ok(NewPosition::StepLimit(prompt))
     }
+}
+
+/// The history's context of a decision (`KeyContext`): the select hint, and for a chain response
+/// the current chain's last link (its card's code and whether the mover controls it).
+fn key_context(duel: &Duel, prompt: &Msg, hint: Option<u64>) -> KeyContext {
+    let chain_top = match prompt {
+        Msg::SelectChain { player, .. } => duel.core.current_chain.last().map_or(0, |l| {
+            let code = l.triggering_effect.and_then(|e| duel.effect(e).handler).map_or(0, |c| duel.card(c).data.code);
+            code as u128 * 2 + (l.triggering_controler as u32 == *player) as u128 + 1
+        }),
+        _ => 0,
+    };
+    KeyContext { hint, chain_top }
 }
 
 /// A decision inside a move (a card selection, a sum of cards): at the horizon the rules answer
