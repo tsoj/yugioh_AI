@@ -222,7 +222,7 @@ impl Completion for VanillaCompletion {
 }
 
 /// One array of an .npz file (numpy's format: a header, then the data in C order).
-fn npy_array(zip: &mut zip::ZipArchive<std::fs::File>, name: &str) -> Result<(String, Vec<u8>), String> {
+pub(crate) fn npy_array(zip: &mut zip::ZipArchive<std::fs::File>, name: &str) -> Result<(String, Vec<u8>), String> {
     let mut f = zip.by_name(name).map_err(|e| format!("{name}: {e}"))?;
     let mut buf = Vec::new();
     f.read_to_end(&mut buf).map_err(|e| e.to_string())?;

@@ -25,6 +25,7 @@ pub mod matchrun;
 pub mod mcts;
 pub mod messages;
 pub mod observe;
+pub mod rl_policy;
 pub mod paths;
 pub mod protocol;
 pub mod rduel;
