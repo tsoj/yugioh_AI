@@ -263,7 +263,9 @@ See `docs/search-decisions.md` for what is and isn't searched.
         bits of the identity (splitmix64; before only the low 64 bits were mixed, which tripled
         the collisions with the new keys). Per game ~340 identities: 2.5% / 0.8% at 2^14 (2^15:
         1.1% / 0.2%), so the table stays 2^14. Bench: depth 10 362311 nodes (main 369443), 3000n
-        depth 13.05 (13.20). SPRT vs main. Next (by the result): the context in the key (own
+        depth 13.05 (13.20). SPRT vs main (tc 10+0.1, match2): ended at the 5000-opening cap, 10000
+        games, +5.7 +/- 5.4, penta [751, 0, 3415, 1, 833], LLR +0.96 [0, 10] (would be +2.11 with
+        [0, 5], +1.24 with [0, 2]): undecided, likely a small gain. Next (by the result): the context in the key (own
         turn, phase), continuation history, separate or bigger tables.
 
 ## Search: features
