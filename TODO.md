@@ -42,7 +42,9 @@ the rerun: longest game 941 decisions).
 
 ## Running now
 
-- Nothing.
+- Nothing. For review: branch `tidy` (2026-10-25, the code cleanup after Nalwald's style: same
+  search, bench checksums unchanged; the belief regression set equal to a fresh build of main),
+  and branch `py-cleanup` (the legacy Python removed).
 - `improving2` (643545c: improving rebased; +3.1 at 2720 games before) SPRT vs main [0, 5]:
   stopped by the user at 1340 games, -3.1 +/- 14.2, LLR -0.53 (bench: depth 10 361130 nodes, main
   362311; 3000n depth 13.25, main 13.05; same NPS). Not merged.
