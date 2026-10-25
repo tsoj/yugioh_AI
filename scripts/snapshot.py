@@ -105,7 +105,9 @@ def _rust_binding(dst: Path, ref: str | None) -> None:
     if same or not sub(ref):
         return
     # (its own: the sources of the commit, the engine at its submodule commit, built in a capped scope)
-    src = SNAPSHOTS / f"{dst.name}-src"
+    # (always the same directory: build scripts keep the source path they were built with, and the
+    # target directory is shared)
+    src = SNAPSHOTS / "binding-src"
     if src.exists():
         shutil.rmtree(src)
     src.mkdir()
