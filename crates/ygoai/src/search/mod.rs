@@ -8,6 +8,7 @@
 //! - `cardpolicy`: the order of the cards of a card selection (a trained network)
 //! - `evaluate`: the static evaluation (hand-written and learned) and its features
 //! - `params`: constants
+//! - `stats`: statistics of the search for its diagnostics
 
 pub mod cardpolicy;
 pub mod evaluate;
@@ -18,11 +19,13 @@ pub mod params;
 pub mod placepolicy;
 #[allow(clippy::module_inception)]
 pub mod search;
+pub mod stats;
 pub mod tt;
 
 pub use evaluate::*;
 pub use movegen::{candidates, is_searched, root_candidates};
 pub use movepick::{KeyContext, move_key, ordered, prompt_label};
 pub use params::*;
-pub use search::{AlphaBeta, NO_CUT, NodeStats, SearchParams, panic_messages_once};
+pub use search::{AlphaBeta, SearchParams, panic_messages_once};
+pub use stats::NodeStats;
 pub use tt::hash_key;

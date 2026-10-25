@@ -8,12 +8,12 @@ use crate::messages::Msg;
 
 /// What a node's value is: exact (a PV node: a move raised alpha without reaching beta), a lower
 /// bound (a cut node: a move reached beta) or an upper bound (an all node: no move raised alpha).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub enum NodeType {
     #[default]
-    PvNode = 0,
-    CutNode = 1,
-    AllNode = 2,
+    PvNode,
+    CutNode,
+    AllNode,
 }
 
 /// A stored search result: its value, depth, node type and best move (an index into the node's

@@ -24,10 +24,6 @@ pub fn is_searched(m: &Msg) -> bool {
     )
 }
 
-fn idx(i: usize) -> Response {
-    Response { index: Some(i as i64), ..Response::default() }
-}
-
 /// The candidates of a searched prompt (belief_mc.candidates). An idle command's shuffling of the
 /// hand is none (it changes nothing but the hand's order, which nothing here tracks, and comes back
 /// to the same prompt: in the tree a copy of the node one ply shallower, at the root a search spent
@@ -37,16 +33,12 @@ pub fn candidates(m: &Msg) -> Vec<Response> {
         Msg::SelectIdlecmd { .. } => idle_options(m).into_iter().filter(|c| c.kind.as_deref() != Some("shuffle")).collect(),
         Msg::SelectBattlecmd { .. } => battle_options(m),
         Msg::SelectChain { chains, forced, .. } => {
-            let opts = (0..chains.len()).map(idx);
-            if *forced != 0 { opts.collect() } else { std::iter::once(Response { index: Some(-1), ..Response::default() }).chain(opts).collect() }
+            let chain = (0..chains.len() as i64).map(Response::index);
+            if *forced != 0 { chain.collect() } else { std::iter::once(Response::index(-1)).chain(chain).collect() }
         }
-        Msg::SelectEffectyn { .. } | Msg::SelectYesno { .. } => {
-            [true, false].map(|y| Response { yes: Some(y), ..Response::default() }).to_vec()
-        }
-        Msg::SelectOption { options, .. } => (0..options.len()).map(idx).collect(),
-        Msg::SelectCard { min: 1, max: 1, cards, .. } => {
-            (0..cards.len()).map(|i| Response { indices: Some(vec![i as i64]), ..Response::default() }).collect()
-        }
+        Msg::SelectEffectyn { .. } | Msg::SelectYesno { .. } => vec![Response::yes(true), Response::yes(false)],
+        Msg::SelectOption { options, .. } => (0..options.len() as i64).map(Response::index).collect(),
+        Msg::SelectCard { min: 1, max: 1, cards, .. } => (0..cards.len()).map(|i| Response::cards(vec![i])).collect(),
         // (several cards: the sets as listed; the search orders them by the rules' order, `card_sets`)
         Msg::SelectCard { cards, .. } => card_sets(m, &(0..cards.len()).collect::<Vec<_>>()),
         Msg::SelectSum { cards, .. } => {
@@ -54,11 +46,7 @@ pub fn candidates(m: &Msg) -> Vec<Response> {
             let mut by_value: Vec<usize> = (0..cards.len()).collect();
             let v = |i: usize| card_value(&cards[i], card(cards[i].code));
             by_value.sort_by(|&a, &b| v(a).partial_cmp(&v(b)).unwrap_or(std::cmp::Ordering::Equal));
-            let indices = |mut idx: Vec<usize>| {
-                idx.sort();
-                Response { indices: Some(idx.into_iter().map(|i| i as i64).collect()), ..Response::default() }
-            };
-            sum_selections(m, &by_value).into_iter().map(indices).collect()
+            sum_selections(m, &by_value).into_iter().map(Response::cards).collect()
         }
         _ => vec![],
     }
@@ -74,15 +62,11 @@ pub fn root_candidates(m: &Msg, rules: &Heuristic, state: Option<&Snapshot>) -> 
         return candidates(m);
     }
     let rules_answer = || rules.clone().respond_to(m, state).ok();
-    let indices = |mut idx: Vec<usize>| {
-        idx.sort();
-        Response { indices: Some(idx.into_iter().map(|i| i as i64).collect()), ..Response::default() }
-    };
     let mut out: Vec<Response> = match m {
         Msg::SelectCard { min: 1, max: 1, .. } => return candidates(m),
         Msg::SelectCard { cards, .. } => card_sets(m, &rules.card_order(cards)),
         Msg::SelectUnselectCard { finishable, cancelable, select_cards, .. } => {
-            let mut out: Vec<Response> = rules.card_order(select_cards).into_iter().take(ROOT_COMBO_WIDTH).map(idx).collect();
+            let mut out: Vec<Response> = rules.card_order(select_cards).into_iter().take(ROOT_COMBO_WIDTH).map(|i| Response::index(i as i64)).collect();
             if *finishable != 0 || (*cancelable != 0 && select_cards.is_empty()) {
                 out.push(Response { finish: Some(true), ..Response::default() });
             }
@@ -102,7 +86,7 @@ pub fn root_candidates(m: &Msg, rules: &Heuristic, state: Option<&Snapshot>) -> 
                 sets.push((set.iter().map(|&i| card_value(&cards[i], card(cards[i].code))).sum(), set));
             }
             sets.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-            rules_answer().into_iter().chain(sets.into_iter().map(|(_, s)| indices(s))).collect()
+            rules_answer().into_iter().chain(sets.into_iter().map(|(_, s)| Response::cards(s))).collect()
         }
         Msg::SelectPosition { code, positions, .. } => {
             let order = if card(*code).is_some_and(|c| c.attack <= 0) {
@@ -148,7 +132,7 @@ pub fn root_candidates(m: &Msg, rules: &Heuristic, state: Option<&Snapshot>) -> 
             }
             out
         }
-        Msg::AnnounceNumber { values, .. } => (0..values.len()).map(idx).collect(),
+        Msg::AnnounceNumber { values, .. } => (0..values.len() as i64).map(Response::index).collect(),
         Msg::AnnounceRace { count: 1, available, .. } => (0..64).map(|i| 1u64 << i).filter(|b| available & b != 0).map(|b| Response { mask: Some(b), ..Response::default() }).collect(),
         Msg::AnnounceAttrib { count: 1, available, .. } => {
             (0..32).map(|i| 1u64 << i).filter(|b| *available as u64 & b != 0).map(|b| Response { mask: Some(b), ..Response::default() }).collect()
@@ -179,10 +163,6 @@ pub fn card_sets(m: &Msg, order: &[usize]) -> Vec<Response> {
     if *max < 1 || cards.is_empty() {
         return vec![];
     }
-    let indices = |mut idx: Vec<usize>| {
-        idx.sort();
-        Response { indices: Some(idx.into_iter().map(|i| i as i64).collect()), ..Response::default() }
-    };
     let n = cards.len();
     let lo = (*min).max(1).min(*max).min(n as u32) as usize;
     let hi = (*max as usize).min(n);
@@ -195,9 +175,9 @@ pub fn card_sets(m: &Msg, order: &[usize]) -> Vec<Response> {
         }
     }
     sets.sort_by_key(|(far, more, _)| (*far, *more));
-    let mut out: Vec<Response> = sets.into_iter().map(|(_, _, s)| indices(s)).collect();
+    let mut out: Vec<Response> = sets.into_iter().map(|(_, _, s)| Response::cards(s)).collect();
     if lo > top.len() {
-        out.push(indices(order[..lo].to_vec()));
+        out.push(Response::cards(order[..lo].to_vec()));
     }
     out.truncate(ROOT_COMBO_WIDTH);
     out
