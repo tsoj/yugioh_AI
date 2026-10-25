@@ -6,22 +6,6 @@ use crate::actions::{Command, Response};
 use crate::heuristic::db_attack;
 use crate::messages::Msg;
 
-/// A move's kind for the pruning margins: the prompt and the command kind, a chain's pass or
-/// chain, a yes or no.
-pub(super) fn move_kind(m: &Msg, c: &Response) -> String {
-    let t = m.name();
-    if let Some(k) = c.kind {
-        return format!("{t}:{}", k.name());
-    }
-    if matches!(m, Msg::SelectChain { .. }) {
-        return format!("{t}:{}", if c.index.unwrap_or(-1) < 0 { "pass" } else { "chain" });
-    }
-    if let Some(yes) = c.yes {
-        return format!("{t}:{}", if yes { "yes" } else { "no" });
-    }
-    t.to_string()
-}
-
 /// The rules' preference among an idle command's commands (the lowest first).
 fn idle_rank(command: Command) -> i32 {
     match command {
