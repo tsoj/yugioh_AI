@@ -42,9 +42,8 @@ the rerun: longest game 941 decisions).
 
 ## Running now
 
-- `hist-cards` SPRT vs main (since 2026-10-25 08:38, runs/sprt/hist-cards_20261025-083856.log; see
-  "Better move ordering" below).
-- Queued (2026-10-25, one at a time after it, each benched first; rebased if main changes):
+- `lmrlog` SPRT vs main next (hist-cards stopped 2026-10-25, see "Better move ordering").
+- Queued (2026-10-25, one at a time, each benched first; rebased if main changes):
   `lmrlog` (697e4a7: LMR round(0.5 + ln depth ln(i+1) / 2) plies, at least 1; at 1000 nodes it was
   +5.4 +/- 7.7 at 4280 games), `hist-decay` (3f780cf: history decay 0.5 -> 0.75, for the finer
   keys), `improving2` (643545c: improving rebased; +3.1 at 2720 games before), `probcut2`
@@ -289,12 +288,13 @@ See `docs/search-decisions.md` for what is and isn't searched.
         2^16); same bonus, malus, decay. Bench: depth 10 366742 nodes (main 362311), 3000n depth
         13.29 (13.05), same NPS. SPRT vs main (resumed with [0, 5] and 10000 openings at 902 games): ended at the cap, 20000
         games, +1.3 +/- 3.7, LLR -1.64 (was +8.6 at 4722 games, LLR +2.07): no gain, not merged.
-  - [ ] Card selections by history (user, 2026-10-25): branch `hist-cards` (8bd99ba). Below the
+  - [x] Card selections by history (user, 2026-10-25): branch `hist-cards` (8bd99ba). Below the
         root a card selection's card_width (3) searched choices are the first by the TT move and
         the history among all its choices (CARD_POOL 127: the TT keeps an i8 index into them; sets
         and sums have at most 5 anyway), not the policies' first 3; at the horizon the answer is that first choice (TT move,
-        else best history, the policy's order among equals) instead of the policy's first. SPRT vs main
-        (bench: depth 10 361955 nodes, main 362311; 3000n depth 13.27, main 13.05; same NPS).
+        else best history, the policy's order among equals) instead of the policy's first. Bench: depth 10 361955 nodes, main 362311; 3000n depth 13.27, main
+        13.05; same NPS. SPRT vs main [0, 5]: stopped by the user at 9320 games, -0.1 +/- 5.6, LLR
+        -1.58 (was +9.9 at 840 games, then flat at 0): no gain, not merged.
 
 ## Search: features
 
