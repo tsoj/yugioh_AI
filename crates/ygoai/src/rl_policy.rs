@@ -254,29 +254,10 @@ fn actions(prompt: &Msg, cands: &[Response], snap: &Snapshot, me: u32, hint: Opt
         .iter()
         .map(|c| {
             let (kind, entry, desc): (&str, Option<Entry>, Option<u64>) = match prompt {
-                Msg::SelectIdlecmd { summonable, spsummonable, repositionable, msetable, ssetable, activatable, .. } => {
-                    let kind = c.kind.as_deref().unwrap();
-                    let list = match kind {
-                        "summon" => Some(summonable),
-                        "spsummon" => Some(spsummonable),
-                        "repos" => Some(repositionable),
-                        "mset" => Some(msetable),
-                        "sset" => Some(ssetable),
-                        "activate" => Some(activatable),
-                        _ => None,
-                    };
-                    let e = list.map(|l| &l[c.index.unwrap() as usize]);
-                    (kind, e.map(Entry::of), e.and_then(|e| e.desc))
-                }
-                Msg::SelectBattlecmd { activatable, attackable, .. } => {
-                    let kind = c.kind.as_deref().unwrap();
-                    let list = match kind {
-                        "activate" => Some(activatable),
-                        "attack" => Some(attackable),
-                        _ => None,
-                    };
-                    let e = list.map(|l| &l[c.index.unwrap() as usize]);
-                    (kind, e.map(Entry::of), e.and_then(|e| e.desc))
+                Msg::SelectIdlecmd { .. } | Msg::SelectBattlecmd { .. } => {
+                    let command = c.kind.unwrap();
+                    let e = command.cards(prompt).map(|l| &l[c.index.unwrap() as usize]);
+                    (command.name(), e.map(Entry::of), e.and_then(|e| e.desc))
                 }
                 Msg::SelectChain { chains, .. } => match c.index.unwrap() {
                     i if i < 0 => ("pass", None, None),

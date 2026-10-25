@@ -221,26 +221,6 @@ pub fn option_order(m: &Msg, viewer: u32) -> BTreeMap<&'static str, Vec<usize>> 
     out
 }
 
-fn idle_list(kind: &str) -> Option<&'static str> {
-    Some(match kind {
-        "summon" => "summonable",
-        "spsummon" => "spsummonable",
-        "repos" => "repositionable",
-        "mset" => "msetable",
-        "sset" => "ssetable",
-        "activate" => "activatable",
-        _ => return None,
-    })
-}
-
-fn battle_list(kind: &str) -> Option<&'static str> {
-    Some(match kind {
-        "activate" => "activatable",
-        "attack" => "attackable",
-        _ => return None,
-    })
-}
-
 /// `list[i]` as Python indexes (negative from the end); an error out of range.
 fn py_index(list: &[usize], i: i64) -> Result<usize, InvalidResponse> {
     let j = if i < 0 { i + list.len() as i64 } else { i };
@@ -276,8 +256,7 @@ pub fn to_core_response(m: &Msg, viewer: u32, resp: &Response) -> Result<Respons
             let Some(i) = resp.index else { return Ok(out) };
             let key = match m {
                 SelectChain { .. } => (i >= 0).then_some("chains"),
-                SelectIdlecmd { .. } => resp.kind.as_deref().and_then(idle_list),
-                _ => resp.kind.as_deref().and_then(battle_list),
+                _ => resp.kind.filter(|k| k.cards(m).is_some()).and_then(|k| k.list_name()),
             };
             if let Some(key) = key {
                 out.index = Some(py_index(&option_order(m, viewer)[key], i)? as i64);

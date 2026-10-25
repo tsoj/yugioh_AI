@@ -4,7 +4,7 @@
 use ygo_core::constants::*;
 
 use super::params::{ROOT_COMBO_CARDS, ROOT_COMBO_WIDTH, SUM_STEPS};
-use crate::actions::{Response, available_places, battle_options, check_sum, idle_options};
+use crate::actions::{Command, Response, available_places, battle_options, check_sum, idle_options};
 use crate::heuristic::{Heuristic, card, card_value};
 use crate::messages::Msg;
 use crate::state::Snapshot;
@@ -30,7 +30,7 @@ pub fn is_searched(m: &Msg) -> bool {
 /// on nothing; the search chose it in 10.6% of its idle commands).
 pub fn candidates(m: &Msg) -> Vec<Response> {
     match m {
-        Msg::SelectIdlecmd { .. } => idle_options(m).into_iter().filter(|c| c.kind.as_deref() != Some("shuffle")).collect(),
+        Msg::SelectIdlecmd { .. } => idle_options(m).into_iter().filter(|c| c.kind != Some(Command::Shuffle)).collect(),
         Msg::SelectBattlecmd { .. } => battle_options(m),
         Msg::SelectChain { chains, forced, .. } => {
             let chain = (0..chains.len() as i64).map(Response::index);

@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use ygo_core::constants::*;
 
-use crate::actions::Response;
+use crate::actions::{Command, Response};
 use crate::game::{InitInfo, ObsItem};
 use crate::messages::{Card, Msg};
 use crate::observe::loc_visible;
@@ -328,8 +328,6 @@ pub struct Tracker {
     last_state: Option<(Snapshot, u64)>,
 }
 
-const COMMAND_LISTS: [(&str, &str); 4] = [("summon", "summonable"), ("spsummon", "spsummonable"), ("mset", "msetable"), ("sset", "ssetable")];
-
 /// The card lists of a prompt in the order the tracker reads them (with their keys).
 pub fn prompt_card_lists(p: &Msg) -> Vec<(&'static str, &[Card])> {
     use Msg::*;
@@ -355,11 +353,6 @@ pub fn prompt_card_lists(p: &Msg) -> Vec<(&'static str, &[Card])> {
         _ => {}
     }
     out
-}
-
-/// A command prompt's list by key.
-pub fn command_list<'a>(p: &'a Msg, key: &str) -> &'a [Card] {
-    prompt_card_lists(p).into_iter().find(|(k, _)| *k == key).map_or(&[], |(_, l)| l)
 }
 
 fn ids_set(it: impl IntoIterator<Item = VarId>) -> BTreeSet<VarId> {
@@ -1538,8 +1531,8 @@ impl Tracker {
             return Ok(());
         }
         let Msg::SelectIdlecmd { .. } = &p else { return Ok(()) };
-        let Some(key) = r.kind.as_deref().and_then(|k| COMMAND_LISTS.iter().find(|(c, _)| *c == k).map(|(_, l)| *l)) else { return Ok(()) };
-        let entries = command_list(&p, key);
+        // (summons and sets)
+        let Some(entries) = r.kind.filter(|k| matches!(k, Command::Summon | Command::Spsummon | Command::Mset | Command::Sset)).and_then(|k| k.cards(&p)) else { return Ok(()) };
         let i = r.index.unwrap_or(-1);
         if i >= 0 && (i as usize) < entries.len() {
             let e = &entries[i as usize];

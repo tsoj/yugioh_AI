@@ -13,6 +13,7 @@ use super::*;
 use crate::belief::completion::{card, is_extra_deck};
 use crate::belief::infer::{self, Li};
 use crate::belief::tracker::Kind;
+use crate::actions::Command;
 use crate::messages::Msg;
 use crate::state::{LOCATIONS, parse_location_query};
 
@@ -2319,10 +2320,9 @@ impl BeliefReplay {
         let lo = self.pos.saturating_sub(19);
         for j in (lo..self.pos).rev() {
             let ObsItem::Response(r) = &self.items[j] else { continue };
-            if matches!(r.kind.as_deref(), Some("summon") | Some("mset")) {
+            if let Some(command @ (Command::Summon | Command::Mset)) = r.kind {
                 let prompt = (j.saturating_sub(4)..j).rev().find_map(|k| if let ObsItem::Prompt(p, _) = &self.items[k] { Some(jv(p)) } else { None });
-                let key = if r.kind.as_deref() == Some("summon") { "summonable" } else { "msetable" };
-                let lst = prompt.as_ref().map_or(vec![], |p| p.g(key).l().to_vec());
+                let lst = prompt.as_ref().map_or(vec![], |p| p.g(command.list_name().unwrap()).l().to_vec());
                 let i = r.index.unwrap_or(-1);
                 return if i >= 0 && (i as usize) < lst.len() { Some(lst[i as usize].clone()) } else { None };
             }
@@ -2348,7 +2348,7 @@ impl BeliefReplay {
         let lo = self.pos.saturating_sub(11);
         for j in (lo..self.pos).rev() {
             let ObsItem::Response(r) = &self.items[j] else { continue };
-            if r.kind.as_deref() == Some("attack") {
+            if r.kind == Some(Command::Attack) {
                 let prompt = (j.saturating_sub(4)..j).rev().find_map(|k| if let ObsItem::Prompt(p, _) = &self.items[k] { Some(jv(p)) } else { None });
                 let lst = prompt.as_ref().map_or(vec![], |p| p.g("attackable").l().to_vec());
                 let i = r.index.unwrap_or(-1);
