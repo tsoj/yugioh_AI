@@ -459,15 +459,10 @@ impl SearchState<'_> {
         }
 
         let tune = self.tables.tune;
-        let collect_gaps = self.tables.stats.is_some() && depth <= 4.0;
-        let static_eval = (depth <= tune.futility_max_depth || collect_gaps).then(|| evaluate_at(duel, us, Some(prompt)));
-        let futility_value = static_eval.filter(|_| depth <= tune.futility_max_depth).map(|s| s + futility_margin(&tune, depth));
+        let futility_value = (depth <= tune.futility_max_depth).then(|| evaluate_at(duel, us, Some(prompt)) + futility_margin(&tune, depth));
 
         let ctx = key_context(duel, prompt, card_order.as_ref().and_then(|c| c.hint));
         let history_keys: Vec<usize> = moves.iter().map(|m| move_key(prompt, m, &ctx)).collect();
-        if let Some(st) = &mut self.tables.stats {
-            st.history_lookups(prompt, &moves, &history_keys, &ctx);
-        }
         let move_order = self.move_order(tt_move, &history_keys);
 
         let mut node_type = NodeType::AllNode;
@@ -513,14 +508,6 @@ impl SearchState<'_> {
                 _ => self.search_move(duel, prompt, mv, child, make_on)?,
             };
 
-            if let Some(s) = static_eval
-                && collect_gaps
-                && i > 0
-                && alpha.is_finite()
-                && let Some(st) = &mut self.tables.stats
-            {
-                st.futility_gap(prompt, mv, depth, alpha - s, value > alpha);
-            }
             if value > best_value {
                 (best_value, best_move) = (value, m);
             }

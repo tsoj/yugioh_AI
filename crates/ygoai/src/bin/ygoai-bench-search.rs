@@ -23,7 +23,7 @@ use ygoai::game::{DuelConfig, init, new_record, run_until_prompt};
 use ygoai::heuristic::Heuristic;
 use ygoai::matchrun::load_book_head;
 use ygoai::observe::{auto_response, is_hidden_prompt};
-use ygoai::search::stats::{Collisions, Extension, Reductions, Subtree, TtEntry, Width};
+use ygoai::search::stats::{Extension, Reductions, Subtree, TtEntry, Width};
 use ygoai::search::{AlphaBeta, NodeStats, SearchParams, candidates, is_searched};
 
 #[global_allocator]
@@ -99,9 +99,6 @@ fn main() {
                 let t = Instant::now();
                 let params = SearchParams { budget, elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2], max_nodes, depth, exact_root: false };
                 let (best, done) = ab.search(&duel, &p, &cands, &params);
-                if let Some(st) = &mut ab.stats {
-                    st.fold_history(false);
-                }
                 if let Some(f) = &mut best_out {
                     // (then the prompt, the extension's nodes in this search, and whether it extended
                     // the last iteration's main line)
@@ -128,15 +125,11 @@ fn main() {
             duel.ocg_set_response(&ygoai::actions::encode(&p, &resp).unwrap());
             prompt = Some(p);
         }
-        if let Some(mut st) = ab.stats.take() {
-            st.fold_history(true);
-            merge(&mut stats.hist_search, st.hist_search);
-            merge(&mut stats.hist_game, st.hist_game);
+        if let Some(st) = ab.stats.take() {
             merge(&mut stats.widths, st.widths);
             merge(&mut stats.lmr, st.lmr);
             merge(&mut stats.subtree, st.subtree);
             merge(&mut stats.cuts, st.cuts);
-            stats.gaps.extend(st.gaps);
         }
     }
     if let Some(path) = stats_path {
@@ -196,9 +189,6 @@ fn print_stats(st: &NodeStats, path: &str) {
     for (&(label, depth), t) in &st.subtree {
         writeln!(f, r#"{{"t": "subtree", "prompt": "{label}", "depth": {depth}, "nodes": {}, "subtree": {}}}"#, t.nodes, t.subtree_nodes).unwrap();
     }
-    for g in &st.gaps {
-        writeln!(f, r#"{{"t": "gap", "kind": "{}", "depth": {}, "gap": {}, "raised": {}}}"#, g.kind, g.depth, g.gap, g.raised).unwrap();
-    }
     print_widths(&st.widths);
     // cutoffs by prompt and TT entry, nodes with 2+ children
     println!("\n{:<10} {:<9} {:>9} {:>6} {:>8} {:>8} {:>8} {:>8}", "prompt", "TT", "nodes", "cut", "at 1st", "at 2nd", "at 3rd+", "children");
@@ -237,24 +227,6 @@ fn print_stats(st: &NodeStats, path: &str) {
     }
     for (i, r) in by_move {
         println!("  move {:>2}: {:>9} reduced, {:>5.1}% re-searched", i + 1, r.reduced, r.researched as f64 / r.reduced as f64 * 100.0);
-    }
-    for (name, by) in [("each search", &st.hist_search), ("each game", &st.hist_game)] {
-        println!("\nhistory collisions within {name}: move identities sharing a slot with another one, lookups in such slots");
-        let line = |label: &str, c: &Collisions| {
-            println!(
-                "  {label:<10} {:>8} identities {:>5.1}% shared, {:>10} lookups {:>5.1}% shared",
-                c.identities,
-                100.0 * c.shared_identities as f64 / c.identities as f64,
-                c.lookups,
-                100.0 * c.shared_lookups as f64 / c.lookups.max(1) as f64
-            )
-        };
-        let mut all = Collisions::default();
-        for (label, &c) in by {
-            line(label, &c);
-            all += c;
-        }
-        line("all", &all);
     }
     println!("\nmean subtree size (nodes) by depth (all prompts)");
     let mut by_depth: BTreeMap<i8, Subtree> = BTreeMap::new();
