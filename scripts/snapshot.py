@@ -29,12 +29,13 @@ _ENV = "YGOAI_SNAPSHOT"  # (set in the snapshot's process: the checkout it was t
 _KEEP_DAYS = 3
 
 
-def reexec(name: str) -> None:
-    """Runs the calling script again from a fresh snapshot of the code (nothing
-    to do when already running from one). Keeps the process id."""
+def reexec(name: str, ref: str | None = None) -> None:
+    """Runs the calling script again from a fresh snapshot of the code, of the
+    checkout or of the git commit `ref` (nothing to do when already running from
+    one). Keeps the process id."""
     if os.environ.get(_ENV):
         return
-    dst = make(name)
+    dst = make(name, ref)
     script = dst / Path(sys.argv[0]).resolve().relative_to(ROOT)
     print(f"running from the snapshot {dst}", flush=True)
     os.execve(sys.executable, [sys.executable, str(script), *sys.argv[1:]], dict(os.environ, **{_ENV: str(ROOT)}))

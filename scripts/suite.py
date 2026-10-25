@@ -197,6 +197,7 @@ def main() -> int:
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--accept", action="store_true", help="make the runs baselines even if something broke")
     ap.add_argument("-j", "--jobs", type=int, default=os.cpu_count())
+    ap.add_argument("--ref", help="the code of this git commit (a branch: its own Rust binding) instead of the checkout's")
     ap.add_argument("--quick", action="store_true",
                     help="only the reconstructions where regressions show (see _quick_cases); its runs never "
                          "become baselines")
@@ -217,7 +218,7 @@ def main() -> int:
     # (from a frozen copy of the code: edits during the run cannot mix in)
     sys.path.insert(0, str(ROOT / "scripts"))
     import snapshot
-    snapshot.reexec(f"suite-{args.tag}")
+    snapshot.reexec(f"suite-{args.tag}", args.ref)
     sys.path.insert(0, str(ROOT / "scripts"))
     import check_belief as cb
     from ygoai.parallel import Crash, run_parallel
