@@ -104,15 +104,6 @@ pub fn prompt_label(m: &Msg) -> &'static str {
     }
 }
 
-/// The options a prompt lists before the search's caps: the cards of a selection, else the
-/// candidates.
-pub(super) fn listed(m: &Msg, cands: usize) -> usize {
-    match m {
-        Msg::SelectCard { cards, .. } => cards.len(),
-        _ => cands,
-    }
-}
-
 fn kind_id(kind: &str) -> u128 {
     match kind {
         "summon" => 1,

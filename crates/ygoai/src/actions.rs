@@ -68,6 +68,23 @@ pub struct Response {
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
+impl Response {
+    /// The option at `index` (a chain's pass: -1).
+    pub fn index(index: i64) -> Response {
+        Response { index: Some(index), ..Response::default() }
+    }
+
+    pub fn yes(yes: bool) -> Response {
+        Response { yes: Some(yes), ..Response::default() }
+    }
+
+    /// The cards at `indices` of a selection (sorted).
+    pub fn cards(mut indices: Vec<usize>) -> Response {
+        indices.sort();
+        Response { indices: Some(indices.into_iter().map(|i| i as i64).collect()), ..Response::default() }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvalidResponse(pub String);
 

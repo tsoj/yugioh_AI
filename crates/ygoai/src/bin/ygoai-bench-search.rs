@@ -16,13 +16,15 @@
 
 use std::collections::BTreeMap;
 use std::io::Write;
+use std::ops::AddAssign;
 use std::time::Instant;
 
 use ygoai::game::{DuelConfig, init, new_record, run_until_prompt};
 use ygoai::heuristic::Heuristic;
 use ygoai::matchrun::load_book_head;
 use ygoai::observe::{auto_response, is_hidden_prompt};
-use ygoai::search::{AlphaBeta, NO_CUT, NodeStats, SearchParams, candidates, is_searched};
+use ygoai::search::stats::{Collisions, Extension, Reductions, Subtree, TtEntry, Width};
+use ygoai::search::{AlphaBeta, NodeStats, SearchParams, candidates, is_searched};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -45,9 +47,8 @@ fn main() {
     let mut heights: [Vec<i32>; 3] = Default::default();
     // (per search: the best move's share of the nodes, the time budget's scale)
     let mut tm: [Vec<f64>; 2] = Default::default();
-    // (the main-line extension: its nodes [all, decided, another card than the rules'], and the
-    // searches whose last iteration's main line it extended)
-    let (mut ext, mut ext_searches) = ([0u64; 3], 0u32);
+    // (the main-line extension's nodes, and the searches whose last iteration's main line it extended)
+    let (mut extension, mut ext_searches) = (Extension::default(), 0u32);
     let mut broken = 0u64;
     let stats_path = std::env::var("YGOAI_STATS").ok();
     let mut stats = NodeStats::default();
@@ -94,7 +95,7 @@ fn main() {
                 ab.prepare();
                 let before = ab.nodes;
                 let (bp, bh, bb) = (ab.tt_probes, ab.tt_hits, ab.broken);
-                let ext_before = ab.ext_nodes;
+                let extension_before = ab.extension;
                 let t = Instant::now();
                 let params = SearchParams { budget, elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2], max_nodes, depth, exact_root: false };
                 let (best, done) = ab.search(&duel, &p, &cands, &params);
@@ -104,7 +105,7 @@ fn main() {
                 if let Some(f) = &mut best_out {
                     // (then the prompt, the extension's nodes in this search, and whether it extended
                     // the last iteration's main line)
-                    writeln!(f, "{oi} {si} {best} {} {} {}", p.name(), ab.ext_nodes[0] - ext_before[0], (ab.pv_height > done) as u8).unwrap();
+                    writeln!(f, "{oi} {si} {best} {} {} {}", p.name(), ab.extension.nodes - extension_before.nodes, (ab.pv_height > done) as u8).unwrap();
                 }
                 si += 1;
                 checksum = checksum.wrapping_mul(0x100000001b3) ^ (best as u64) ^ ((done as u64) << 8) ^ ((ab.nodes - before) << 16);
@@ -115,9 +116,7 @@ fn main() {
                 broken += ab.broken - bb;
                 searches += 1;
                 depth_sum += done as i64;
-                for (k, e) in ext.iter_mut().enumerate() {
-                    *e += ab.ext_nodes[k] - ext_before[k];
-                }
+                extension += ab.extension - extension_before;
                 ext_searches += (ab.pv_height > done) as u32;
                 tm[0].push(ab.best_fraction);
                 tm[1].push(ab.tm_scale);
@@ -136,10 +135,8 @@ fn main() {
             merge(&mut stats.widths, st.widths);
             merge(&mut stats.lmr, st.lmr);
             merge(&mut stats.subtree, st.subtree);
+            merge(&mut stats.cuts, st.cuts);
             stats.gaps.extend(st.gaps);
-            for (k, n) in st.cuts {
-                *stats.cuts.entry(k).or_default() += n;
-            }
         }
     }
     if let Some(path) = stats_path {
@@ -153,11 +150,11 @@ fn main() {
     }
     println!(
         "main-line extension: {} nodes ({:.2}% of all), {} decided, {} of them ({:.1}%) another card than the rules'; it extended the last iteration's main line in {ext_searches} of {searches} searches",
-        ext[0],
-        100.0 * ext[0] as f64 / nodes.max(1) as f64,
-        ext[1],
-        ext[2],
-        100.0 * ext[2] as f64 / ext[1].max(1) as f64
+        extension.nodes,
+        100.0 * extension.nodes as f64 / nodes.max(1) as f64,
+        extension.decided,
+        extension.not_rules_first,
+        100.0 * extension.not_rules_first as f64 / extension.decided.max(1) as f64
     );
     for (name, v) in ["best move's node share", "time budget scale"].iter().zip(tm.iter_mut()) {
         v.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -177,108 +174,121 @@ fn main() {
     );
 }
 
-fn merge<K: Ord, const N: usize>(into: &mut BTreeMap<K, [u64; N]>, from: BTreeMap<K, [u64; N]>) {
+fn merge<K: Ord, V: AddAssign + Default>(into: &mut BTreeMap<K, V>, from: BTreeMap<K, V>) {
     for (k, v) in from {
-        let e = into.entry(k).or_insert([0; N]);
-        for i in 0..N {
-            e[i] += v[i];
-        }
+        *into.entry(k).or_default() += v;
     }
 }
 
 /// The tables, and the counts as JSON lines to `path`.
 fn print_stats(st: &NodeStats, path: &str) {
     let mut f = std::io::BufWriter::new(std::fs::File::create(path).expect("stats file"));
-    for (&(label, listed, children), &[n, visited]) in &st.widths {
-        writeln!(f, r#"{{"t": "width", "prompt": "{label}", "listed": {listed}, "children": {children}, "nodes": {n}, "visited": {visited}}}"#).unwrap();
+    for (&(label, listed, children), w) in &st.widths {
+        writeln!(f, r#"{{"t": "width", "prompt": "{label}", "listed": {listed}, "children": {children}, "nodes": {}, "visited": {}}}"#, w.nodes, w.searched).unwrap();
     }
     for (&(label, tt, children, cut), &n) in &st.cuts {
-        let cut = if cut == NO_CUT { "null".to_string() } else { cut.to_string() };
-        writeln!(f, r#"{{"t": "cut", "prompt": "{label}", "tt": {tt}, "children": {children}, "cut": {cut}, "nodes": {n}}}"#).unwrap();
+        let cut = cut.map_or("null".to_string(), |i| i.to_string());
+        writeln!(f, r#"{{"t": "cut", "prompt": "{label}", "tt": "{}", "children": {children}, "cut": {cut}, "nodes": {n}}}"#, tt.label()).unwrap();
     }
-    for (&(label, i), &[n, re]) in &st.lmr {
-        writeln!(f, r#"{{"t": "lmr", "prompt": "{label}", "move": {i}, "reduced": {n}, "researched": {re}}}"#).unwrap();
+    for (&(label, i), r) in &st.lmr {
+        writeln!(f, r#"{{"t": "lmr", "prompt": "{label}", "move": {i}, "reduced": {}, "researched": {}}}"#, r.reduced, r.researched).unwrap();
     }
-    for (&(label, depth), &[n, sub]) in &st.subtree {
-        writeln!(f, r#"{{"t": "subtree", "prompt": "{label}", "depth": {depth}, "nodes": {n}, "subtree": {sub}}}"#).unwrap();
+    for (&(label, depth), t) in &st.subtree {
+        writeln!(f, r#"{{"t": "subtree", "prompt": "{label}", "depth": {depth}, "nodes": {}, "subtree": {}}}"#, t.nodes, t.subtree_nodes).unwrap();
     }
-    for (kind, depth, gap, raised) in &st.gaps {
-        writeln!(f, r#"{{"t": "gap", "kind": "{kind}", "depth": {depth}, "gap": {gap}, "raised": {raised}}}"#).unwrap();
+    for g in &st.gaps {
+        writeln!(f, r#"{{"t": "gap", "kind": "{}", "depth": {}, "gap": {}, "raised": {}}}"#, g.kind, g.depth, g.gap, g.raised).unwrap();
     }
     print_widths(&st.widths);
-    // cutoffs by prompt and TT state, nodes with 2+ children
-    const TT: [&str; 5] = ["no entry", "no move", "exact", "lower", "upper"];
+    // cutoffs by prompt and TT entry, nodes with 2+ children
     println!("\n{:<10} {:<9} {:>9} {:>6} {:>8} {:>8} {:>8} {:>8}", "prompt", "TT", "nodes", "cut", "at 1st", "at 2nd", "at 3rd+", "children");
-    let mut by: BTreeMap<(&str, u8), [u64; 5]> = BTreeMap::new();
+    #[derive(Default)]
+    struct Cutoffs {
+        nodes: u64,
+        at: [u64; 3],
+        children: u64,
+    }
+    let mut by: BTreeMap<(&str, TtEntry), Cutoffs> = BTreeMap::new();
     for (&(label, tt, children, cut), &n) in &st.cuts {
         let e = by.entry((label, tt)).or_default();
-        e[0] += n;
-        e[4] += n * children as u64;
-        match cut {
-            NO_CUT => {}
-            0 => e[1] += n,
-            1 => e[2] += n,
-            _ => e[3] += n,
+        e.nodes += n;
+        e.children += n * children as u64;
+        if let Some(i) = cut {
+            e.at[(i as usize).min(2)] += n;
         }
     }
     for (&(label, tt), e) in &by {
-        let pct = |x: u64| x as f64 / e[0] as f64 * 100.0;
+        let pct = |x: u64| x as f64 / e.nodes as f64 * 100.0;
         println!(
             "{label:<10} {:<9} {:>9} {:>5.0}% {:>7.0}% {:>7.0}% {:>7.0}% {:>8.2}",
-            TT[tt as usize], e[0], pct(e[1] + e[2] + e[3]), pct(e[1]), pct(e[2]), pct(e[3]), e[4] as f64 / e[0] as f64
+            tt.label(),
+            e.nodes,
+            pct(e.at.iter().sum()),
+            pct(e.at[0]),
+            pct(e.at[1]),
+            pct(e.at[2]),
+            e.children as f64 / e.nodes as f64
         );
     }
     println!("\nLMR: re-searched share of the reduced searches, by move index (all prompts)");
-    let mut by_i: BTreeMap<u8, [u64; 2]> = BTreeMap::new();
-    for (&(_, i), v) in &st.lmr {
-        let e = by_i.entry(i).or_default();
-        e[0] += v[0];
-        e[1] += v[1];
+    let mut by_move: BTreeMap<u8, Reductions> = BTreeMap::new();
+    for (&(_, i), &r) in &st.lmr {
+        *by_move.entry(i).or_default() += r;
     }
-    for (i, [n, re]) in by_i {
-        println!("  move {:>2}: {:>9} reduced, {:>5.1}% re-searched", i + 1, n, re as f64 / n as f64 * 100.0);
+    for (i, r) in by_move {
+        println!("  move {:>2}: {:>9} reduced, {:>5.1}% re-searched", i + 1, r.reduced, r.researched as f64 / r.reduced as f64 * 100.0);
     }
     for (name, by) in [("each search", &st.hist_search), ("each game", &st.hist_game)] {
         println!("\nhistory collisions within {name}: move identities sharing a slot with another one, lookups in such slots");
-        let mut all = [0u64; 4];
-        for (label, e) in by {
-            println!("  {label:<10} {:>8} identities {:>5.1}% shared, {:>10} lookups {:>5.1}% shared", e[0], 100.0 * e[1] as f64 / e[0] as f64, e[2], 100.0 * e[3] as f64 / e[2].max(1) as f64);
-            for k in 0..4 {
-                all[k] += e[k];
-            }
+        let line = |label: &str, c: &Collisions| {
+            println!(
+                "  {label:<10} {:>8} identities {:>5.1}% shared, {:>10} lookups {:>5.1}% shared",
+                c.identities,
+                100.0 * c.shared_identities as f64 / c.identities as f64,
+                c.lookups,
+                100.0 * c.shared_lookups as f64 / c.lookups.max(1) as f64
+            )
+        };
+        let mut all = Collisions::default();
+        for (label, &c) in by {
+            line(label, &c);
+            all += c;
         }
-        println!("  {:<10} {:>8} identities {:>5.1}% shared, {:>10} lookups {:>5.1}% shared", "all", all[0], 100.0 * all[1] as f64 / all[0] as f64, all[2], 100.0 * all[3] as f64 / all[2].max(1) as f64);
+        line("all", &all);
     }
     println!("\nmean subtree size (nodes) by depth (all prompts)");
-    let mut by_d: BTreeMap<i8, [u64; 2]> = BTreeMap::new();
-    for (&(_, d), v) in &st.subtree {
-        let e = by_d.entry(d).or_default();
-        e[0] += v[0];
-        e[1] += v[1];
+    let mut by_depth: BTreeMap<i8, Subtree> = BTreeMap::new();
+    for (&(_, d), &t) in &st.subtree {
+        *by_depth.entry(d).or_default() += t;
     }
-    for (d, [n, sub]) in by_d {
-        println!("  depth {d:>2}: {n:>9} nodes, mean subtree {:>9.1}", sub as f64 / n as f64);
+    for (d, t) in by_depth {
+        println!("  depth {d:>2}: {:>9} nodes, mean subtree {:>9.1}", t.nodes, t.subtree_nodes as f64 / t.nodes as f64);
     }
 }
 
 /// The width table by prompt.
-fn print_widths(widths: &BTreeMap<(&'static str, u16, u16), [u64; 2]>) {
-    let mut by: BTreeMap<&str, Vec<(u16, u16, u64, u64)>> = BTreeMap::new();
-    for (&(label, listed, children), &[n, visited]) in widths {
-        by.entry(label).or_default().push((listed, children, n, visited));
+fn print_widths(widths: &BTreeMap<(&'static str, u16, u16), Width>) {
+    struct Row {
+        listed: u16,
+        children: u16,
+        width: Width,
     }
-    let total: u64 = widths.values().map(|v| v[0]).sum();
+    let mut by: BTreeMap<&str, Vec<Row>> = BTreeMap::new();
+    for (&(label, listed, children), &width) in widths {
+        by.entry(label).or_default().push(Row { listed, children, width });
+    }
+    let total: u64 = widths.values().map(|w| w.nodes).sum();
     println!("{:<10} {:>9} {:>6} {:>7} {:>8} {:>8}  children: share of the nodes with 1, 2, 3, 4-6, 7-11, 12", "prompt", "nodes", "share", "listed", "children", "searched");
     for (label, rows) in &by {
-        let n: u64 = rows.iter().map(|r| r.2).sum();
-        let mean = |f: &dyn Fn(&(u16, u16, u64, u64)) -> f64| rows.iter().map(|r| f(r) * r.2 as f64).sum::<f64>() / n as f64;
-        let share = |lo: u16, hi: u16| rows.iter().filter(|r| (lo..=hi).contains(&r.1)).map(|r| r.2).sum::<u64>() as f64 / n as f64 * 100.0;
+        let n: u64 = rows.iter().map(|r| r.width.nodes).sum();
+        let mean = |f: &dyn Fn(&Row) -> f64| rows.iter().map(|r| f(r) * r.width.nodes as f64).sum::<f64>() / n as f64;
+        let share = |lo: u16, hi: u16| rows.iter().filter(|r| (lo..=hi).contains(&r.children)).map(|r| r.width.nodes).sum::<u64>() as f64 / n as f64 * 100.0;
         println!(
             "{label:<10} {n:>9} {:>5.1}% {:>7.2} {:>8.2} {:>8.2}  {:>4.0}% {:>4.0}% {:>4.0}% {:>4.0}% {:>4.0}% {:>4.0}%",
             n as f64 / total as f64 * 100.0,
-            mean(&|r| r.0 as f64),
-            mean(&|r| r.1 as f64),
-            rows.iter().map(|r| r.3).sum::<u64>() as f64 / n as f64,
+            mean(&|r| r.listed as f64),
+            mean(&|r| r.children as f64),
+            rows.iter().map(|r| r.width.searched).sum::<u64>() as f64 / n as f64,
             share(1, 1), share(2, 2), share(3, 3), share(4, 6), share(7, 11), share(12, u16::MAX),
         );
     }

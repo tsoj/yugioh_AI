@@ -88,96 +88,70 @@ pub const FUTILITY_MARGIN_PER_PLY: f64 = 228.1061522305487;
 // and failed features are branches (on there), not flags: futility-reductions, inner-decisions,
 // pvext-open-window, pv-half-ply, pv-move-half-ply, lmr-linear.
 
-/// The search parameters that can be set at run time (for tuning, `ygoai-spsa`): by default the
-/// constants above; $YGOAI_TUNE as "name=value,..." overrides some (read once).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Tune {
-    pub card_width: usize,
-    pub root_card_width: usize,
-    pub lmr_min_depth: f64,
-    pub lmr_min_move_counter: usize,
-    pub lmr_reduction: f64,
-    pub futility_max_depth: f64,
-    pub futility_margin: f64,
-    pub futility_margin_per_ply: f64,
-    pub hist_decay: f64,
-    pub hist_exponent: f64,
-    pub hist_malus: f64,
+/// Declares `Tune`: per parameter its type, default and how a value set at run time is bounded
+/// (a count rounds to the nearest integer; depths are fractional).
+macro_rules! tunable {
+    ($($name:ident: $ty:ty = $default:expr, $bound:expr;)*) => {
+        /// The search parameters that can be set at run time (for tuning, `ygoai-spsa`): by default
+        /// the constants above; $YGOAI_TUNE as "name=value,..." overrides some (read once).
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        pub struct Tune {
+            $(pub $name: $ty,)*
+        }
+
+        impl Default for Tune {
+            fn default() -> Self {
+                Tune { $($name: $default,)* }
+            }
+        }
+
+        impl Tune {
+            /// The parameters' names, in a fixed order.
+            pub const NAMES: &[&str] = &[$(stringify!($name),)*];
+
+            /// The parameter `name`'s value (as a number).
+            pub fn get(&self, name: &str) -> Option<f64> {
+                match name {
+                    $(stringify!($name) => Some(self.$name as f64),)*
+                    _ => None,
+                }
+            }
+
+            /// Sets the parameter `name`; false for an unknown name.
+            pub fn set(&mut self, name: &str, value: f64) -> bool {
+                match name {
+                    $(stringify!($name) => {
+                        let bound: fn(f64) -> $ty = $bound;
+                        self.$name = bound(value)
+                    })*
+                    _ => return false,
+                }
+                true
+            }
+        }
+    };
 }
 
-impl Default for Tune {
-    fn default() -> Self {
-        Tune {
-            card_width: CARD_WIDTH,
-            root_card_width: ROOT_CARD_WIDTH,
-            lmr_min_depth: LMR_MIN_DEPTH,
-            lmr_min_move_counter: LMR_MIN_MOVE_COUNTER,
-            lmr_reduction: LMR_REDUCTION,
-            futility_max_depth: FUTILITY_MAX_DEPTH,
-            futility_margin: FUTILITY_MARGIN,
-            futility_margin_per_ply: FUTILITY_MARGIN_PER_PLY,
-            hist_decay: HIST_DECAY,
-            hist_exponent: HIST_EXPONENT,
-            hist_malus: HIST_MALUS,
-        }
-    }
+/// (a count: the nearest non-negative integer)
+fn count(value: f64) -> usize {
+    value.round().max(0.0) as usize
+}
+
+tunable! {
+    card_width: usize = CARD_WIDTH, |v| count(v).max(1);
+    root_card_width: usize = ROOT_CARD_WIDTH, |v| count(v).max(1);
+    lmr_min_depth: f64 = LMR_MIN_DEPTH, |v| v;
+    lmr_min_move_counter: usize = LMR_MIN_MOVE_COUNTER, count;
+    lmr_reduction: f64 = LMR_REDUCTION, |v| v.max(0.0);
+    futility_max_depth: f64 = FUTILITY_MAX_DEPTH, |v| v;
+    futility_margin: f64 = FUTILITY_MARGIN, |v| v;
+    futility_margin_per_ply: f64 = FUTILITY_MARGIN_PER_PLY, |v| v;
+    hist_decay: f64 = HIST_DECAY, |v| v.clamp(0.0, 1.0);
+    hist_exponent: f64 = HIST_EXPONENT, |v| v;
+    hist_malus: f64 = HIST_MALUS, |v| v.max(0.0);
 }
 
 impl Tune {
-    /// The parameters' names, in a fixed order.
-    pub const NAMES: [&'static str; 11] = [
-        "card_width",
-        "root_card_width",
-        "lmr_min_depth",
-        "lmr_min_move_counter",
-        "lmr_reduction",
-        "futility_max_depth",
-        "futility_margin",
-        "futility_margin_per_ply",
-        "hist_decay",
-        "hist_exponent",
-        "hist_malus",
-    ];
-
-    /// The parameter `name`'s value (as a number).
-    pub fn get(&self, name: &str) -> Option<f64> {
-        Some(match name {
-            "card_width" => self.card_width as f64,
-            "root_card_width" => self.root_card_width as f64,
-            "lmr_min_depth" => self.lmr_min_depth,
-            "lmr_min_move_counter" => self.lmr_min_move_counter as f64,
-            "lmr_reduction" => self.lmr_reduction,
-            "futility_max_depth" => self.futility_max_depth,
-            "futility_margin" => self.futility_margin,
-            "futility_margin_per_ply" => self.futility_margin_per_ply,
-            "hist_decay" => self.hist_decay,
-            "hist_exponent" => self.hist_exponent,
-            "hist_malus" => self.hist_malus,
-            _ => return None,
-        })
-    }
-
-    /// Sets the parameter `name` (a count to the nearest integer; depths are fractional); false for
-    /// an unknown name.
-    pub fn set(&mut self, name: &str, v: f64) -> bool {
-        let n = v.round().max(0.0);
-        match name {
-            "card_width" => self.card_width = (n as usize).max(1),
-            "root_card_width" => self.root_card_width = (n as usize).max(1),
-            "lmr_min_depth" => self.lmr_min_depth = v,
-            "lmr_min_move_counter" => self.lmr_min_move_counter = n as usize,
-            "lmr_reduction" => self.lmr_reduction = v.max(0.0),
-            "futility_max_depth" => self.futility_max_depth = v,
-            "futility_margin" => self.futility_margin = v,
-            "futility_margin_per_ply" => self.futility_margin_per_ply = v,
-            "hist_decay" => self.hist_decay = v.clamp(0.0, 1.0),
-            "hist_exponent" => self.hist_exponent = v,
-            "hist_malus" => self.hist_malus = v.max(0.0),
-            _ => return false,
-        }
-        true
-    }
-
     /// The defaults with "name=value,..." applied.
     pub fn parse(list: &str) -> Result<Tune, String> {
         let mut t = Tune::default();
