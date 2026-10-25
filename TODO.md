@@ -42,13 +42,14 @@ the rerun: longest game 941 decisions).
 
 ## Running now
 
-- Nothing (hist-cards and lmrlog stopped by the user 2026-10-25).
+- `hist-decay` (3f780cf: history decay 0.5 -> 0.75, for the finer keys) SPRT vs main (since
+  2026-10-25 13:42, runs/sprt/hist-decay_20261025-134235.log; bench: depth 10 362662 nodes, main 362311; 3000n depth 13.25, main 13.05; same NPS).
 - `lmrlog` (697e4a7: LMR round(0.5 + ln depth ln(i+1) / 2) plies, at least 1; at 1000 nodes it was
   +5.4 +/- 7.7 at 4280 games) SPRT vs main [0, 5]: stopped by the user at 1140 games, -16.5 +/-
   15.8, LLR -1.47 (bench: depth 10 324415 nodes, main 362311; 3000n depth 13.71, main 13.05; same
   NPS). Not merged.
-- Queued (2026-10-25, one at a time, each benched first; rebased if main changes): `hist-decay` (3f780cf: history decay 0.5 -> 0.75, for the finer
-  keys), `improving2` (643545c: improving rebased; +3.1 at 2720 games before), `probcut2`
+- Queued (2026-10-25, one at a time, each benched first; rebased if main changes):
+  `improving2` (643545c: improving rebased; +3.1 at 2720 games before), `probcut2`
   (9fadc3d: ProbCut rebased; +2.8 at 5380 games before). Candidates whose earlier runs ended
   slightly positive under [0, 10] and 5000 openings.
 
