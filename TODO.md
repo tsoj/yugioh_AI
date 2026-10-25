@@ -1,7 +1,9 @@
 # TODO
 
-Planned work, roughly in order. SPRTs run at 20+0.2 (since 2026-10-17; 30+0.3 before), SPRT [0, 10], with book
-`runs/books/match1.jsonl`, and are read by LLR. Results go to `runs/sprt/results.jsonl`.
+Planned work, roughly in order. SPRTs (`scripts/sprt_branch.sh`) run at 10+0.1, bounds [0, 5] and at
+most 10000 openings (20000 games) since 2026-10-25 ([0, 10] and 5000 before; 20+0.2 2026-10-17 to
+-19, 30+0.3 before), with book `runs/books/match2.jsonl` (lines 0..49999; match1.jsonl before
+2026-10-24), and are read by LLR. Results go to `runs/sprt/results.jsonl`.
 
 Since 2026-10-19 (OpenBench/fishtest style): main holds only what passed, always on, without flags
 to switch search methods; every experiment is a branch with the feature on by default, tested with
@@ -20,11 +22,13 @@ the rerun: longest game 941 decisions).
 
 ## Next (user's order, 2026-10-16)
 
-1. Different card guesses per iteration (below; the first-child extension failed).
+1. [x] Different card guesses per iteration (below): `resample` stopped near zero (2026-10-16).
 2. [x] A new data round with the current engine (labels from match-style records), train the same
    architecture (MLP16, mover2), SPRT it: done with the SPRT games as data (2026-10-21, H1 +17.2).
-3. More input features.
-4. Enough diverse openings for tests and datagen: match1.jsonl has 19996 lines (15535 pass
+3. More input features (see Evaluation: mover3/mover5 were tested on 2.45M / ~14M positions; the
+   SPRT data is now ~30M positions, ~200k games, so a retest is due; the engine evaluates only
+   mover2 since the cleanup, so a feature set needs its code back in `ygoai::datarow`'s eval).
+4. [x] Enough diverse openings for tests and datagen (match2.jsonl, ~55k, since 2026-10-24): match1.jsonl has 19996 lines (15535 pass
    book_min 2); SPRTs draw from the first 10000 (shuffled); the eval data used deck pairs from
    lines 10000-10999 (pairs500x20*.jsonl). Keep test and training openings apart and check how
    often SPRTs reuse openings (and decks) the nets were trained on. Urgent since 2026-10-21: the
@@ -38,11 +42,8 @@ the rerun: longest game 941 decisions).
 
 ## Running now
 
-- [x] Self-play data with repeated deck pairs (500 pairs x 20 games, both seat orders):
-      `runs/books/pairs500x20.jsonl` into `runs/data/pairs500x20_2000n.jsonl` (round 1; rounds 2 and
-      3 followed, see Evaluation).
-- [x] Self-play data for the eval: `ygoai-datagen`, 2000 nodes per search, 9996 games, in
-      `runs/data/selfplay_2000n.jsonl` (1.42M rows).
+- `hist-cards` SPRT vs main (since 2026-10-25 08:38, runs/sprt/hist-cards_20261025-083856.log; see
+  "Better move ordering" below).
 
 ## Search: represent every decision
 
@@ -102,7 +103,7 @@ See `docs/search-decisions.md` for what is and isn't searched.
         running since 17:15: **H1, +16.0 +/- 11.9 at 1438 games (LLR +2.98) → merged**. Ready for all: `tree-sum`
         rebased onto main (c2fbafd, the search unchanged), `tree-sum-policy` (6a857de) = set-policy
         + sums in the tree ordered by the set policy.
-- [ ] Set policy (user, 2026-10-23): the card policy for selections whose candidates are sets of
+- [x] Set policy (user, 2026-10-23): the card policy for selections whose candidates are sets of
       cards (several cards, sums, tributes): a set's score is its cards' scores summed (plus a
       weight per card). Data: `ygoai-card-refs --decisions --types ...` rows now carry each
       card's features, the rules' order and each candidate's cards (c644ee2); trainer
@@ -115,14 +116,14 @@ See `docs/search-decisions.md` for what is and isn't searched.
       `set-policy` (727cf9f): several cards ordered in the tree and answered at the horizon,
       sums answered, by the policy. Bench: depth 10 342737 nodes (342760), +0.1% instructions;
       3000n depth 13.41. SPRT: H0, +1.5 +/- 6.6 at 4842 games (not merged; kept in `tree-sum-policy`).
-  - [ ] Zones (branch `tree-place`, 6a8df12): the root's places (as listed, the rules take the
+  - [x] Zones (branch `tree-place`, 6a8df12): the root's places (as listed, the rules take the
         first) in the tree, the first CARD_WIDTH, inside a move at the horizon (d1: 26 per game,
         rules' answer best 0.967, 39 LP mean regret). Rebased onto c644ee2 (35a1522): depth 10
         520481 nodes in 446 searches (main 342760 in 370, +52%), 522.8G instructions (+58%);
         3000n depth 12.88 (13.41). Rebased onto the merged sums (42ef645; the same bench: 520443
         nodes, 523.0G instructions vs main 342737 / 331.3G; 3000n 12.88 vs 13.41). SPRT: H0,
         -7.6 +/- 12.8 at 1454 games.
-  - [ ] Zones with a place policy (user, 2026-10-23): narrow in the tree (the policy's first
+  - [x] Zones with a place policy (user, 2026-10-23): narrow in the tree (the policy's first
         PLACE_WIDTH = 2), the policy's answer at the horizon, the root all zones by the policy.
         Features per zone (`search::placepolicy`, on main 03796be): whose and which zone, the
         column, what is in the column and next to it, the link arrows pointing to it, the card
@@ -154,7 +155,7 @@ See `docs/search-decisions.md` for what is and isn't searched.
         0.552/0.877/153; sums 0.590/0.948/93 vs 0.596/0.957/62; tributes equal. Branch
         `indep-policies` (a1854c0: cp4_h16 + s2_h16). Bench: 10d 356184 nodes (342737), 3000n depth
         13.34 (13.41). SPRT H1: +26.7 +/- 16.7 at 822 games, LLR +3.00 -> merged.
-- [ ] The policies in place of the rules (user, 2026-10-24: where there is a policy, no rules).
+- [x] The policies in place of the rules (user, 2026-10-24: where there is a policy, no rules).
       Branch `set-pool` (e623952): the set policy builds its own pool from its cards' order (every
       set of its first 8 cards; sums searched in its order, up to 64; every valid tribute set) and
       chooses from it at the root (from the agent's reconstruction, `root_set_moves`, mapped back to
@@ -166,7 +167,7 @@ See `docs/search-decisions.md` for what is and isn't searched.
       tributes back to the rules) on match2: H0, -10.8 +/- 14.3 at 1288 games (LLR -2.99, penta
       [101, 0, 462, 0, 81]). The set policy's own pool does not help: sets stay with the rules'
       first 5 (indep-policies on main).
-- [ ] Does the book's filter hold for alpha-beta? (user, 2026-10-24) match1.jsonl was filtered by
+- [x] Does the book's filter hold for alpha-beta? (user, 2026-10-24; yes: see the strength ladder below) match1.jsonl was filtered by
       the old Python policy nets (make_match_book.py: up to 20 games per opening, both seats one
       net at temperature 1; --book-min 2 keeps 15535 of 19996), yet ~75% of the SPRTs' opening
       pairs go 1-1 (the same seat wins both). Test: main vs main at 10+0.1 on 500 openings the
@@ -177,7 +178,7 @@ See `docs/search-decisions.md` for what is and isn't searched.
       (0.854), regret3 262 (240); sets about equal; tributes top1 0.645 (0.666).
       Remaining with a policy but rules: none on main (zones: the place policy only on
       `tree-place-policy`, stopped).
-- [ ] Predict one-sided openings from their cards (user, 2026-10-24). scripts/build_onesided_data.py:
+- [x] Predict one-sided openings from their cards (user, 2026-10-24; used for match2, see below). scripts/build_onesided_data.py:
       10385 SPRT openings (132417 pairs, ~13 each; 73.7% seat-decided; per opening 16% always, only
       14.5% at most half). The old filter barely predicts it (book balance >= 0.3: 0.719, else 0.760).
       Cards: scripts/embed_cards.py (effect1 encoder, one set of pseudo-names; 13748 cards of
@@ -237,12 +238,15 @@ See `docs/search-decisions.md` for what is and isn't searched.
   - [ ] `SortCard`, `SortChain`
   - [ ] `SelectCounter`
   - [ ] cancel in selections, and unselecting in `SelectUnselectCard`
-- [ ] Widen the capped candidate lists once ordering and reductions can take it:
-      `CARD_WIDTH`, `MAX_CHILDREN`, `MULTI_CARDS`, `TRIBUTE_WIDTH`, `SUM_WIDTH`, `UNSELECT_WIDTH`.
+- [ ] Widen the capped candidate lists once ordering and reductions can take it: `CARD_WIDTH` (3,
+      card selections and sums below the root), `ROOT_CARD_WIDTH` (5), `ROOT_COMBO_WIDTH` /
+      `ROOT_COMBO_CARDS` (5 / 6: the sets of several cards, also in the tree). MAX_CHILDREN is gone
+      (2026-10-19); the old per-decision widths went with the 2026-10-18 cleanup.
 - [x] Budget search (node budgets instead of depth, shares by online cutoff statistics): every
       variant failed or was stopped near zero (runs/sprt/results.jsonl, 297c001..f8ed04f); removed
       in the search/ split. `YGOAI_STATS` (widths, cutoffs, LMR re-searches, subtree sizes) stays.
-  - [ ] Retest the decision features (`unselect` etc.) on the current search (`unselect` failed
+  - [x] Retest the decision features (`unselect` etc.) on the current search (done as the
+        tree-* round 2026-10-23, see "In-tree decisions in small steps") (`unselect` failed
         with one ply per node: H0, -19.8 Elo, 492 games).
 - [x] `MAX_DEPTH` was 12: the depth search (`lmr`) stopped there whatever its time (mean depth
       10.8 already at 3000 nodes). Now 100, a safety bound only (SPRT vs 12 stopped at 1420 games:
@@ -484,7 +488,7 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
     2026-10-16 (in LP: 583.4 + 233.4 * depth up to depth 8). Bench checksum 7ff0dd5b80995d11
     (1a362d951150a90d with `hand`), mean depth 12.71 at 3000 nodes (was 10.31).
   - [ ] Tune further (margins, max depth, per move kind) now that the units are LP.
-- [ ] Extend the first child when it is the TT move and the node has only 1 or 2 children: by 1 ply,
+- [x] Extend the first child when it is the TT move and the node has only 1 or 2 children: by 1 ply,
       or by a fraction of a ply (e.g. 0.5; needs fractional depth). `narrowext` (1 ply, up to
       height 2 * the iteration's depth): mean depth at 3000 nodes 12.71 -> 10.13 (in games 10.9 ->
       9.5); SPRT vs the default stopped heading to H0 at 1120 games, -6.5 +/- 14.6, LLR -2.07.
@@ -494,7 +498,8 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       `tt-ext-half` (da61632: half a ply). Bench (6 openings): depth 10 356184 nodes (main) ->
       832600 (+134%) / 557839 (+57%); at 3000 nodes mean nominal depth 13.34 -> 10.40 (tt-ext).
       Two moves are common here (every yes/no, a chain of one card plus pass). tt-ext-half
-      (rebased, 7a464b6) SPRT stopped by the user at 1720 games: +0.4 +/- 12.5, LLR -1.13.
+      (rebased, 7a464b6) SPRT stopped by the user at 1720 games: +0.4 +/- 12.5, LLR -1.13. Untried:
+      only at nodes with exactly 1 child.
 - [ ] qsearch, if retried: a TT in quiescence, cheaper chain windows (pass plus the best few
       answers), pruning of hopeless attacks.
 - Retested at the Rust speed and stopped near zero: PVS (H0), qsearch, futility, conthist,
@@ -502,11 +507,11 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
 
 ## Hidden information
 
-- [ ] Different card guesses and deck fillers in each iteration of the iterative deepening (the
+- [x] Different card guesses and deck fillers in each iteration of the iterative deepening (the
       opponent's hidden cards re-sampled per depth), instead of one guess for the whole search.
       Feature `resample` (c0342ea): the guessed cards still hidden get codes drawn from the deck
       model (presence-weighted, copies from the count model) within the observations'
-      requirements, ~1.7 ms per draw; SPRT vs the default running. TT and history unchanged.
+      requirements, ~1.7 ms per draw. TT and history unchanged. Removed in the 2026-10-18 cleanup.
       Stopped (2026-10-16): 30+0.3 at 480 games -14.5 +/- 22.7 (LLR -1.46); 1000 nodes at 960
       games -5.4 +/- 16.6 (LLR -1.46); T = 0.3 (`YGOAI_RESAMPLE_T`, 28ddb41) at 1000 nodes, 2300
       games +3.2 +/- 10.7 (LLR -0.62).
@@ -622,7 +627,7 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       Data-bound; on the full round 3 see Round 3 above.
 - [ ] More features: LP thresholds, ...
 - [ ] Later: the learned policy/value nets and effect-text embeddings (see memory).
-- [ ] Linear move policy (2026-10-21, branch `policy-linear`, search::policy): a weight per move
+- [x] Linear move policy (2026-10-21, branch `policy-linear`, search::policy): a weight per move
       feature (kind one-hot + ATK/DEF/level, attack margins, chain context), trained by
       scripts/train_policy_linear.py on the SPRT games' search choices (ygoai-refeature --features
       policy), orders the moves of the decisions that are not card selections (after TT move and
@@ -658,7 +663,7 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       At equal nodes (NODES=2000, the rollouts not counted, 600 games): -47.8 +/- 23.3, so the
       rollout's values are worse, not only its cost: the ordering's first move is what cuts off,
       not a good move to play out a turn with.
-- [ ] Greedy quiescence (user's idea, 2026-10-22, branch `quiesce-greedy`): at depth <= 0 the
+- [x] Greedy quiescence (user's idea, 2026-10-22, branch `quiesce-greedy`): at depth <= 0 the
       decision's player stands pat (static eval) or makes the ordering's first move (TT move,
       history, rules' order), the same at the next decisions, up to the next turn; beta cutoff on
       the stand pat. +41% instructions to depth 10. SPRT stopped at 6320 games, +6.5 +/- 6.3,
@@ -688,7 +693,7 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       (depth 13.42 vs 13.34). SPRT H1: +8.5 +/- 6.7 at 5348 games (LLR +3.01), merged (578c0ce).
       Main's depth-10 bench is now 343056 nodes, 331.3G instructions. Next: more card-ref data
       (the model is data-bound).
-  - [ ] Duel-state features (user, 2026-10-23; branch `card-policy-state`): what asks (the effect at
+  - [x] Duel-state features (user, 2026-10-23; branch `card-policy-state`): what asks (the effect at
         work: `core.reason_effect`, else the resolving link; its card's kind, categories, effect
         type; cost or resolution; chain length), the duel (turn, both sides' best battle stat,
         best attacker, face-down monsters, backrow, hand/grave/banished/deck/extra, Normal Summon
@@ -735,8 +740,8 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
         With the strict variant drifting to H0 and the wide one H0, the horizon-by-action
         direction is done for now.
 - [ ] Eval net forward in f32 / columns (branch `eval-f32`): the same search tree (depth-10
-      bench checksum eb7f41e9580dc935 as main), 1.0% fewer instructions. Too small for a [0, 10]
-      SPRT; the user's call whether to merge as a pure speedup.
+      bench checksum eb7f41e9580dc935 as main then), 1.0% fewer instructions. Too small for an
+      SPRT; the user's call whether to merge as a pure speedup (needs a rebase: main's eval changed).
 - [x] Chain quiescence (branch `quiesce-chain`): at depth <= 0 with a chain open, the rules
       resolve the chain before the static eval. Depth-10 nodes -2.2%, +12.9% instructions per
       node. SPRT H0: -6.5 +/- 12.2 at 1436 games (LLR -2.98).
@@ -781,8 +786,8 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
 ## Housekeeping
 
 - [ ] Repo cleanup: what is still needed of `ygoai/` (Python), `ygoai_rs/` and the other folders.
-- [ ] Remove the worktrees `wt-old` (main repo) and `wt-old-rust` (rust repo) in the scratchpad.
-- [ ] Push the rust submodule commits 2b7f988, 1354870, 935783d, 658b359 (ask first).
+- [x] Remove the worktrees `wt-old` (main repo) and `wt-old-rust` (rust repo) in the scratchpad (gone).
+- [x] Push the rust submodule commits 2b7f988, 1354870, 935783d, 658b359 (on origin/main).
 - [x] Resumable SPRTs (idea, 2026-10-22; done 04fa423): `ygoai-match --resume RECORDS` (the finished pairs of the
       records into the pentanomial, their openings skipped, same shuffle seed, records appended) and
       `RESUME=<log name>` in sprt_branch.sh (the old run's seed and binaries). Only under the same
