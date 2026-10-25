@@ -44,6 +44,12 @@ the rerun: longest game 941 decisions).
 
 - `hist-cards` SPRT vs main (since 2026-10-25 08:38, runs/sprt/hist-cards_20261025-083856.log; see
   "Better move ordering" below).
+- Queued (2026-10-25, one at a time after it, each benched first; rebased if main changes):
+  `lmrlog` (697e4a7: LMR round(0.5 + ln depth ln(i+1) / 2) plies, at least 1; at 1000 nodes it was
+  +5.4 +/- 7.7 at 4280 games), `hist-decay` (3f780cf: history decay 0.5 -> 0.75, for the finer
+  keys), `improving2` (643545c: improving rebased; +3.1 at 2720 games before), `probcut2`
+  (9fadc3d: ProbCut rebased; +2.8 at 5380 games before). Candidates whose earlier runs ended
+  slightly positive under [0, 10] and 5000 openings.
 
 ## Search: represent every decision
 
