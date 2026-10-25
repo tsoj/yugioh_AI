@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use ygo_core::constants::*;
 use ygo_core::types::CardData;
 
-use crate::actions::{Response, available_places, battle_options, idle_options};
+use crate::actions::{Command, Response, available_places, battle_options, idle_options};
 use crate::agents::random_response;
 use crate::game::{Agent, AgentError, card_db};
 use crate::messages::{Card, Msg};
@@ -134,10 +134,9 @@ impl Heuristic {
     /// chain decision), whose uses this turn are capped.
     fn capped_use<'a>(prompt: &'a Msg, r: &Response) -> Option<&'a Card> {
         let i = usize::try_from(r.index?).ok()?;
-        match (prompt, r.kind.as_deref()) {
+        match (prompt, r.kind) {
             (Msg::SelectChain { chains, .. }, _) => chains.get(i),
-            (Msg::SelectIdlecmd { activatable, .. }, Some("activate")) | (Msg::SelectBattlecmd { activatable, .. }, Some("activate")) => activatable.get(i),
-            (Msg::SelectIdlecmd { spsummonable, .. }, Some("spsummon")) => spsummonable.get(i),
+            (_, Some(command @ (Command::Activate | Command::Spsummon))) => command.cards(prompt)?.get(i),
             _ => None,
         }
     }
@@ -177,7 +176,7 @@ impl Heuristic {
             Msg::SelectBattlecmd { activatable, .. } => {
                 let opts = battle_options(prompt);
                 for o in &opts {
-                    if o.kind.as_deref() == Some("activate") {
+                    if o.kind == Some(Command::Activate) {
                         let e = &activatable[o.index.unwrap() as usize];
                         if self.allowed(e) {
                             self.note(e);
@@ -185,8 +184,8 @@ impl Heuristic {
                         }
                     }
                 }
-                for k in ["attack", "to_m2", "to_ep"] {
-                    if let Some(o) = opts.iter().find(|o| o.kind.as_deref() == Some(k)) {
+                for command in [Command::Attack, Command::ToM2, Command::ToEp] {
+                    if let Some(o) = opts.iter().find(|o| o.kind == Some(command)) {
                         return Ok(o.clone());
                     }
                 }
@@ -228,10 +227,10 @@ impl Heuristic {
         let Msg::SelectIdlecmd { summonable, spsummonable, repositionable, activatable, .. } = prompt else { unreachable!() };
         let me = self.player as usize;
         let opts = idle_options(prompt);
-        let by_kind = |k: &str| -> Vec<&Response> { opts.iter().filter(|o| o.kind.as_deref() == Some(k)).collect() };
+        let by_kind = |command: Command| -> Vec<&Response> { opts.iter().filter(|o| o.kind == Some(command)).collect() };
         if let Some(s) = state
             && s.phase == PHASE_MAIN2
-            && let Some(o) = by_kind("to_ep").first()
+            && let Some(o) = by_kind(Command::ToEp).first()
         {
             return (*o).clone(); // (after the battle: end the turn)
         }
@@ -249,7 +248,7 @@ impl Heuristic {
             })
             .unwrap_or(-1);
         // a. activate a card or effect
-        for o in by_kind("activate") {
+        for o in by_kind(Command::Activate) {
             let e = &activatable[o.index.unwrap() as usize];
             if self.allowed(e) {
                 self.note(e);
@@ -257,7 +256,7 @@ impl Heuristic {
             }
         }
         // b. Special Summon
-        for o in by_kind("spsummon") {
+        for o in by_kind(Command::Spsummon) {
             let e = &spsummonable[o.index.unwrap() as usize];
             if self.allowed(e) {
                 self.note(e);
@@ -265,18 +264,18 @@ impl Heuristic {
             }
         }
         // c. Normal Summon: on an empty field, or a monster stronger than the opponent's best
-        for o in by_kind("summon") {
+        for o in by_kind(Command::Summon) {
             if own.is_empty() || db_attack(summonable[o.index.unwrap() as usize].code) > opp_best {
                 return o.clone();
             }
         }
         // d. set a monster when behind on an empty field
         let behind = state.is_some_and(|s| s.lp[me] < s.lp[1 - me]);
-        if behind && own.is_empty() && let Some(o) = by_kind("mset").first() {
+        if behind && own.is_empty() && let Some(o) = by_kind(Command::Mset).first() {
             return (*o).clone();
         }
         // e. change the position of a monster stuck in Defense Position
-        for o in by_kind("repos") {
+        for o in by_kind(Command::Repos) {
             let c = &repositionable[o.index.unwrap() as usize];
             let here = state.filter(|_| c.loc == LOCATION_MZONE).and_then(|s| s.players[me].mzone.get(c.seq as usize).cloned().flatten());
             if here.is_some_and(|h| h.position.unwrap_or(0) & POS_DEFENSE != 0) {
@@ -285,12 +284,12 @@ impl Heuristic {
         }
         // f. battle, with an attacker that has ATK
         let attackers = own.iter().any(|c| c.position.unwrap_or(0) & POS_FACEUP_ATTACK != 0 && c.attack.unwrap_or(0) > 0);
-        if attackers && let Some(o) = by_kind("to_bp").first() {
+        if attackers && let Some(o) = by_kind(Command::ToBp).first() {
             return (*o).clone();
         }
         // g. set a Spell/Trap, h. Normal Summon anyway, i. end the turn
-        for k in ["sset", "summon", "to_ep"] {
-            if let Some(o) = by_kind(k).first() {
+        for command in [Command::Sset, Command::Summon, Command::ToEp] {
+            if let Some(o) = by_kind(command).first() {
                 return (*o).clone();
             }
         }

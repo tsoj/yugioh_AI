@@ -10,7 +10,7 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use ygo_core::constants::*;
 
-use crate::actions::{Response, available_places, battle_options, check_sum, idle_options};
+use crate::actions::{Command, Response, available_places, battle_options, check_sum, idle_options};
 use crate::agents::{random_response, random_sum_selection};
 use crate::messages::{Card, Loc, Msg};
 use crate::pyrandom::PyRandom;
@@ -90,10 +90,6 @@ pub type Inferred = (Vec<Response>, Certain);
 
 fn idx(i: usize) -> Response {
     Response { index: Some(i as i64), ..Response::default() }
-}
-
-fn kind(k: &str, i: Option<usize>) -> Response {
-    Response { kind: Some(k.into()), index: i.map(|i| i as i64), ..Response::default() }
 }
 
 fn indices(v: Vec<usize>) -> Response {
@@ -194,39 +190,30 @@ pub fn match_chaining(options: &[Card], ch: &Msg, before: &[Msg]) -> Vec<usize> 
 /// Phase (23) or the Battle Step (29)
 pub const PHASE_LEAVE_EVENTS: [u64; 2] = [23, 29];
 
-fn flag(prompt: &Msg, k: &str) -> bool {
-    match (prompt, k) {
-        (Msg::SelectIdlecmd { to_bp, .. }, "to_bp") => *to_bp != 0,
-        (Msg::SelectIdlecmd { to_ep, .. }, "to_ep") | (Msg::SelectBattlecmd { to_ep, .. }, "to_ep") => *to_ep != 0,
-        (Msg::SelectBattlecmd { to_m2, .. }, "to_m2") => *to_m2 != 0,
-        (Msg::SelectIdlecmd { can_shuffle, .. }, "can_shuffle") => *can_shuffle != 0,
-        _ => false,
-    }
-}
-
 /// Candidates if `m` is the window opened by a phase-change command.
-fn phase_leave(prompt: &Msg, m: &Msg, up_ext: &[Msg], moves: &[(u32, &'static str)]) -> Option<Inferred> {
+fn phase_leave(prompt: &Msg, m: &Msg, up_ext: &[Msg], moves: &[(u32, Command)]) -> Option<Inferred> {
     let (ht, _, data) = hint(m)?;
     if ht != HINT_EVENT || !PHASE_LEAVE_EVENTS.contains(&data) {
         return None;
     }
-    let mut kinds: Vec<&str> = moves.iter().map(|m| m.1).filter(|k| flag(prompt, k)).collect();
-    if kinds.is_empty() {
+    let mut commands: Vec<Command> = moves.iter().map(|m| m.1).filter(|c| c.offered(prompt)).collect();
+    if commands.is_empty() {
         return None;
     }
     // the phase entered afterwards
     let target = up_ext.iter().find_map(|x| if let Msg::NewPhase { phase } = x { Some(moves.iter().find(|m| m.0 == *phase).map(|m| m.1)) } else { None }).flatten();
     if let Some(t) = target
-        && let Some(p) = kinds.iter().position(|&k| k == t)
+        && let Some(p) = commands.iter().position(|&c| c == t)
     {
-        kinds.remove(p);
-        kinds.insert(0, t);
+        commands.remove(p);
+        commands.insert(0, t);
     }
-    Some((kinds.into_iter().map(|k| kind(k, None)).collect(), Certain::Yes))
+    Some((commands.into_iter().map(|c| Response::command(c, None)).collect(), Certain::Yes))
 }
 
-fn list_of<'a>(prompt: &'a Msg, key: &str) -> &'a [Card] {
-    crate::belief::tracker::command_list(prompt, key)
+/// The cards of the prompt that `command` takes one of (none if the prompt has no such list).
+fn cards_of(prompt: &Msg, command: Command) -> &[Card] {
+    command.cards(prompt).unwrap_or(&[])
 }
 
 pub fn infer_idle(prompt: &Msg, up: &[Msg], up_ext: Option<&[Msg]>) -> Inferred {
@@ -234,32 +221,25 @@ pub fn infer_idle(prompt: &Msg, up: &[Msg], up_ext: Option<&[Msg]>) -> Inferred 
     let ext = up_ext.unwrap_or(&[]);
     for (i, m) in up.iter().enumerate() {
         let before = &up[..i];
-        if let Some(l) = phase_leave(prompt, m, ext, &[(PHASE_BATTLE_START, "to_bp"), (PHASE_END, "to_ep")]) {
+        if let Some(l) = phase_leave(prompt, m, ext, &[(PHASE_BATTLE_START, Command::ToBp), (PHASE_END, Command::ToEp)]) {
             return l;
         }
         match m {
             Msg::Chaining { .. } => {
-                let ix = match_chaining(list_of(prompt, "activatable"), m, before);
+                let ix = match_chaining(cards_of(prompt, Command::Activate), m, before);
                 if !ix.is_empty() {
                     let c = ix.len() == 1;
-                    return (ix.into_iter().map(|j| kind("activate", Some(j))).collect(), c.into());
+                    return (ix.into_iter().map(|j| Response::command(Command::Activate, Some(j))).collect(), c.into());
                 }
                 break;
             }
             Msg::Summoning { code, loc, .. } | Msg::Spsummoning { code, loc, .. } | Msg::Set { code, loc, .. } | Msg::Flipsummoning { code, loc, .. } => {
-                let key = match m {
-                    Msg::Summoning { .. } => "summon",
-                    Msg::Spsummoning { .. } => "spsummon",
-                    Msg::Flipsummoning { .. } => "repos",
-                    _ if *loc == LOCATION_MZONE => "mset",
-                    _ => "sset",
-                };
-                let lst = match key {
-                    "summon" => "summonable",
-                    "spsummon" => "spsummonable",
-                    "repos" => "repositionable",
-                    "mset" => "msetable",
-                    _ => "ssetable",
+                let command = match m {
+                    Msg::Summoning { .. } => Command::Summon,
+                    Msg::Spsummoning { .. } => Command::Spsummon,
+                    Msg::Flipsummoning { .. } => Command::Repos,
+                    _ if *loc == LOCATION_MZONE => Command::Mset,
+                    _ => Command::Sset,
                 };
                 let ml = msg_li(m).unwrap();
                 let mut src = if matches!(m, Msg::Flipsummoning { .. }) { Some(ml) } else { source_of(&ml, before) };
@@ -271,7 +251,7 @@ pub fn infer_idle(prompt: &Msg, up: &[Msg], up_ext: Option<&[Msg]>) -> Inferred 
                 {
                     src = None; // (the pile was shuffled since the prompt: its positions are others)
                 }
-                let entries = list_of(prompt, lst);
+                let entries = cards_of(prompt, command);
                 let mut cands: Vec<usize> = vec![];
                 if let Some(s) = src {
                     cands = (0..entries.len()).filter(|&j| same_loc(&(&entries[j]).into(), &s)).collect();
@@ -281,7 +261,7 @@ pub fn infer_idle(prompt: &Msg, up: &[Msg], up_ext: Option<&[Msg]>) -> Inferred 
                 }
                 if !cands.is_empty() {
                     let c = cands.len() == 1;
-                    return (cands.into_iter().map(|j| kind(key, Some(j))).collect(), c.into());
+                    return (cands.into_iter().map(|j| Response::command(command, Some(j))).collect(), c.into());
                 }
                 break;
             }
@@ -291,11 +271,11 @@ pub fn infer_idle(prompt: &Msg, up: &[Msg], up_ext: Option<&[Msg]>) -> Inferred 
             && before.iter().all(|x| matches!(x, Msg::Hint { .. } | Msg::CardHint { .. }))
         {
             // a Pendulum Summon announces the Pendulum Scales first
-            let sp = list_of(prompt, "spsummonable");
+            let sp = cards_of(prompt, Command::Spsummon);
             let cands: Vec<usize> = (0..sp.len()).filter(|&j| sp[j].loc == LOCATION_SZONE && cards.iter().any(|c| same_loc(&(&sp[j]).into(), &c.into()))).collect();
             if !cands.is_empty() {
                 let c = cands.len() == 1;
-                return (cands.into_iter().map(|j| kind("spsummon", Some(j))).collect(), c.into());
+                return (cands.into_iter().map(|j| Response::command(Command::Spsummon, Some(j))).collect(), c.into());
             }
         }
         if let Msg::PosChange { prev_pos, pos, .. } = m
@@ -306,32 +286,32 @@ pub fn infer_idle(prompt: &Msg, up: &[Msg], up_ext: Option<&[Msg]>) -> Inferred 
             continue; // (forced once a field spell left)
         }
         if let Msg::PosChange { loc: LOCATION_MZONE, .. } = m {
-            let rep = list_of(prompt, "repositionable");
+            let rep = cards_of(prompt, Command::Repos);
             let ml = msg_li(m).unwrap();
             let cands: Vec<usize> = (0..rep.len()).filter(|&j| same_loc(&(&rep[j]).into(), &ml)).collect();
             if !cands.is_empty() {
                 let c = cands.len() == 1;
-                return (cands.into_iter().map(|j| kind("repos", Some(j))).collect(), c.into());
+                return (cands.into_iter().map(|j| Response::command(Command::Repos, Some(j))).collect(), c.into());
             }
             break;
         }
         if let Msg::NewPhase { phase } = m {
-            if *phase == PHASE_BATTLE_START && flag(prompt, "to_bp") {
-                return (vec![kind("to_bp", None)], Certain::Yes);
+            if *phase == PHASE_BATTLE_START && Command::ToBp.offered(prompt) {
+                return (vec![Response::command(Command::ToBp, None)], Certain::Yes);
             }
-            if flag(prompt, "to_ep") {
-                return (vec![kind("to_ep", None)], Certain::Yes);
+            if Command::ToEp.offered(prompt) {
+                return (vec![Response::command(Command::ToEp, None)], Certain::Yes);
             }
             break;
         }
         if let Msg::ShuffleHand { player, .. } = m
-            && flag(prompt, "can_shuffle")
+            && Command::Shuffle.offered(prompt)
             && Some(*player) == prompt.player()
             && i == 0
         {
             // the shuffle command shuffles right away
-            let mut c = vec![kind("shuffle", None)];
-            c.extend(opts.iter().filter(|o| o.kind.as_deref() != Some("shuffle")).cloned());
+            let mut c = vec![Response::command(Command::Shuffle, None)];
+            c.extend(opts.iter().filter(|o| o.kind != Some(Command::Shuffle)).cloned());
             return (c, Certain::Yes);
         }
         if matches!(
@@ -364,11 +344,11 @@ pub fn infer_idle(prompt: &Msg, up: &[Msg], up_ext: Option<&[Msg]>) -> Inferred 
         break;
     }
     let phase = next_phase(ext);
-    if phase == Some(PHASE_BATTLE_START) && flag(prompt, "to_bp") {
-        return (vec![kind("to_bp", None)], Certain::Yes);
+    if phase == Some(PHASE_BATTLE_START) && Command::ToBp.offered(prompt) {
+        return (vec![Response::command(Command::ToBp, None)], Certain::Yes);
     }
-    if matches!(phase, Some(PHASE_END) | Some(PHASE_MAIN2)) && flag(prompt, "to_ep") {
-        return (vec![kind("to_ep", None)], Certain::Yes);
+    if matches!(phase, Some(PHASE_END) | Some(PHASE_MAIN2)) && Command::ToEp.offered(prompt) {
+        return (vec![Response::command(Command::ToEp, None)], Certain::Yes);
     }
     (opts, Certain::No)
 }
@@ -390,33 +370,33 @@ pub fn infer_battle(prompt: &Msg, up: &[Msg], up_ext: Option<&[Msg]>) -> Inferre
     let opts = battle_options(prompt);
     let ext = up_ext.unwrap_or(&[]);
     for (i, m) in up.iter().enumerate() {
-        if let Some(l) = phase_leave(prompt, m, ext, &[(PHASE_MAIN2, "to_m2"), (PHASE_END, "to_ep")]) {
+        if let Some(l) = phase_leave(prompt, m, ext, &[(PHASE_MAIN2, Command::ToM2), (PHASE_END, Command::ToEp)]) {
             return l;
         }
         match m {
             Msg::Chaining { .. } => {
-                let ix = match_chaining(list_of(prompt, "activatable"), m, &up[..i]);
+                let ix = match_chaining(cards_of(prompt, Command::Activate), m, &up[..i]);
                 if !ix.is_empty() {
                     let c = ix.len() == 1;
-                    return (ix.into_iter().map(|j| kind("activate", Some(j))).collect(), c.into());
+                    return (ix.into_iter().map(|j| Response::command(Command::Activate, Some(j))).collect(), c.into());
                 }
                 break;
             }
             Msg::Attack { attacker, .. } => {
-                let att = list_of(prompt, "attackable");
+                let att = cards_of(prompt, Command::Attack);
                 let cands: Vec<usize> = (0..att.len()).filter(|&j| same_loc(&(&att[j]).into(), &attacker.into())).collect();
                 if !cands.is_empty() {
                     let c = cands.len() == 1;
-                    return (cands.into_iter().map(|j| kind("attack", Some(j))).collect(), c.into());
+                    return (cands.into_iter().map(|j| Response::command(Command::Attack, Some(j))).collect(), c.into());
                 }
                 break;
             }
             Msg::NewPhase { phase } => {
-                if *phase == PHASE_MAIN2 && flag(prompt, "to_m2") {
-                    return (vec![kind("to_m2", None)], Certain::Yes);
+                if *phase == PHASE_MAIN2 && Command::ToM2.offered(prompt) {
+                    return (vec![Response::command(Command::ToM2, None)], Certain::Yes);
                 }
-                if flag(prompt, "to_ep") {
-                    return (vec![kind("to_ep", None)], Certain::Yes);
+                if Command::ToEp.offered(prompt) {
+                    return (vec![Response::command(Command::ToEp, None)], Certain::Yes);
                 }
                 break;
             }
@@ -425,11 +405,11 @@ pub fn infer_battle(prompt: &Msg, up: &[Msg], up_ext: Option<&[Msg]>) -> Inferre
         }
     }
     let phase = next_phase(ext);
-    if phase == Some(PHASE_MAIN2) && flag(prompt, "to_m2") {
-        return (vec![kind("to_m2", None)], Certain::Yes);
+    if phase == Some(PHASE_MAIN2) && Command::ToM2.offered(prompt) {
+        return (vec![Response::command(Command::ToM2, None)], Certain::Yes);
     }
-    if phase == Some(PHASE_END) && flag(prompt, "to_ep") {
-        return (vec![kind("to_ep", None)], Certain::Yes);
+    if phase == Some(PHASE_END) && Command::ToEp.offered(prompt) {
+        return (vec![Response::command(Command::ToEp, None)], Certain::Yes);
     }
     (opts, Certain::No)
 }
@@ -1017,18 +997,8 @@ pub fn response_card_ids(lm: &LocMap, prompt: &Msg, resp: Option<&Response>) -> 
     let mut cards: Vec<Li> = Vec::new();
     match prompt {
         Msg::SelectIdlecmd { .. } | Msg::SelectBattlecmd { .. } => {
-            let lst = match (prompt, resp.kind.as_deref()) {
-                (Msg::SelectIdlecmd { .. }, Some("summon")) => Some("summonable"),
-                (Msg::SelectIdlecmd { .. }, Some("spsummon")) => Some("spsummonable"),
-                (Msg::SelectIdlecmd { .. }, Some("repos")) => Some("repositionable"),
-                (Msg::SelectIdlecmd { .. }, Some("mset")) => Some("msetable"),
-                (Msg::SelectIdlecmd { .. }, Some("sset")) => Some("ssetable"),
-                (_, Some("activate")) => Some("activatable"),
-                (Msg::SelectBattlecmd { .. }, Some("attack")) => Some("attackable"),
-                _ => None,
-            };
-            if let (Some(l), Some(i)) = (lst, resp.index)
-                && let Some(c) = list_of(prompt, l).get(i as usize)
+            if let (Some(list), Some(i)) = (resp.kind.and_then(|k| k.cards(prompt)), resp.index)
+                && let Some(c) = list.get(i as usize)
             {
                 cards.push(c.into());
             }

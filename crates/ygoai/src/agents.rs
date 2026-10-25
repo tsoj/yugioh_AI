@@ -6,7 +6,7 @@ use std::sync::{Mutex, OnceLock};
 
 use ygo_core::constants::*;
 
-use crate::actions::{DeclCard, Response, available_places, battle_options, check_sum, idle_options, is_declarable};
+use crate::actions::{Command, DeclCard, Response, available_places, battle_options, check_sum, idle_options, is_declarable};
 use crate::game::{Agent, AgentError, card_db};
 use crate::messages::Msg;
 use crate::pyrandom::PyRandom;
@@ -265,19 +265,19 @@ impl Agent for GreedyAgent {
         }
     }
     fn respond(&mut self, prompt: &Msg, _state: Option<&Snapshot>, _clock: Option<(f64, f64)>) -> Result<Response, AgentError> {
-        let kind_is = |o: &Response, k: &str| o.kind.as_deref() == Some(k);
         match prompt {
             Msg::SelectIdlecmd { activatable, spsummonable, .. } => {
                 let opts = idle_options(prompt);
-                for kind in ["activate", "spsummon", "summon", "sset", "mset", "to_bp", "to_ep"] {
-                    let list = match kind {
-                        "activate" => Some(activatable),
-                        "spsummon" => Some(spsummonable),
+                for command in [Command::Activate, Command::Spsummon, Command::Summon, Command::Sset, Command::Mset, Command::ToBp, Command::ToEp] {
+                    // (the uses per turn are capped of activations and Special Summons)
+                    let list = match command {
+                        Command::Activate => Some(activatable),
+                        Command::Spsummon => Some(spsummonable),
                         _ => None,
                     };
                     let cands: Vec<Response> = opts
                         .iter()
-                        .filter(|o| kind_is(o, kind) && list.is_none_or(|l| self.allowed(&l[o.index.unwrap() as usize])))
+                        .filter(|o| o.kind == Some(command) && list.is_none_or(|l| self.allowed(&l[o.index.unwrap() as usize])))
                         .cloned()
                         .collect();
                     if !cands.is_empty() {
@@ -293,18 +293,18 @@ impl Agent for GreedyAgent {
             Msg::SelectBattlecmd { activatable, .. } => {
                 let opts = battle_options(prompt);
                 let acts: Vec<Response> =
-                    opts.iter().filter(|o| kind_is(o, "activate") && self.allowed(&activatable[o.index.unwrap() as usize])).cloned().collect();
+                    opts.iter().filter(|o| o.kind == Some(Command::Activate) && self.allowed(&activatable[o.index.unwrap() as usize])).cloned().collect();
                 if !acts.is_empty() {
                     let choice = self.pick(&acts)?;
                     self.note(&activatable[choice.index.unwrap() as usize]);
                     return Ok(choice);
                 }
-                let attacks: Vec<Response> = opts.iter().filter(|o| kind_is(o, "attack")).cloned().collect();
+                let attacks: Vec<Response> = opts.iter().filter(|o| o.kind == Some(Command::Attack)).cloned().collect();
                 if !attacks.is_empty() {
                     return self.pick(&attacks);
                 }
-                for kind in ["to_m2", "to_ep"] {
-                    if let Some(o) = opts.iter().find(|o| kind_is(o, kind)) {
+                for command in [Command::ToM2, Command::ToEp] {
+                    if let Some(o) = opts.iter().find(|o| o.kind == Some(command)) {
                         return Ok(o.clone());
                     }
                 }

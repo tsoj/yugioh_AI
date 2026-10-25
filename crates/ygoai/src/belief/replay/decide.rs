@@ -8,11 +8,11 @@ use ygo_core::constants::*;
 
 use super::util::jv;
 use super::*;
-use crate::actions::{Response, battle_options, encode, idle_options};
+use crate::actions::{Command, Response, battle_options, encode, idle_options};
 use crate::belief::completion::{card, fits_need, is_extra_deck, monster_sset_codes};
 use crate::belief::infer::{self, Certain, Li};
 use crate::belief::script_index as si;
-use crate::belief::tracker::{Kind, Need, command_list, leaves_field};
+use crate::belief::tracker::{Kind, Need, leaves_field};
 use crate::messages::{Card, Msg};
 use crate::state::capture;
 
@@ -202,7 +202,7 @@ impl BeliefReplay {
         let options: Vec<(u32, Option<u64>)> = match prompt {
             Msg::SelectEffectyn { code, desc, .. } => vec![(*code, Some(*desc))],
             Msg::SelectChain { chains, .. } => chains.iter().map(|o| (o.code, o.desc)).collect(),
-            _ => command_list(prompt, "activatable").iter().map(|o| (o.code, o.desc)).collect(),
+            _ => Command::Activate.cards(prompt).unwrap_or(&[]).iter().map(|o| (o.code, o.desc)).collect(),
         };
         if options.iter().any(|&(c, d)| c == code && d.unwrap_or(desc) == desc) {
             return Ok(());
@@ -590,7 +590,7 @@ impl BeliefReplay {
             }
         }
         let Some(code) = code else { return Ok(()) };
-        if command_list(prompt, "spsummonable").iter().any(|e| e.code == code && e.loc == LOCATION_HAND) {
+        if Command::Spsummon.cards(prompt).unwrap_or(&[]).iter().any(|e| e.code == code && e.loc == LOCATION_HAND) {
             return Ok(());
         }
         let hand = duel.location_cards(self.opponent, LOCATION_HAND);
@@ -635,7 +635,7 @@ impl BeliefReplay {
                 return Ok(());
             }
             let mset = *loc == LOCATION_MZONE || failed_monster;
-            let kind = if mset { "msetable" } else { "ssetable" };
+            let command = if mset { Command::Mset } else { Command::Sset };
             let filler = self.filler();
             let mut tributes: u32 = 0;
             let mut trib_locs: Vec<(u32, u32)> = Vec::new();
@@ -662,7 +662,7 @@ impl BeliefReplay {
             };
             let field_zone = *seq == 5;
             let entries: Vec<Card> = match prompt {
-                Some(p) => command_list(p, kind).iter().filter(|e| infer::same_loc(&(*e).into(), &src)).cloned().collect(),
+                Some(p) => command.cards(p).unwrap_or(&[]).iter().filter(|e| infer::same_loc(&(*e).into(), &src)).cloned().collect(),
                 None => vec![],
             };
             let foreign_moves: Vec<(u32, u32)> = if mset {
@@ -734,7 +734,7 @@ impl BeliefReplay {
             }
             let want = if mset { TYPE_MONSTER } else { TYPE_SPELL | TYPE_TRAP };
             let mut codes: Vec<u32> = match prompt {
-                Some(p) => command_list(p, kind).iter().map(|e| e.code).filter(|&c| fits(c)).collect(),
+                Some(p) => command.cards(p).unwrap_or(&[]).iter().map(|e| e.code).filter(|&c| fits(c)).collect(),
                 None => vec![],
             };
             if mset && earlier_need == Some(Need::St) {
@@ -963,7 +963,7 @@ impl BeliefReplay {
             if src.con != self.opponent || !matches!(src.loc, LOCATION_HAND | LOCATION_EXTRA) {
                 return Ok(());
             }
-            let sps = command_list(prompt, "spsummonable");
+            let sps = Command::Spsummon.cards(prompt).unwrap_or(&[]);
             if src.loc == LOCATION_EXTRA {
                 if src.pos & POS_FACEUP != 0 || sps.iter().any(|e| e.loc == LOCATION_SZONE || (e.loc == LOCATION_EXTRA && e.code == *code)) {
                     return Ok(());
@@ -1182,10 +1182,10 @@ impl BeliefReplay {
         if !matches!(before, Msg::SelectIdlecmd { .. } | Msg::SelectBattlecmd { .. }) {
             return None;
         }
-        match r.kind.as_deref() {
-            Some("to_ep") => Some(PHASE_END),
-            Some("to_m2") => Some(PHASE_MAIN2),
-            Some("to_bp") => Some(PHASE_BATTLE_START),
+        match r.kind {
+            Some(Command::ToEp) => Some(PHASE_END),
+            Some(Command::ToM2) => Some(PHASE_MAIN2),
+            Some(Command::ToBp) => Some(PHASE_BATTLE_START),
             _ => None,
         }
     }

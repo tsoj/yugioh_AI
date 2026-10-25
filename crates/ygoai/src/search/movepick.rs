@@ -2,7 +2,7 @@
 
 use super::movegen::{candidates, card_sets};
 use super::params::HIST_BITS;
-use crate::actions::Response;
+use crate::actions::{Command, Response};
 use crate::heuristic::db_attack;
 use crate::messages::Msg;
 
@@ -10,8 +10,8 @@ use crate::messages::Msg;
 /// chain, a yes or no.
 pub(super) fn move_kind(m: &Msg, c: &Response) -> String {
     let t = m.name();
-    if let Some(k) = &c.kind {
-        return format!("SELECT_{}:{k}", t.trim_start_matches("SELECT_"));
+    if let Some(k) = c.kind {
+        return format!("{t}:{}", k.name());
     }
     if matches!(m, Msg::SelectChain { .. }) {
         return format!("{t}:{}", if c.index.unwrap_or(-1) < 0 { "pass" } else { "chain" });
@@ -22,27 +22,29 @@ pub(super) fn move_kind(m: &Msg, c: &Response) -> String {
     t.to_string()
 }
 
-fn idle_order(kind: &str) -> i32 {
-    match kind {
-        "activate" => 0,
-        "spsummon" => 1,
-        "summon" => 2,
-        "mset" => 3,
-        "repos" => 4,
-        "to_bp" => 5,
-        "sset" => 6,
-        "to_ep" => 7,
-        "shuffle" => 8,
-        _ => 9,
+/// The rules' preference among an idle command's commands (the lowest first).
+fn idle_rank(command: Command) -> i32 {
+    match command {
+        Command::Activate => 0,
+        Command::Spsummon => 1,
+        Command::Summon => 2,
+        Command::Mset => 3,
+        Command::Repos => 4,
+        Command::ToBp => 5,
+        Command::Sset => 6,
+        Command::ToEp => 7,
+        Command::Shuffle => 8,
+        Command::Attack | Command::ToM2 => 9,
     }
 }
 
-fn battle_order(kind: &str) -> i32 {
-    match kind {
-        "activate" => 0,
-        "attack" => 1,
-        "to_m2" => 2,
-        "to_ep" => 3,
+/// The same among a battle command's.
+fn battle_rank(command: Command) -> i32 {
+    match command {
+        Command::Activate => 0,
+        Command::Attack => 1,
+        Command::ToM2 => 2,
+        Command::ToEp => 3,
         _ => 9,
     }
 }
@@ -51,19 +53,20 @@ fn battle_order(kind: &str) -> i32 {
 /// `card_order`, the rules' order by the select hint) (alphabeta.ordered).
 pub fn ordered(m: &Msg, turn_player: u32, card_order: Option<&[usize]>) -> Vec<Response> {
     let mut cands = candidates(m);
-    let k = |c: &Response| c.index.unwrap_or(0) as usize;
+    let index = |c: &Response| c.index.unwrap_or(0) as usize;
     match m {
         Msg::SelectCard { min: 1, max: 1, .. } if card_order.is_some() => {
             return card_order.unwrap().iter().filter(|&&i| i < cands.len()).map(|&i| cands[i].clone()).collect();
         }
         Msg::SelectCard { .. } if card_order.is_some() => return card_sets(m, card_order.unwrap()),
+        // (the summons and attacks by the card's ATK, the highest first)
         Msg::SelectIdlecmd { summonable, .. } => cands.sort_by_key(|c| {
-            let kind = c.kind.as_deref().unwrap_or("");
-            (idle_order(kind), if kind == "summon" { -db_attack(summonable[k(c)].code) } else { 0 })
+            let command = c.kind.unwrap();
+            (idle_rank(command), if command == Command::Summon { -db_attack(summonable[index(c)].code) } else { 0 })
         }),
         Msg::SelectBattlecmd { attackable, .. } => cands.sort_by_key(|c| {
-            let kind = c.kind.as_deref().unwrap_or("");
-            (battle_order(kind), if kind == "attack" { -db_attack(attackable[k(c)].code) } else { 0 })
+            let command = c.kind.unwrap();
+            (battle_rank(command), if command == Command::Attack { -db_attack(attackable[index(c)].code) } else { 0 })
         }),
         Msg::SelectChain { .. } => cands.sort_by_key(|c| c.index == Some(-1)),
         Msg::SelectEffectyn { player, .. } | Msg::SelectYesno { player, .. } => {
@@ -104,20 +107,20 @@ pub fn prompt_label(m: &Msg) -> &'static str {
     }
 }
 
-fn kind_id(kind: &str) -> u128 {
-    match kind {
-        "summon" => 1,
-        "spsummon" => 2,
-        "repos" => 3,
-        "mset" => 4,
-        "sset" => 5,
-        "activate" => 6,
-        "to_bp" => 7,
-        "to_ep" => 8,
-        "shuffle" => 9,
-        "attack" => 10,
-        "to_m2" => 11,
-        _ => 0,
+/// (`move_identity`)
+fn command_id(command: Command) -> u128 {
+    match command {
+        Command::Summon => 1,
+        Command::Spsummon => 2,
+        Command::Repos => 3,
+        Command::Mset => 4,
+        Command::Sset => 5,
+        Command::Activate => 6,
+        Command::ToBp => 7,
+        Command::ToEp => 8,
+        Command::Shuffle => 9,
+        Command::Attack => 10,
+        Command::ToM2 => 11,
     }
 }
 
@@ -155,20 +158,9 @@ pub fn move_identity(m: &Msg, c: &Response, ctx: &KeyContext) -> u128 {
     let entry = |list: &[crate::messages::Card], i: i64| {
         list.get(i as usize).map(|e| (e.code as u128, (e.desc.unwrap_or(0) as u128) * 64 + e.loc as u128))
     };
-    if let Some(k) = &c.kind {
-        kind = kind_id(k);
-        let list = match (m, k.as_str()) {
-            (Msg::SelectIdlecmd { summonable, .. }, "summon") => Some(summonable),
-            (Msg::SelectIdlecmd { spsummonable, .. }, "spsummon") => Some(spsummonable),
-            (Msg::SelectIdlecmd { repositionable, .. }, "repos") => Some(repositionable),
-            (Msg::SelectIdlecmd { msetable, .. }, "mset") => Some(msetable),
-            (Msg::SelectIdlecmd { ssetable, .. }, "sset") => Some(ssetable),
-            (Msg::SelectIdlecmd { activatable, .. }, "activate") => Some(activatable),
-            (Msg::SelectBattlecmd { activatable, .. }, "activate") => Some(activatable),
-            (Msg::SelectBattlecmd { attackable, .. }, "attack") => Some(attackable),
-            _ => None,
-        };
-        if let Some((cd, ds)) = list.and_then(|l| entry(l, c.index.unwrap_or(0))) {
+    if let Some(command) = c.kind {
+        kind = command_id(command);
+        if let Some((cd, ds)) = command.cards(m).and_then(|l| entry(l, c.index.unwrap_or(0))) {
             (code, desc) = (cd, ds);
         }
     } else if let Msg::SelectChain { chains, .. } = m {

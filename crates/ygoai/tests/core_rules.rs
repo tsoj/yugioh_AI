@@ -7,7 +7,7 @@ use ygo_core::api::{card as cd, duel as du, effect as ef};
 use ygo_core::constants::*;
 use ygo_core::duel::Duel;
 use ygo_core::types::{CardId, LuaFn, Value};
-use ygoai::actions::{Response, encode};
+use ygoai::actions::{Command, Response, encode};
 use ygoai::game::{DuelConfig, new_duel, run_until_prompt};
 use ygoai::messages::Msg;
 
@@ -112,15 +112,15 @@ fn phase_condition() {
     effect(&mut d, EFFECT_UPDATE_LEVEL, 2, Some(main_phase));
     assert_eq!(level(&mut d), 6);
     // turn 1: to the End Phase; turn 2 (player 1): to the Battle Phase
-    let kind = |k: &str| Some(Response { kind: Some(k.into()), ..Response::default() });
-    prompt = answer(&mut d, prompt, kind("to_ep"));
+    let command = |c: Command| Some(Response::command(c, None));
+    prompt = answer(&mut d, prompt, command(Command::ToEp));
     assert_eq!(d.infos.turn_id, 2);
-    prompt = answer(&mut d, prompt, kind("to_bp"));
+    prompt = answer(&mut d, prompt, command(Command::ToBp));
     assert!(matches!(prompt, Msg::SelectBattlecmd { .. }));
     assert_eq!(d.infos.phase as u32, PHASE_BATTLE_STEP);
     effect(&mut d, EFFECT_CHANGE_LEVEL, 2, None);
     assert_eq!(level(&mut d), 2);
-    prompt = answer(&mut d, prompt, kind("to_m2"));
+    prompt = answer(&mut d, prompt, command(Command::ToM2));
     assert!(matches!(prompt, Msg::SelectIdlecmd { .. }));
     assert_eq!(d.infos.phase as u32, PHASE_MAIN2);
     assert_eq!(level(&mut d), 4);

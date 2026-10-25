@@ -9,10 +9,98 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Deserializer, Serialize};
 use ygo_core::constants::*;
 
-use crate::messages::Msg;
+use crate::messages::{Card, Msg};
 
-pub const IDLE_KINDS: [&str; 9] = ["summon", "spsummon", "repos", "mset", "sset", "activate", "to_bp", "to_ep", "shuffle"];
-pub const BATTLE_KINDS: [&str; 4] = ["activate", "attack", "to_m2", "to_ep"];
+/// Declares `Command`: per command its name in the Python protocol.
+macro_rules! commands {
+    ($($command:ident = $name:literal,)*) => {
+        /// An idle or battle command (`Response::kind`).
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        pub enum Command {
+            $(#[serde(rename = $name)] $command,)*
+        }
+
+        impl Command {
+            pub fn name(self) -> &'static str {
+                match self {
+                    $(Command::$command => $name,)*
+                }
+            }
+        }
+    };
+}
+
+commands! {
+    Summon = "summon",
+    Spsummon = "spsummon",
+    Repos = "repos",
+    Mset = "mset",
+    Sset = "sset",
+    Activate = "activate",
+    ToBp = "to_bp",
+    ToEp = "to_ep",
+    Shuffle = "shuffle",
+    Attack = "attack",
+    ToM2 = "to_m2",
+}
+
+impl Command {
+    /// An idle command's commands in the core's order (a response's code is the position).
+    pub const IDLE: [Command; 9] = [
+        Command::Summon,
+        Command::Spsummon,
+        Command::Repos,
+        Command::Mset,
+        Command::Sset,
+        Command::Activate,
+        Command::ToBp,
+        Command::ToEp,
+        Command::Shuffle,
+    ];
+    /// A battle command's, the same way.
+    pub const BATTLE: [Command; 4] = [Command::Activate, Command::Attack, Command::ToM2, Command::ToEp];
+
+    /// The prompt's list of the cards this command takes one of (by `Response::index`).
+    pub fn list_name(self) -> Option<&'static str> {
+        Some(match self {
+            Command::Summon => "summonable",
+            Command::Spsummon => "spsummonable",
+            Command::Repos => "repositionable",
+            Command::Mset => "msetable",
+            Command::Sset => "ssetable",
+            Command::Activate => "activatable",
+            Command::Attack => "attackable",
+            Command::ToBp | Command::ToEp | Command::Shuffle | Command::ToM2 => return None,
+        })
+    }
+
+    /// The cards of the prompt `m` this command takes one of (None: a command without a card, or
+    /// not one of that prompt).
+    pub fn cards(self, m: &Msg) -> Option<&[Card]> {
+        Some(match (m, self) {
+            (Msg::SelectIdlecmd { summonable, .. }, Command::Summon) => summonable,
+            (Msg::SelectIdlecmd { spsummonable, .. }, Command::Spsummon) => spsummonable,
+            (Msg::SelectIdlecmd { repositionable, .. }, Command::Repos) => repositionable,
+            (Msg::SelectIdlecmd { msetable, .. }, Command::Mset) => msetable,
+            (Msg::SelectIdlecmd { ssetable, .. }, Command::Sset) => ssetable,
+            (Msg::SelectIdlecmd { activatable, .. } | Msg::SelectBattlecmd { activatable, .. }, Command::Activate) => activatable,
+            (Msg::SelectBattlecmd { attackable, .. }, Command::Attack) => attackable,
+            _ => return None,
+        })
+    }
+
+    /// Whether the prompt `m` offers this command (one of a card: for any card).
+    pub fn offered(self, m: &Msg) -> bool {
+        let flag = match (m, self) {
+            (Msg::SelectIdlecmd { to_bp, .. }, Command::ToBp) => to_bp,
+            (Msg::SelectIdlecmd { to_ep, .. } | Msg::SelectBattlecmd { to_ep, .. }, Command::ToEp) => to_ep,
+            (Msg::SelectIdlecmd { can_shuffle, .. }, Command::Shuffle) => can_shuffle,
+            (Msg::SelectBattlecmd { to_m2, .. }, Command::ToM2) => to_m2,
+            _ => return self.cards(m).is_some_and(|cards| !cards.is_empty()),
+        };
+        *flag != 0
+    }
+}
 
 fn is_none<T>(v: &Option<T>) -> bool {
     v.is_none()
@@ -39,7 +127,7 @@ fn truthy<'de, D: Deserializer<'de>>(d: D) -> Result<Option<bool>, D::Error> {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Response {
     #[serde(default, skip_serializing_if = "is_none")]
-    pub kind: Option<String>,
+    pub kind: Option<Command>,
     #[serde(default, skip_serializing_if = "is_none")]
     pub index: Option<i64>,
     #[serde(default, skip_serializing_if = "is_none", deserialize_with = "truthy")]
@@ -69,6 +157,11 @@ pub struct Response {
 }
 
 impl Response {
+    /// An idle or battle command, of the card at `index` of its list (`Command::cards`).
+    pub fn command(command: Command, index: Option<usize>) -> Response {
+        Response { kind: Some(command), index: index.map(|i| i as i64), ..Response::default() }
+    }
+
     /// The option at `index` (a chain's pass: -1).
     pub fn index(index: i64) -> Response {
         Response { index: Some(index), ..Response::default() }
@@ -104,9 +197,9 @@ fn i32le(v: i64) -> Vec<u8> {
     (v as i32).to_le_bytes().to_vec()
 }
 
-fn kind_index(kinds: &[&str], resp: &Response) -> Result<Vec<u8>, InvalidResponse> {
+fn command_code(commands: &[Command], resp: &Response) -> Result<Vec<u8>, InvalidResponse> {
     let kind = need(&resp.kind, "kind")?;
-    let k = kinds.iter().position(|&x| x == kind).ok_or_else(|| InvalidResponse(format!("unknown kind {kind}")))?;
+    let k = commands.iter().position(|&x| x == kind).ok_or_else(|| InvalidResponse(format!("unknown kind {}", kind.name())))?;
     Ok(i32le((resp.index.unwrap_or(0) << 16) | k as i64))
 }
 
@@ -114,8 +207,8 @@ fn kind_index(kinds: &[&str], resp: &Response) -> Result<Vec<u8>, InvalidRespons
 pub fn encode(m: &Msg, resp: &Response) -> Result<Vec<u8>, InvalidResponse> {
     use Msg::*;
     Ok(match m {
-        SelectIdlecmd { .. } => kind_index(&IDLE_KINDS, resp)?,
-        SelectBattlecmd { .. } => kind_index(&BATTLE_KINDS, resp)?,
+        SelectIdlecmd { .. } => command_code(&Command::IDLE, resp)?,
+        SelectBattlecmd { .. } => command_code(&Command::BATTLE, resp)?,
         SelectEffectyn { .. } | SelectYesno { .. } => i32le(need(&resp.yes, "yes")? as i64),
         SelectOption { .. } | AnnounceNumber { .. } | SelectChain { .. } => i32le(need(&resp.index, "index")?),
         SelectCard { .. } | SelectTribute { .. } | SelectSum { .. } => {
@@ -155,10 +248,6 @@ pub fn encode(m: &Msg, resp: &Response) -> Result<Vec<u8>, InvalidResponse> {
     })
 }
 
-fn kind_response(kind: &str, index: Option<usize>) -> Response {
-    Response { kind: Some(kind.into()), index: index.map(|i| i as i64), ..Response::default() }
-}
-
 /// The options of an idle command prompt, in the Python order.
 pub fn idle_options(m: &Msg) -> Vec<Response> {
     let Msg::SelectIdlecmd { summonable, spsummonable, repositionable, msetable, ssetable, activatable, to_bp, to_ep, can_shuffle, .. } = m
@@ -166,19 +255,19 @@ pub fn idle_options(m: &Msg) -> Vec<Response> {
         return vec![];
     };
     let mut opts = Vec::new();
-    for (kind, list) in [
-        ("summon", summonable),
-        ("spsummon", spsummonable),
-        ("repos", repositionable),
-        ("mset", msetable),
-        ("sset", ssetable),
-        ("activate", activatable),
+    for (command, list) in [
+        (Command::Summon, summonable),
+        (Command::Spsummon, spsummonable),
+        (Command::Repos, repositionable),
+        (Command::Mset, msetable),
+        (Command::Sset, ssetable),
+        (Command::Activate, activatable),
     ] {
-        opts.extend((0..list.len()).map(|i| kind_response(kind, Some(i))));
+        opts.extend((0..list.len()).map(|i| Response::command(command, Some(i))));
     }
-    for (kind, on) in [("to_bp", to_bp), ("to_ep", to_ep), ("shuffle", can_shuffle)] {
+    for (command, on) in [(Command::ToBp, to_bp), (Command::ToEp, to_ep), (Command::Shuffle, can_shuffle)] {
         if *on != 0 {
-            opts.push(kind_response(kind, None));
+            opts.push(Response::command(command, None));
         }
     }
     opts
@@ -188,12 +277,12 @@ pub fn idle_options(m: &Msg) -> Vec<Response> {
 pub fn battle_options(m: &Msg) -> Vec<Response> {
     let Msg::SelectBattlecmd { activatable, attackable, to_m2, to_ep, .. } = m else { return vec![] };
     let mut opts = Vec::new();
-    for (kind, list) in [("activate", activatable), ("attack", attackable)] {
-        opts.extend((0..list.len()).map(|i| kind_response(kind, Some(i))));
+    for (command, list) in [(Command::Activate, activatable), (Command::Attack, attackable)] {
+        opts.extend((0..list.len()).map(|i| Response::command(command, Some(i))));
     }
-    for (kind, on) in [("to_m2", to_m2), ("to_ep", to_ep)] {
+    for (command, on) in [(Command::ToM2, to_m2), (Command::ToEp, to_ep)] {
         if *on != 0 {
-            opts.push(kind_response(kind, None));
+            opts.push(Response::command(command, None));
         }
     }
     opts
