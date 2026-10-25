@@ -214,9 +214,15 @@ See `docs/search-decisions.md` for what is and isn't searched.
       Python agents: 410 of 410 identical (40 candidates). One thread: 12.9s vs 60s; the book build
       86 candidates/s on 30 threads vs ~6.7/s in Python. Time now: engine ~51%, network ~23%, views
       and allocation ~24%. match2 was rebuilt with it (the Python run was stopped at 39000/65000).
-- [ ] Rust panic in the policy games of the match2 build (rust/ygo-cards/src/prelude.rs:100,
+- [x] Rust panic in the policy games of the match2 build (rust/ygo-cards/src/prelude.rs:100,
       effect_card_value: a value function called without a card). It ended the first build after
-      16500 candidates (run_parallel now turns panics into Crash, 07f8739); find the card.
+      16500 candidates (run_parallel now turns panics into Crash, 07f8739). Diagnosed 2026-10-25:
+      the prelude.rs panics are caught by `Duel::protected_call` (lua.rs: a panic with a message
+      inside a card function is a script error, as a failing `lua_pcall` in C++: logged, the call
+      gives nil, the game goes on), so they only print. The 2 candidates the Rust build lost
+      (seeds 91070843, 91125503; both have Last Turn) panic at processor3.rs:387
+      (`core.attacker.unwrap()` in the battle command's step 9): the Last Turn bug below. Left:
+      which card's value function gets no card (harmless; the C++ script would error the same).
 - [x] Strength ladder (user, 2026-10-24): main at more vs fewer nodes on the 500 removed / 500 kept
       openings (runs/sprt/ladder_*, --tc 60+1, 32 games at once). Pentanomial [weak both, -,
       seat-decided, -, strong both]:
@@ -779,7 +785,10 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       core's script budget (pairs 2394 9294 15254 16976, those games skipped).
 - [ ] Last Turn activated during an attack: its forced battle leaves the outer attack without an
       attacker, and the core panics (C++ dereferences null). This is an upstream bug. The search now
-      avoids such lines (9c3af1d); decide whether to guard it in the core too.
+      avoids such lines (9c3af1d); decide whether to guard it in the core too. It also ends whole
+      games outside the search: the 2 candidates lost in the match2 book build (processor3.rs:387,
+      seeds 91070843 and 91125503 of runs/data/onesided/book2_kept.jsonl reproduce it in 1 s with
+      ygoai-book-test -j 1).
 - [ ] Seed the engine processes in matches (pass the seed to `ygoai-engine`), so a crashed
       game can be reproduced exactly.
 
