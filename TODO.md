@@ -42,9 +42,10 @@ the rerun: longest game 941 decisions).
 
 ## Running now
 
-- `improving2` (643545c: improving rebased; +3.1 at 2720 games before) SPRT vs main (since
-  2026-10-25 15:57, runs/sprt/improving2_20261025-155705.log; bench: depth 10 361130 nodes, main 362311; 3000n depth 13.25, main 13.05;
-  same NPS).
+- Nothing.
+- `improving2` (643545c: improving rebased; +3.1 at 2720 games before) SPRT vs main [0, 5]:
+  stopped by the user at 1340 games, -3.1 +/- 14.2, LLR -0.53 (bench: depth 10 361130 nodes, main
+  362311; 3000n depth 13.25, main 13.05; same NPS). Not merged.
 - `hist-decay` (3f780cf: history decay 0.5 -> 0.75, for the finer keys) SPRT vs main [0, 5]:
   stopped by the user at 4820 games, +3.6 +/- 7.6, LLR +0.37 (bench: depth 10 362662 nodes, main
   362311; 3000n depth 13.25, main 13.05; same NPS). Not merged.
