@@ -1,56 +1,19 @@
-"""Engine-vs-engine matches in the spirit of fastchess.
+"""Openings and match statistics (the matches themselves are the Rust arbiter's, ygoai-match).
 
-An "opening" is a pair of decks plus a seed (which fixes both starting deck
-orders and the core's RNG). Every opening is played twice with the engines
-swapping seats, so both engines get exactly the same draws with the same
-deck. Results are reported as W/D/L, an Elo estimate with a 95% interval
-from the pentanomial statistics of the game pairs, and optionally a
-sequential probability ratio test (GSPRT) between two Elo hypotheses.
+An "opening" is a pair of decks plus a seed (which fixes both starting deck orders and the core's
+RNG); a match plays every opening twice with the engines swapping seats. The statistics: W/D/L, an
+Elo estimate with a 95% interval from the pentanomial statistics of the game pairs, and the
+sequential probability ratio test (GSPRT) between two Elo hypotheses, as ygoai-match computes them.
 """
 
 from __future__ import annotations
 
 import math
 import random
-import shlex
 from dataclasses import dataclass, field
 
-from .agents import AGENTS, make_agent
-from .agents.base import Agent
 from .carddb import default_db
 from .decks import Deck, DeckPool
-from .game import Clock, GameRecord, new_record, play
-from .protocol import EngineProcess
-
-
-@dataclass(frozen=True)
-class EngineSpec:
-    name: str
-    command: str  # "builtin:<agent>" or a shell command speaking the engine protocol
-
-    def is_builtin(self) -> bool:
-        return self.command.startswith("builtin:")
-
-
-_processes: list[EngineProcess] = []  # (running)
-
-
-def get_engine(spec: EngineSpec, seed: int) -> Agent:
-    """A built-in agent, or a fresh engine process (one per game: games stay
-    independent, and an engine's memory does not grow over a match)."""
-    if spec.is_builtin():
-        agent = make_agent(spec.command.split(":", 1)[1], seed)
-        agent.name = spec.name
-        return agent
-    proc = EngineProcess(shlex.split(spec.command), name=spec.name)
-    _processes.append(proc)
-    return proc
-
-
-def close_engines() -> None:
-    for proc in _processes:
-        proc.close()
-    _processes.clear()
 
 
 @dataclass
@@ -70,28 +33,6 @@ def random_openings(n: int, seed: int, mirror_prob: float = 0.0, pool: DeckPool 
     return out
 
 
-def play_opening(opening: Opening, a: EngineSpec, b: EngineSpec, tc: tuple[float, float] | None = None,
-                 max_turns: int = 100) -> list[dict]:
-    """Plays the opening twice with swapped seats; returns the results from a's point of view."""
-    out = []
-    for a_seat in (0, 1):
-        record = new_record(opening.decks, opening.seed)
-        engines = [None, None]
-        engines[a_seat] = get_engine(a, opening.seed * 2 + a_seat)
-        engines[1 - a_seat] = get_engine(b, opening.seed * 2 + 1 - a_seat)
-        clocks = [Clock(*tc), Clock(*tc)] if tc else None
-        try:
-            play(record, engines, clocks=clocks, illegal_is_loss=True, max_turns=max_turns)
-        finally:
-            close_engines()
-        w = record.result.get("winner")
-        score = 0.5 if w is None else (1.0 if w == a_seat else 0.0)
-        out.append({"score": score, "a_seat": a_seat, "record": record.to_json()})
-    return out
-
-
-# ---------------------------------------------------------------------------
-# Statistics
 # ---------------------------------------------------------------------------
 
 def score_to_elo(score: float) -> float:
@@ -164,6 +105,4 @@ def sprt_bounds(alpha: float, beta: float) -> tuple[float, float]:
     return math.log(beta / (1 - alpha)), math.log((1 - beta) / alpha)
 
 
-BUILTIN_AGENTS = sorted(AGENTS)
-__all__ = ["EngineSpec", "Opening", "MatchStats", "random_openings", "play_opening", "sprt_bounds",
-           "close_engines", "GameRecord", "BUILTIN_AGENTS"]
+__all__ = ["Opening", "MatchStats", "random_openings", "score_to_elo", "elo_to_score", "sprt_bounds"]
