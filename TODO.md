@@ -199,7 +199,7 @@ See `docs/search-decisions.md` for what is and isn't searched.
       the less one-sided half, then the old policy games (make_match_book.py --from, rl4/rl3/rl2/
       rl1/boot1, book-min 2 at load). SPRTs then use match2 lines 0..49999 (sprt_branch.sh
       defaults); the rest for eval data and tests. Then set-pool-notrib on it, then an eval retrain
-      on all SPRT games (sprtdata/collect.py from 2026-10-17 23:22 + to_npz.py + train_eval_mover.py
+      on all SPRT games (scripts/collect_sprt_games.py from 2026-10-17 23:22 + scripts/sprt_games_to_npz.py + train_eval_mover.py
       --dims 64 --held 400 --drop-onesided --lam 0.5), SPRT, merge on H1.
       Built with ygoai-book-test in 763s: 64998 tested (2 panicked), 620389 games; less winning
       seat 0: 5085, 1: 5323, 2+: 54590 (book-min 2 keeps 54590; SPRTs draw from the first 50000,
@@ -267,17 +267,18 @@ See `docs/search-decisions.md` for what is and isn't searched.
         games, +5.7 +/- 5.4, penta [751, 0, 3415, 1, 833], LLR +0.96 [0, 10] (would be +2.11 with
         [0, 5], +1.24 with [0, 2]): undecided, likely a small gain; merged. Next (by the result): the context in the key (own
         turn, phase), continuation history, separate or bigger tables.
-  - [ ] All three at once (user, 2026-10-25): branch `hist-more` (58a9981), the history plus
+  - [x] All three at once (user, 2026-10-25): branch `hist-more` (58a9981), the history plus
         two tables added up in the move order: the move in its turn and phase (mover is the turn
         player, phase; 2^15) and the move after the one that led to the node (continuation,
         2^16); same bonus, malus, decay. Bench: depth 10 366742 nodes (main 362311), 3000n depth
-        13.29 (13.05), same NPS. SPRT vs main (resumed with [0, 5] and 10000 openings at 902 games).
+        13.29 (13.05), same NPS. SPRT vs main (resumed with [0, 5] and 10000 openings at 902 games): ended at the cap, 20000
+        games, +1.3 +/- 3.7, LLR -1.64 (was +8.6 at 4722 games, LLR +2.07): no gain, not merged.
   - [ ] Card selections by history (user, 2026-10-25): branch `hist-cards` (8bd99ba). Below the
         root a card selection's card_width (3) searched choices are the first by the TT move and
         the history among all its choices (CARD_POOL 127: the TT keeps an i8 index into them; sets
         and sums have at most 5 anyway), not the policies' first 3; at the horizon the answer is that first choice (TT move,
-        else best history, the policy's order among equals) instead of the policy's first. Next
-        after hist-more.
+        else best history, the policy's order among equals) instead of the policy's first. SPRT vs main
+        (bench: depth 10 361955 nodes, main 362311; 3000n depth 13.27, main 13.05; same NPS).
 
 ## Search: features
 
@@ -573,8 +574,8 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       44336e139f6541ec. Next: mover3/mover4 and deeper nets on this data (the engine evaluates only
       mover2 since the cleanup), and keep adding SPRT games as data.
   - All SPRT games (user, 2026-10-24): 184522 games since 2026-10-17 23:22 (28.1M positions,
-    runs/data/sprt_net2/: collect.py + ygoai-refeature, which now streams its input (all games at
-    once ran out of memory) + to_npz.py with rounds 2+3: 30.6M rows, 10395 pairs). MLP 64, --held
+    runs/data/sprt_net2/: scripts/collect_sprt_games.py + ygoai-refeature, which now streams its input (all games at
+    once ran out of memory) + scripts/sprt_games_to_npz.py with rounds 2+3 (runs/data/rounds23/all_m2_r23.npz): 30.6M rows, 10395 pairs). MLP 64, --held
     400 --drop-onesided --lam 0.5 (train_eval_mover.py's report now chunked: the GPU ran out at
     30M rows): held-pairs rank 0.7209 (search values 0.7348; other held-out pairs than before, not
     comparable), LP factor 1.021. Branch `eval-sprt2` (models/eval_mover2_sprt2r23os_64.json): SPRT
