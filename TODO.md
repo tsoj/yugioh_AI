@@ -786,6 +786,16 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
 ## Housekeeping
 
 - [ ] Repo cleanup: what is still needed of `ygoai/` (Python), `ygoai_rs/` and the other folders.
+  - Branch `py-cleanup` (fd916cf + 82e70a4, 2026-10-25, for the user's review, not merged): the
+    Python play stack the Rust engine replaced removed (-3934 lines: the Python alpha-beta, MCTS,
+    PUCT, policy and heuristic agents, the Python engine process and protocol, match play,
+    scripts/match.py, sprt.py, make_match_book.py, the RL self-play scripts and nets, the Python
+    deck completions, tests/test_integration.py; README and doc comments updated). Kept: the
+    belief checks' agents (random, greedy, setter, mixed, belief_mc) and modules, suite.py and
+    its tools, the data and training scripts. Every module and the scripts' imports load; the
+    unit tests pass; check_belief.py 36/36 on the suite's setter/mixed pairs.
+  - Eval data tools were only in a temporary directory: now scripts/collect_sprt_games.py and
+    scripts/sprt_games_to_npz.py, the rounds 2+3 npz in runs/data/rounds23/ (done on main).
 - [x] Remove the worktrees `wt-old` (main repo) and `wt-old-rust` (rust repo) in the scratchpad (gone).
 - [x] Push the rust submodule commits 2b7f988, 1354870, 935783d, 658b359 (on origin/main).
 - [x] Resumable SPRTs (idea, 2026-10-22; done 04fa423): `ygoai-match --resume RECORDS` (the finished pairs of the
