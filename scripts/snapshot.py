@@ -111,10 +111,12 @@ def _rust_binding(dst: Path, ref: str | None) -> None:
     (src / "rust").mkdir()
     archive = subprocess.run(["git", "-C", str(ROOT / "rust"), "archive", sub(ref)], check=True, capture_output=True).stdout
     subprocess.run(["tar", "-x", "-C", str(src / "rust")], input=archive, check=True)
+    (src / "external").symlink_to(ROOT / "external")  # (HiGHS, for the crates/highs build)
     target = ROOT / "build" / "rust-snapshot-target"
     cargo = ["cargo", "build", "--release", "-q", "-p", "ygoai_rs"]
     if shutil.which("systemd-run"):
         cargo = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=20G", "-p", "MemorySwapMax=0", *cargo]
-    subprocess.run(cargo, cwd=src, check=True, env={**os.environ, "CARGO_TARGET_DIR": str(target), "CARGO_BUILD_JOBS": "8"})
+    subprocess.run(cargo, cwd=src, check=True, env={**os.environ, "CARGO_TARGET_DIR": str(target), "CARGO_BUILD_JOBS": "8",
+                                         "YGOAI_DECK_MODELS_ONNX": str(ROOT / "download_human_decks" / "onnx_export")})
     shutil.copy2(target / "release" / "libygoai_rs.so", dst / "ygoai_rs" / "ygoai_rs.abi3.so")
     shutil.rmtree(src)
