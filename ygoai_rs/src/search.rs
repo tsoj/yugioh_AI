@@ -49,7 +49,7 @@ impl AlphaBetaSearch {
         if cands.is_empty() {
             return Err(PyValueError::new_err("no candidates"));
         }
-        let params = ygoai::search::SearchParams { budget, elapsed, clock_remaining, hint, seeds, max_nodes };
+        let params = ygoai::search::SearchParams { budget, elapsed, clock_remaining, hint, seeds, max_nodes, ..Default::default() };
         let before = self.ab.nodes;
         let d = &duel.d;
         let ab = &mut self.ab;
