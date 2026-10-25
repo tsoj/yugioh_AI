@@ -33,11 +33,11 @@ pub fn candidates(m: &Msg) -> Vec<Response> {
         Msg::SelectIdlecmd { .. } => idle_options(m).into_iter().filter(|c| c.kind != Some(Command::Shuffle)).collect(),
         Msg::SelectBattlecmd { .. } => battle_options(m),
         Msg::SelectChain { chains, forced, .. } => {
-            let chain = (0..chains.len() as i64).map(Response::index);
-            if *forced != 0 { chain.collect() } else { std::iter::once(Response::index(-1)).chain(chain).collect() }
+            let chain = (0..chains.len()).map(Response::index);
+            if *forced != 0 { chain.collect() } else { std::iter::once(Response::pass()).chain(chain).collect() }
         }
         Msg::SelectEffectyn { .. } | Msg::SelectYesno { .. } => vec![Response::yes(true), Response::yes(false)],
-        Msg::SelectOption { options, .. } => (0..options.len() as i64).map(Response::index).collect(),
+        Msg::SelectOption { options, .. } => (0..options.len()).map(Response::index).collect(),
         Msg::SelectCard { min: 1, max: 1, cards, .. } => (0..cards.len()).map(|i| Response::cards(vec![i])).collect(),
         // (several cards: the sets as listed; the search orders them by the rules' order, `card_sets`)
         Msg::SelectCard { cards, .. } => card_sets(m, &(0..cards.len()).collect::<Vec<_>>()),
@@ -66,7 +66,7 @@ pub fn root_candidates(m: &Msg, rules: &Heuristic, state: Option<&Snapshot>) -> 
         Msg::SelectCard { min: 1, max: 1, .. } => return candidates(m),
         Msg::SelectCard { cards, .. } => card_sets(m, &rules.card_order(cards)),
         Msg::SelectUnselectCard { finishable, cancelable, select_cards, .. } => {
-            let mut out: Vec<Response> = rules.card_order(select_cards).into_iter().take(ROOT_COMBO_WIDTH).map(|i| Response::index(i as i64)).collect();
+            let mut out: Vec<Response> = rules.card_order(select_cards).into_iter().take(ROOT_COMBO_WIDTH).map(Response::index).collect();
             if *finishable != 0 || (*cancelable != 0 && select_cards.is_empty()) {
                 out.push(Response { finish: Some(true), ..Response::default() });
             }
@@ -132,7 +132,7 @@ pub fn root_candidates(m: &Msg, rules: &Heuristic, state: Option<&Snapshot>) -> 
             }
             out
         }
-        Msg::AnnounceNumber { values, .. } => (0..values.len() as i64).map(Response::index).collect(),
+        Msg::AnnounceNumber { values, .. } => (0..values.len()).map(Response::index).collect(),
         Msg::AnnounceRace { count: 1, available, .. } => (0..64).map(|i| 1u64 << i).filter(|b| available & b != 0).map(|b| Response { mask: Some(b), ..Response::default() }).collect(),
         Msg::AnnounceAttrib { count: 1, available, .. } => {
             (0..32).map(|i| 1u64 << i).filter(|b| *available as u64 & b != 0).map(|b| Response { mask: Some(b), ..Response::default() }).collect()

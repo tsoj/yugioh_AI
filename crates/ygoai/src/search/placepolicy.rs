@@ -9,10 +9,10 @@ use ygo_core::constants::*;
 use ygo_core::duel::Duel;
 use ygo_core::types::CardId;
 
+use super::cardpolicy::PHASES;
 use crate::actions::available_places;
 use crate::messages::Msg;
 
-const PHASES: [u32; 5] = [PHASE_DRAW | PHASE_STANDBY, PHASE_MAIN1, PHASE_BATTLE_START | PHASE_BATTLE_STEP | PHASE_DAMAGE | PHASE_DAMAGE_CAL | PHASE_BATTLE, PHASE_MAIN2, PHASE_END];
 const MARKERS: [u32; 8] = [
     LINK_MARKER_BOTTOM_LEFT, LINK_MARKER_BOTTOM, LINK_MARKER_BOTTOM_RIGHT, LINK_MARKER_LEFT, LINK_MARKER_RIGHT, LINK_MARKER_TOP_LEFT, LINK_MARKER_TOP, LINK_MARKER_TOP_RIGHT,
 ];
@@ -20,11 +20,6 @@ const MARKERS: [u32; 8] = [
 /// The number of features of a zone.
 /// (the zone's 39; the placed card's 1 + 8 + 2 + its arrows, the selection's 4, the position's)
 pub const PLACE_FEATURES: usize = 39 + 1 + 8 + 2 + MARKERS.len() + 4 + PHASES.len() + 3;
-
-/// Whether `prompt` is a zone selection.
-pub fn place_applies(prompt: &Msg) -> bool {
-    matches!(prompt, Msg::SelectPlace { .. } | Msg::SelectDisfield { .. })
-}
 
 /// The zones a link card's arrows point to from (`loc`, `seq`) of its controller, as
 /// `card::get_linked_zone` (with the extra monster zones): bits 0-6 its monster zones, 8-12 its
@@ -121,7 +116,6 @@ pub fn place_features(d: &Duel, prompt: &Msg, hint: Option<u64>) -> Vec<[f32; PL
     let (Msg::SelectPlace { player, count, flag } | Msg::SelectDisfield { player, count, flag }) = prompt else { return Vec::new() };
     let me = *player;
     let places = available_places(me, *flag);
-    let info = d.ext_get_info();
     let at = |[owner, loc, seq]: [u32; 3]| -> Option<CardId> {
         let p = &d.player[owner as usize];
         let list = if loc == LOCATION_MZONE { &p.list_mzone } else { &p.list_szone };
@@ -153,8 +147,8 @@ pub fn place_features(d: &Duel, prompt: &Msg, hint: Option<u64>) -> Vec<[f32; PL
     shared.push(placed.filter(|_| ty & TYPE_LINK != 0).map_or(0.0, |c| c.level as f32 / 6.0));
     shared.extend(MARKERS.iter().map(|&b| (marker & b != 0) as u32 as f32));
     let mons = |p: u32| d.player[p as usize].list_mzone.iter().flatten().count() as f32 / 5.0;
-    shared.extend([*count as f32 / 3.0, matches!(prompt, Msg::SelectDisfield { .. }) as u32 as f32, places.len() as f32 / 10.0, (info[1] == me) as u32 as f32]);
-    shared.extend(PHASES.iter().map(|p| (info[2] & p != 0) as u32 as f32));
+    shared.extend([*count as f32 / 3.0, matches!(prompt, Msg::SelectDisfield { .. }) as u32 as f32, places.len() as f32 / 10.0, (d.infos.turn_player as u32 == me) as u32 as f32]);
+    shared.extend(PHASES.iter().map(|p| (d.infos.phase as u32 & p != 0) as u32 as f32));
     shared.extend([mons(me), mons(1 - me), d.player[me as usize].list_hand.len() as f32 / 10.0]);
 
     let n = places.len();

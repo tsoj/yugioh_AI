@@ -31,18 +31,16 @@ pub enum ProbeSetup {
 
 /// The legal answers to an opponent prompt that inference may have left out (replay._all_responses).
 pub fn all_responses(prompt: &Msg) -> Vec<Response> {
-    let idx = |j: usize| Response { index: Some(j as i64), ..Response::default() };
-    let yes = |y: bool| Response { yes: Some(y), ..Response::default() };
     match prompt {
         Msg::SelectIdlecmd { .. } => idle_options(prompt),
         Msg::SelectBattlecmd { .. } => battle_options(prompt),
         Msg::SelectChain { forced, chains, .. } => {
-            let mut out = if *forced != 0 { vec![] } else { vec![Response { index: Some(-1), ..Response::default() }] };
-            out.extend((0..chains.len()).map(idx));
+            let mut out = if *forced != 0 { vec![] } else { vec![Response::pass()] };
+            out.extend((0..chains.len()).map(Response::index));
             out
         }
-        Msg::SelectEffectyn { .. } | Msg::SelectYesno { .. } => vec![yes(true), yes(false)],
-        Msg::SelectOption { options, .. } => (0..options.len()).map(idx).collect(),
+        Msg::SelectEffectyn { .. } | Msg::SelectYesno { .. } => vec![Response::yes(true), Response::yes(false)],
+        Msg::SelectOption { options, .. } => (0..options.len()).map(Response::index).collect(),
         Msg::SelectPosition { positions, .. } => [POS_FACEUP_ATTACK, POS_FACEDOWN_ATTACK, POS_FACEUP_DEFENSE, POS_FACEDOWN_DEFENSE]
             .into_iter()
             .filter(|p| positions & p != 0)
@@ -69,7 +67,7 @@ pub fn all_responses(prompt: &Msg) -> Vec<Response> {
             r
         }
         Msg::SelectUnselectCard { select_cards, finishable, cancelable, .. } => {
-            let mut out: Vec<Response> = (0..select_cards.len()).map(idx).collect();
+            let mut out: Vec<Response> = (0..select_cards.len()).map(Response::index).collect();
             if *finishable != 0 || *cancelable != 0 {
                 out.push(Response { finish: Some(true), ..Response::default() });
             }
@@ -996,7 +994,7 @@ impl BeliefReplay {
     fn candidates(&mut self, duel: &RDuel, prompt: &Msg, up: Vec<Msg>, ids: Option<&[Option<u32>]>) -> R<infer::Inferred> {
         let t = prompt.name();
         let idx_of = |r: &Response| r.index.unwrap_or(-1);
-        let pass = || Response { index: Some(-1), ..Response::default() };
+        let pass = Response::pass;
         Ok(match t {
             "SELECT_IDLECMD" => infer::infer_idle(prompt, &up, Some(&self.upcoming_ext(40))),
             "SELECT_BATTLECMD" => infer::infer_battle(prompt, &up, Some(&self.upcoming_ext(40))),
@@ -1023,7 +1021,7 @@ impl BeliefReplay {
                 let descs: Vec<u64> = duel.select_chains().into_iter().filter(|&(c, _)| c == *code).map(|x| x.1).collect();
                 infer::infer_effectyn(prompt, &up, Some(&descs))
             }
-            "SELECT_YESNO" => (vec![Response { yes: Some(true), ..Response::default() }, Response { yes: Some(false), ..Response::default() }], Certain::No),
+            "SELECT_YESNO" => (vec![Response::yes(true), Response::yes(false)], Certain::No),
             "SELECT_OPTION" => infer::infer_option(prompt, &up, self.opponent),
             "SELECT_CARD" | "SELECT_TRIBUTE" | "SELECT_SUM" => {
                 let (window, extended) = self.selection_window(up);

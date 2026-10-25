@@ -1,5 +1,5 @@
 //! Training data for the card policy (`search::cardpolicy`): from games' records, one-card
-//! selections (`cardpolicy::applies`) of the search's player, each with a reference value of
+//! selections (`cardpolicy::card_policy_applies`) of the search's player, each with a reference value of
 //! every card: the depth a search of REF nodes completes, then every card searched with the full
 //! window to it (as ygoai-spsa's references), on the true duel.
 //!
@@ -42,7 +42,7 @@ use ygoai::heuristic::Heuristic;
 use ygoai::messages::Msg;
 use ygoai::observe::to_core_response;
 use ygoai::pyrandom::PyRandom;
-use ygoai::search::cardpolicy::{applies, card_features, selection_cards};
+use ygoai::search::cardpolicy::{card_features, card_policy_applies, selection_cards};
 use ygoai::actions::Response;
 use ygoai::actions::available_places;
 use ygoai::search::movegen::{is_searched, root_candidates};
@@ -274,7 +274,7 @@ fn game_rows(file: &str, line: usize, text: &str, a: &Args) -> Vec<String> {
     let Some((record, viewer)) = parse_game(text) else { return Vec::new() };
     let mut eligible = Vec::new();
     replay(&record, viewer, |i, p, _, _| {
-        if applies(p) {
+        if card_policy_applies(p) {
             eligible.push(i);
         }
         true

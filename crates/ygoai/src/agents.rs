@@ -90,10 +90,6 @@ pub fn random_sum_selection(m: &Msg, rng: &mut PyRandom, budget: usize) -> Optio
     dfs(&mut s, 0, &mut Vec::new(), must_low)
 }
 
-fn index(i: usize) -> Response {
-    Response { index: Some(i as i64), ..Response::default() }
-}
-
 /// A uniformly-ish random valid response to a prompt (actions.random_response).
 pub fn random_response(m: &Msg, rng: &mut PyRandom, cancel_prob: f64) -> Result<Response, AgentError> {
     use Msg::*;
@@ -101,9 +97,9 @@ pub fn random_response(m: &Msg, rng: &mut PyRandom, cancel_prob: f64) -> Result<
     Ok(match m {
         SelectIdlecmd { .. } => rng.choice(&idle_options(m)).clone(),
         SelectBattlecmd { .. } => rng.choice(&battle_options(m)).clone(),
-        SelectEffectyn { .. } | SelectYesno { .. } => Response { yes: Some(rng.random() < 0.5), ..Response::default() },
-        SelectOption { options, .. } => index(rng.randrange(options.len())),
-        AnnounceNumber { values, .. } => index(rng.randrange(values.len())),
+        SelectEffectyn { .. } | SelectYesno { .. } => Response::yes(rng.random() < 0.5),
+        SelectOption { options, .. } => Response::index(rng.randrange(options.len())),
+        AnnounceNumber { values, .. } => Response::index(rng.randrange(values.len())),
         SelectCard { cancelable, min, max, cards, .. } => {
             if *cancelable != 0 && rng.random() < cancel_prob {
                 return Ok(Response { cancel: Some(true), ..Response::default() });
@@ -143,17 +139,20 @@ pub fn random_response(m: &Msg, rng: &mut PyRandom, cancel_prob: f64) -> Result<
                 return Ok(Response { finish: Some(true), ..Response::default() });
             }
             if !select_cards.is_empty() {
-                index(rng.randrange(select_cards.len()))
+                Response::index(rng.randrange(select_cards.len()))
             } else {
-                index(select_cards.len() + rng.randrange(unselect_cards.len()))
+                Response::index(select_cards.len() + rng.randrange(unselect_cards.len()))
             }
         }
         SelectChain { chains, forced, .. } => {
             let n = chains.len();
             if *forced != 0 {
-                index(rng.randrange(n))
+                Response::index(rng.randrange(n))
             } else {
-                Response { index: Some(rng.randrange(n + 1) as i64 - 1), ..Response::default() }
+                match rng.randrange(n + 1) {
+                    0 => Response::pass(),
+                    k => Response::index(k - 1),
+                }
             }
         }
         SelectPlace { player, count, flag } | SelectDisfield { player, count, flag } => {
@@ -315,11 +314,11 @@ impl Agent for GreedyAgent {
                 if !cands.is_empty() {
                     let i = *self.rng.choice(&cands);
                     self.note(&chains[i]);
-                    return Ok(index(i));
+                    return Ok(Response::index(i));
                 }
-                Ok(Response { index: Some(if *forced != 0 { 0 } else { -1 }), ..Response::default() })
+                Ok(if *forced != 0 { Response::index(0) } else { Response::pass() })
             }
-            Msg::SelectEffectyn { .. } | Msg::SelectYesno { .. } => Ok(Response { yes: Some(true), ..Response::default() }),
+            Msg::SelectEffectyn { .. } | Msg::SelectYesno { .. } => Ok(Response::yes(true)),
             Msg::SelectPosition { positions, .. } if positions & POS_FACEUP_ATTACK != 0 => {
                 Ok(Response { position: Some(POS_FACEUP_ATTACK as i64), ..Response::default() })
             }
@@ -331,7 +330,7 @@ impl Agent for GreedyAgent {
                 idx.sort();
                 Ok(Response { indices: Some(idx), ..Response::default() })
             }
-            Msg::SelectUnselectCard { select_cards, .. } if !select_cards.is_empty() => Ok(index(self.rng.randrange(select_cards.len()))),
+            Msg::SelectUnselectCard { select_cards, .. } if !select_cards.is_empty() => Ok(Response::index(self.rng.randrange(select_cards.len()))),
             _ => random_response(prompt, &mut self.rng, 0.0),
         }
     }

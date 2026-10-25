@@ -46,7 +46,7 @@ fn answer(d: &mut Duel, mut prompt: Msg, mut resp: Option<Response>) -> Msg {
         if !matches!(prompt, Msg::SelectChain { .. }) {
             return prompt;
         }
-        resp = Some(Response { index: Some(-1), ..Response::default() });
+        resp = Some(Response::pass());
     }
 }
 

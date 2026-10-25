@@ -20,28 +20,29 @@ fn query(d: &mut Duel, p: u32, loc: u32, flags: u32) -> Vec<u8> {
     d.ocg_query_location(&QueryInfo { flags, con: p as u8, loc, seq: 0, overlay_seq: 0 })
 }
 
+/// Player `p`'s monsters as (position, ATK, DEF), by the location query.
+fn monsters(d: &mut Duel, p: u32) -> Vec<(u32, i32, i32)> {
+    parse_location_query(&query(d, p, LOCATION_MZONE, MZONE_QUERY))
+        .into_iter()
+        .flatten()
+        .map(|c| (c.position.unwrap_or(0), c.attack.unwrap_or(0), c.defense.unwrap_or(0)))
+        .collect()
+}
+
+/// The dominance term for `me`: my dominant monsters minus the opponent's (`dominant`).
+fn dominance(d: &mut Duel, me: u32) -> f64 {
+    let (mine, theirs) = (monsters(d, me), monsters(d, 1 - me));
+    dominant(&mine, &theirs) as f64 - dominant(&theirs, &mine) as f64
+}
+
 /// The evaluation's terms for `me` (the differences, me minus the opponent): LP, monsters,
 /// dominant monsters, hand, face-down backrow, and the deck-out flag (2 cards or fewer left to
-/// draw; the opponent's minus mine). `evaluate` is their sum with the W_ weights (in its own
-/// order of additions).
+/// draw; the opponent's minus mine).
 pub fn eval_features(d: &mut Duel, me: u32) -> [f64; 6] {
-    let info = d.ext_get_info();
-    let lp = [info[3] as i32, info[4] as i32];
-    let mons: Vec<Vec<(u32, i32, i32)>> = [me, 1 - me]
-        .iter()
-        .map(|&p| {
-            parse_location_query(&query(d, p, LOCATION_MZONE, MZONE_QUERY))
-                .into_iter()
-                .flatten()
-                .map(|c| (c.position.unwrap_or(0), c.attack.unwrap_or(0), c.defense.unwrap_or(0)))
-                .collect()
-        })
-        .collect();
-    let mut f = [(lp[me as usize] - lp[1 - me as usize]) as f64, mons[0].len() as f64 - mons[1].len() as f64, 0.0, 0.0, 0.0, 0.0];
-    for (s, p) in [(0usize, me), (1, 1 - me)] {
-        let sign = if s == 0 { 1.0 } else { -1.0 };
-        let best_other = mons[1 - s].iter().map(|&(pos, a, df)| battle_stat(pos, a, df)).max().unwrap_or(-1);
-        f[2] += sign * mons[s].iter().filter(|&&(pos, a, _)| pos & POS_FACEUP_ATTACK != 0 && a > best_other).count() as f64;
+    let lp = (d.player[me as usize].lp - d.player[1 - me as usize].lp) as f64;
+    let monster_difference = monsters(d, me).len() as f64 - monsters(d, 1 - me).len() as f64;
+    let mut f = [lp, monster_difference, dominance(d, me), 0.0, 0.0, 0.0];
+    for (sign, p) in [(1.0, me), (-1.0, 1 - me)] {
         f[3] += sign * d.ocg_query_count(p as u8, LOCATION_HAND) as f64;
         let backrow = parse_location_query(&query(d, p, LOCATION_SZONE, QUERY_POSITION))
             .into_iter()
@@ -80,7 +81,7 @@ fn side_features(d: &mut Duel, p: u32) -> [f64; 16] {
     let down = back.clone().filter(|c| c.position.unwrap_or(0) & POS_FACEDOWN != 0).count();
     let n_back = back.count();
     let field = sz.get(5).is_some_and(|c| c.is_some());
-    let lp = d.ext_get_info()[3 + p as usize] as i32;
+    let lp = d.player[p as usize].lp;
     let n = |d: &mut Duel, loc: u32| d.ocg_query_count(p as u8, loc) as f64;
     let deck = n(d, LOCATION_DECK);
     [
@@ -108,7 +109,7 @@ fn side_features(d: &mut Duel, p: u32) -> [f64; 16] {
 pub fn rich_features(d: &mut Duel, me: u32) -> Vec<f64> {
     let (a, b) = (side_features(d, me), side_features(d, 1 - me));
     let mut f: Vec<f64> = a.iter().zip(b).map(|(x, y)| x - y).collect();
-    f.push(eval_features(d, me)[2]);
+    f.push(dominance(d, me));
     f
 }
 
@@ -257,7 +258,7 @@ fn side_scan(d: &mut Duel, p: u32) -> SideScan {
     }
     let removed = kinds(d, |p| &p.list_remove);
     d.querying = was;
-    let lp = d.ext_get_info()[3 + pl] as i32;
+    let lp = d.player[pl].lp;
     let pl_ = &d.player[pl];
     let deck = pl_.list_main.len() as f64;
     let base = [
@@ -349,12 +350,11 @@ fn mover_view(d: &mut Duel, mover: u32, prompt: Option<&Msg>, level: u8) -> Vec<
     f.push(dominant(&a.mons, &b.mons) as f64);
     f.extend(b.base);
     f.push(dominant(&b.mons, &a.mons) as f64);
-    let info = d.ext_get_info();
-    f.push((info[1] == mover) as u8 as f64);
-    f.extend(MOVER_PHASES.iter().map(|g| g.contains(&info[2]) as u8 as f64));
+    f.push((d.infos.turn_player as u32 == mover) as u8 as f64);
+    f.extend(MOVER_PHASES.iter().map(|g| g.contains(&(d.infos.phase as u32)) as u8 as f64));
     let name = prompt.map(|m| m.name());
     f.extend(MOVER_PROMPTS.iter().map(|p| (name == Some(*p)) as u8 as f64));
-    f.push(info[0].min(30) as f64 / 10.0);
+    f.push(d.infos.turn_id.min(30) as f64 / 10.0);
     if level >= 2 {
         f.extend(a.more);
         // (the opponent's hand by kind stays out, its count only: 0 here, the feature kept so the
@@ -379,7 +379,7 @@ fn mover_view(d: &mut Duel, mover: u32, prompt: Option<&Msg>, level: u8) -> Vec<
         let mut opp = b.turn;
         opp[5] = 0.0;
         f.extend(opp);
-        let lp = |p: u32| d.ext_get_info()[3 + p as usize] as i64;
+        let lp = |p: u32| d.player[p as usize].lp as i64;
         f.push((b.mons.is_empty() && a.ready_atk > 0 && a.ready_atk >= lp(1 - mover)) as u8 as f64);
         f.push((a.mons.is_empty() && b.ready_atk > 0 && b.ready_atk >= lp(mover)) as u8 as f64);
         f.push(d.core.current_chain.last().is_some_and(|l| l.triggering_controler as u32 == mover) as u8 as f64);

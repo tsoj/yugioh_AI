@@ -168,7 +168,7 @@ pub fn is_hidden_prompt(m: &Msg) -> bool {
 
 /// The response to a hidden prompt.
 pub fn auto_response() -> Response {
-    Response { index: Some(-1), ..Response::default() }
+    Response::pass()
 }
 
 /// The option lists of a prompt that the core sorts by effect id (or builds from effect

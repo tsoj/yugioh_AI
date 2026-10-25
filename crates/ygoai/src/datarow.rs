@@ -70,7 +70,7 @@ pub fn side(d: &mut Duel, p: u32) -> Value {
         .collect();
     let n = |d: &mut Duel, loc: u32| d.ocg_query_count(p as u8, loc);
     json!({
-        "lp": d.ext_get_info()[3 + p as usize] as i32,
+        "lp": d.player[p as usize].lp,
         "hand": n(d, LOCATION_HAND), "deck": n(d, LOCATION_DECK), "grave": n(d, LOCATION_GRAVE),
         "removed": n(d, LOCATION_REMOVED), "extra": n(d, LOCATION_EXTRA),
         "mzone": mz, "szone": sz,
@@ -95,15 +95,15 @@ pub fn features(d: &mut Duel, prompt: &Msg, set: &str) -> Result<Value, String> 
 
 /// The row of a labeled decision (`result` is filled in by [`set_results`]).
 pub fn row(d: &mut Duel, game: usize, prompt: &Msg, label: &Label, sets: &[String]) -> Result<Value, String> {
-    let info = d.ext_get_info();
+    let [turn, turn_player, phase, ..] = d.ext_get_info();
     let mut r = Map::new();
     for (k, v) in [
         ("game", json!(game)),
         ("decision", json!(label.decision)),
         ("player", json!(label.player)),
-        ("turn", json!(info[0])),
-        ("turn_player", json!(info[1])),
-        ("phase", json!(info[2])),
+        ("turn", json!(turn)),
+        ("turn_player", json!(turn_player)),
+        ("phase", json!(phase)),
         ("prompt", json!(prompt.name())),
         ("value", json!(label.value)),
         ("depth", json!(label.depth)),
