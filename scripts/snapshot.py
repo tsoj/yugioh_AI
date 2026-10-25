@@ -38,7 +38,10 @@ def reexec(name: str, ref: str | None = None) -> None:
     dst = make(name, ref)
     script = dst / Path(sys.argv[0]).resolve().relative_to(ROOT)
     print(f"running from the snapshot {dst}", flush=True)
-    os.execve(sys.executable, [sys.executable, str(script), *sys.argv[1:]], dict(os.environ, **{_ENV: str(ROOT)}))
+    env = dict(os.environ, **{_ENV: str(ROOT)})
+    if ref is not None:
+        env["YGOAI_ROOT"] = str(dst)  # (a ref's own binding: its data paths point to its deleted build tree)
+    os.execve(sys.executable, [sys.executable, str(script), *sys.argv[1:]], env)
 
 
 def make(name: str, ref: str | None = None) -> Path:
