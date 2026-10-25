@@ -296,13 +296,13 @@ enum NewPosition {
 
 /// The futility margin at `depth`: a later move whose static eval plus it cannot raise alpha is
 /// pruned.
-fn futility_margin(t: &Tune, depth: f64) -> f64 {
-    t.futility_margin + t.futility_margin_per_ply * depth
+fn futility_margin(tune: &Tune, depth: f64) -> f64 {
+    tune.futility_margin + tune.futility_margin_per_ply * depth
 }
 
 /// The depth of a late move's reduced search.
-fn lmr_depth(t: &Tune, new_depth: f64) -> f64 {
-    (new_depth - t.lmr_reduction).max(0.0)
+fn lmr_depth(tune: &Tune, new_depth: f64) -> f64 {
+    (new_depth - tune.lmr_reduction).max(0.0)
 }
 
 impl SearchState<'_> {
@@ -458,10 +458,10 @@ impl SearchState<'_> {
             }
         }
 
-        let t = self.tables.tune;
+        let tune = self.tables.tune;
         let collect_gaps = self.tables.stats.is_some() && depth <= 4.0;
-        let static_eval = (depth <= t.futility_max_depth || collect_gaps).then(|| evaluate_at(duel, us, Some(prompt)));
-        let futility_value = static_eval.filter(|_| depth <= t.futility_max_depth).map(|s| s + futility_margin(&t, depth));
+        let static_eval = (depth <= tune.futility_max_depth || collect_gaps).then(|| evaluate_at(duel, us, Some(prompt)));
+        let futility_value = static_eval.filter(|_| depth <= tune.futility_max_depth).map(|s| s + futility_margin(&tune, depth));
 
         let ctx = key_context(duel, prompt, card_order.as_ref().and_then(|c| c.hint));
         let history_keys: Vec<usize> = moves.iter().map(|m| move_key(prompt, m, &ctx)).collect();
@@ -492,25 +492,25 @@ impl SearchState<'_> {
 
             let make_on = if i == move_order.len() - 1 { MakeOn::InPlace } else { MakeOn::Copy };
             let child = Node { alpha, beta, depth: depth - 1.0, height: height + 1, pv: pv && i == 0 };
-            let mut value = None;
 
             // late move reduction: a late move, unlikely the best by the move ordering, searched
             // `lmr_reduction` plies less with a null window (it only has to show that it does not
-            // raise alpha); the full depth and window after all if it raises alpha
-            if depth >= t.lmr_min_depth && i >= t.lmr_min_move_counter {
+            // raise alpha)
+            let reduced = if depth >= tune.lmr_min_depth && i >= tune.lmr_min_move_counter {
                 let reduced_beta = if alpha.is_finite() { alpha + NULL_WINDOW } else { beta };
-                let reduced = self.search_move(duel, prompt, mv, Node { beta: reduced_beta, depth: lmr_depth(&t, child.depth), pv: false, ..child }, MakeOn::Copy)?;
-                if reduced <= alpha {
-                    value = Some(reduced);
-                }
+                let value = self.search_move(duel, prompt, mv, Node { beta: reduced_beta, depth: lmr_depth(&tune, child.depth), pv: false, ..child }, MakeOn::Copy)?;
                 if let Some(st) = &mut self.tables.stats {
-                    st.reduction(prompt, i, reduced > alpha);
+                    st.reduction(prompt, i, value > alpha);
                 }
-            }
+                Some(value)
+            } else {
+                None
+            };
 
-            let value = match value {
-                Some(v) => v,
-                None => self.search_move(duel, prompt, mv, child, make_on)?,
+            // (the full depth and window: without a reduction, or if the reduced search raised alpha)
+            let value = match reduced {
+                Some(v) if v <= alpha => v,
+                _ => self.search_move(duel, prompt, mv, child, make_on)?,
             };
 
             if let Some(s) = static_eval
@@ -528,7 +528,7 @@ impl SearchState<'_> {
                 node_type = NodeType::CutNode;
                 // (history: this move up, the ones tried before it down)
                 let tried: Vec<usize> = move_order[..i].iter().map(|&k| history_keys[k]).collect();
-                self.tables.history_table.update(history_keys[m], &tried, depth, t.hist_exponent, t.hist_malus);
+                self.tables.history_table.update(history_keys[m], &tried, depth, tune.hist_exponent, tune.hist_malus);
                 cut = Some(i);
                 break;
             }
