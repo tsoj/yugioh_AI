@@ -180,7 +180,7 @@ pub struct Opening {
     pub decks: Vec<Deck>,
 }
 
-/// The openings of a book (scripts/make_match_book.py), in order: those whose less winning seat
+/// The openings of a book (ygoai-book-test), in order: those whose less winning seat
 /// won at least `book_min` test games.
 pub fn load_book(path: &Path, book_min: i64) -> std::io::Result<Vec<Opening>> {
     load_book_lines(path, book_min, usize::MAX)

@@ -1,4 +1,4 @@
-//! The opening book's test games (scripts/make_match_book.py's, with the policy agents in Rust:
+//! The opening book's test games (the old scripts/make_match_book.py's, with the policy agents in Rust:
 //! ygoai::rl_policy). Each candidate (a row with "seed" and "decks", e.g. from
 //! scripts/onesided_candidates.py score) is played up to GAMES times by policy agents (each game a
 //! random one of POLICIES for both seats, sampling at temperature 1; the decks keep their seats),
@@ -11,7 +11,7 @@
 //!
 //! (--records: every game's record with its candidate's "seed" and "game" index, for comparing with
 //! the Python agents)
-//! (the games and their seeds are make_match_book.py's; a candidate whose games panic is left out)
+//! (the games and their seeds are the old make_match_book.py's; a candidate whose games panic is left out)
 
 use std::collections::HashSet;
 use std::io::{BufRead, Write};

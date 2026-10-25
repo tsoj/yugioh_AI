@@ -1,6 +1,6 @@
 //! Engine protocol: AIs as separate processes talking JSON lines over stdio (ygoai/protocol.py,
 //! which documents the protocol). [`EngineProcess`] is the arbiter-side [`Agent`] for such a
-//! process; the engines themselves are e.g. `python -m ygoai.engine AGENT`.
+//! process; the engines themselves are e.g. `ygoai-engine AGENT`.
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};

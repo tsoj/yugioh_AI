@@ -59,19 +59,15 @@ cd download_human_decks
 ## Running things
 
 ```sh
-# self-play statistics between built-in agents
-python3 scripts/selfplay.py -n 1000 --agents mixed
+# engine development: a feature on a branch, SPRT against main (both refs built into
+# build/engines/<sha>, the Rust arbiter ygoai-match with the book runs/books/match2.jsonl, 10+0.1,
+# bounds [0, 5]; log, records and a summary line in runs/sprt/); merge if H1
+scripts/sprt_branch.sh my-feature-branch main
 
-# a match, fastchess style (NAME=COMMAND, builtin:<agent> or any engine process): random deck
-# pairs from the corpus, each opening played with both seats, Fischer clock per decision
-python3 scripts/match.py --engine greedy=builtin:greedy \
-    --engine "random=python3 -m ygoai.engine random" -n 200 --sprt 0 10 --tc 60+0.5
-.venv/bin/python scripts/match.py --engine belief_mc=builtin:belief_mc --engine heuristic=builtin:heuristic \
-    -n 2000 --mirror-prob 0 --tc 30+0.3 --sprt 0 10
-
-# engine development: a feature on a branch, SPRT against main (both versions exported to
-# build/snapshots/engine-<sha>, run as engine processes; results in runs/sprt/); merge if H1
-.venv/bin/python scripts/sprt.py my-feature-branch main --agent alphabeta
+# any match of Rust engines (NAME=COMMAND; builtin:<agent> or an engine process speaking
+# crates/ygoai/src/protocol.rs): each book opening played with both seats, Fischer clock per decision
+build/engines/<sha>/ygoai-match --engine "new=build/engines/<sha>/ygoai-engine alphabeta" \
+    --engine base=builtin:random --book runs/books/match2.jsonl -n 200 --tc 10+0.1 --sprt 0 5
 
 # belief replay consistency test (both players, cut at the end of turns 1, 2 and 3, at 1/3,
 # 2/3 and the full game; turn cuts show as frac -1, -2, -3; --fractions / --turns choose);
@@ -130,10 +126,9 @@ An AI is a process speaking JSON lines on stdin/stdout (see `ygoai/protocol.py`)
 EDOPro has (hidden-card effect descriptions in card hints, stale "reason" fields, deck positions
 that distinguish returned cards, ...). A `prompt` is a core selection message, and the response
 format for each kind is documented in `ygoai/actions.py`. `state` is the player's view of the
-whole field. `clock` (only under a time control, `match.py --tc BASE+INC`: Fischer, per decision)
+whole field. `clock` (only under a time control, `ygoai-match --tc BASE+INC`: Fischer, per decision)
 is the time the player has left; the time the response takes is subtracted, then the increment
-added, and below zero the player loses on time. `python -m ygoai.engine greedy` runs a built-in agent as an engine, which doubles as a
-minimal example.
+added, and below zero the player loses on time.
 
 ## How the belief replay works (`crates/ygoai/src/belief/`)
 

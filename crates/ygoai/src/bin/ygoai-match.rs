@@ -1,11 +1,11 @@
-//! fastchess-style match between two Yu-Gi-Oh engines (scripts/match.py in Rust; the same
+//! fastchess-style match between two Yu-Gi-Oh engines (the old scripts/match.py in Rust; the same
 //! options, output and records).
 //!
-//!   ygoai-match --engine new="python -m ygoai.engine greedy" --engine base=builtin:random \
-//!       --book runs/books/match1.jsonl --sprt 0 10 --tc 60+0.5 -n 5000 -c 24
+//!   ygoai-match --engine new="ygoai-engine alphabeta" --engine base=builtin:random \
+//!       --book runs/books/match2.jsonl --sprt 0 5 --tc 10+0.1 -n 10000 -c 32
 //!
-//! Openings come from a book (scripts/make_match_book.py); every opening is played twice, the
-//! engines swapping seats. Engines are commands speaking the engine protocol (ygoai/protocol.py)
+//! Openings come from a book (ygoai-book-test); every opening is played twice, the
+//! engines swapping seats. Engines are commands speaking the engine protocol (protocol.rs)
 //! or built-in Rust agents (builtin:random).
 //!
 //! `--nps-nodes N` (NPS-adjusted node limit): the second engine (the base) searches N nodes per
@@ -149,7 +149,7 @@ fn parse_args() -> Args {
             "--resume" => a.resume = Some(next(&mut i, &arg).into()),
             "--nps-nodes" => a.nps_nodes = Some(num(next(&mut i, &arg), &arg) as u64),
             "--shuffle" => a.shuffle = Some(next(&mut i, &arg).parse().unwrap_or_else(|_| usage("--shuffle takes an integer seed"))),
-            // (accepted for scripts/match.py's command lines: only random openings use them)
+            // (accepted for the old scripts/match.py command lines; unused)
             "--seed" | "--mirror-prob" => {
                 next(&mut i, &arg);
             }
@@ -161,7 +161,7 @@ fn parse_args() -> Args {
         usage("exactly two engines are required");
     }
     if a.book.is_none() {
-        usage("--book is required (random openings from the deck corpus: scripts/match.py)");
+        usage("--book is required");
     }
     a
 }
