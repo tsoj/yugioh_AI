@@ -109,10 +109,6 @@ pub struct Heuristic {
     pub hint: Option<u64>,
 }
 
-fn index(i: i64) -> Response {
-    Response { index: Some(i), ..Response::default() }
-}
-
 impl Heuristic {
     pub fn new(seed: i128, player: u32) -> Heuristic {
         Heuristic { player, rng: PyRandom::new(seed), activations: HashMap::new(), hint: None }
@@ -193,19 +189,19 @@ impl Heuristic {
             }
             Msg::SelectChain { forced, chains, .. } => {
                 if *forced != 0 {
-                    return Ok(index(0));
+                    return Ok(Response::index(0));
                 }
                 if state.is_some_and(|s| s.lp[me as usize] > CHAIN_MIN_LP) {
                     for (i, c) in chains.iter().enumerate() {
                         if self.allowed(c) {
                             self.note(c);
-                            return Ok(index(i as i64));
+                            return Ok(Response::index(i));
                         }
                     }
                 }
-                return Ok(index(-1));
+                return Ok(Response::pass());
             }
-            Msg::SelectEffectyn { .. } | Msg::SelectYesno { .. } => return Ok(Response { yes: Some(own_turn), ..Response::default() }),
+            Msg::SelectEffectyn { .. } | Msg::SelectYesno { .. } => return Ok(Response::yes(own_turn)),
             Msg::SelectPosition { code, positions, .. } => {
                 let order = if card(*code).is_some_and(|c| c.attack <= 0) {
                     [POS_FACEUP_DEFENSE, POS_FACEDOWN_DEFENSE, POS_FACEUP_ATTACK, POS_FACEDOWN_ATTACK]
@@ -331,7 +327,7 @@ impl Heuristic {
             }
             Msg::SelectUnselectCard { select_cards, finishable, cancelable, .. } => {
                 if !select_cards.is_empty() {
-                    return Ok(index(self.card_order(select_cards)[0] as i64));
+                    return Ok(Response::index(self.card_order(select_cards)[0]));
                 }
                 if *finishable != 0 || *cancelable != 0 {
                     return Ok(Response { finish: Some(true), ..Response::default() });
@@ -360,7 +356,7 @@ impl Heuristic {
                 let n = (*count as usize).min(places.len());
                 return Ok(Response { places: Some(places[..n].to_vec()), ..Response::default() });
             }
-            Msg::SelectOption { .. } | Msg::AnnounceNumber { .. } => return Ok(index(0)),
+            Msg::SelectOption { .. } | Msg::AnnounceNumber { .. } => return Ok(Response::index(0)),
             Msg::SortCard { cards, .. } | Msg::SortChain { cards, .. } => {
                 return Ok(Response { order: Some((0..cards.len() as i64).collect()), ..Response::default() });
             }

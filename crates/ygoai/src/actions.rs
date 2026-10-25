@@ -162,9 +162,14 @@ impl Response {
         Response { kind: Some(command), index: index.map(|i| i as i64), ..Response::default() }
     }
 
-    /// The option at `index` (a chain's pass: -1).
-    pub fn index(index: i64) -> Response {
-        Response { index: Some(index), ..Response::default() }
+    /// The option at `index`.
+    pub fn index(index: usize) -> Response {
+        Response { index: Some(index as i64), ..Response::default() }
+    }
+
+    /// Not chaining (a chain window's pass).
+    pub fn pass() -> Response {
+        Response { index: Some(-1), ..Response::default() }
     }
 
     pub fn yes(yes: bool) -> Response {

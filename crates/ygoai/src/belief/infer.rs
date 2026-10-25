@@ -88,16 +88,8 @@ impl From<bool> for Certain {
 
 pub type Inferred = (Vec<Response>, Certain);
 
-fn idx(i: usize) -> Response {
-    Response { index: Some(i as i64), ..Response::default() }
-}
-
 fn indices(v: Vec<usize>) -> Response {
     Response { indices: Some(v.into_iter().map(|i| i as i64).collect()), ..Response::default() }
-}
-
-fn yes(y: bool) -> Response {
-    Response { yes: Some(y), ..Response::default() }
 }
 
 /// Whether the messages before CHAINING `ch` belong to that activation.
@@ -417,7 +409,7 @@ pub fn infer_battle(prompt: &Msg, up: &[Msg], up_ext: Option<&[Msg]>) -> Inferre
 pub fn infer_chain(prompt: &Msg, up: &[Msg]) -> Inferred {
     let Msg::SelectChain { chains, forced, .. } = prompt else { return (vec![], Certain::No) };
     let n = chains.len();
-    let pass = Response { index: Some(-1), ..Response::default() };
+    let pass = Response::pass();
     if let Some(first @ Msg::CardHint { hint_type, .. }) = up.first()
         && *hint_type != CHINT_DESC_REMOVE
     {
@@ -427,12 +419,12 @@ pub fn infer_chain(prompt: &Msg, up: &[Msg]) -> Inferred {
         let own: Vec<usize> = (0..n).filter(|&j| same_loc(&(&chains[j]).into(), &fl)).collect();
         if !own.is_empty() && ch.is_none_or(|c| !same_loc(&msg_li(c).unwrap(), &fl)) {
             if *forced == 0 {
-                let mut c: Vec<Response> = own.iter().map(|&j| idx(j)).collect();
+                let mut c: Vec<Response> = own.iter().map(|&j| Response::index(j)).collect();
                 c.push(pass.clone());
                 return (c, Certain::No);
             }
             let c = own.len() == 1;
-            return (own.into_iter().map(idx).collect(), c.into());
+            return (own.into_iter().map(Response::index).collect(), c.into());
         }
     }
     if *forced != 0 {
@@ -449,12 +441,12 @@ pub fn infer_chain(prompt: &Msg, up: &[Msg]) -> Inferred {
         let hinted: Vec<usize> = others.iter().copied().filter(|&j| named.contains(&(chains[j].code as u64))).collect();
         if !hinted.is_empty() && ch.is_some() {
             let c = hinted.len() == 1;
-            return (hinted.into_iter().map(idx).collect(), c.into());
+            return (hinted.into_iter().map(Response::index).collect(), c.into());
         }
         let first = head.iter().find(|m| !matches!(m, Msg::Hint { .. } | Msg::CardHint { .. }));
         if !others.is_empty() && ch.is_some() && first.is_some_and(|f| matches!(f, Msg::PayLpcost { .. })) {
             let rest: Vec<usize> = (0..n).filter(|j| !others.contains(j)).collect();
-            return ([others, rest].concat().into_iter().map(idx).collect(), Certain::No);
+            return ([others, rest].concat().into_iter().map(Response::index).collect(), Certain::No);
         }
     }
     for (i, m) in up.iter().enumerate() {
@@ -465,7 +457,7 @@ pub fn infer_chain(prompt: &Msg, up: &[Msg]) -> Inferred {
             let ix = match_chaining(chains, m, &up[..i]);
             if !ix.is_empty() {
                 let c = ix.len() == 1;
-                let mut out: Vec<Response> = ix.into_iter().map(idx).collect();
+                let mut out: Vec<Response> = ix.into_iter().map(Response::index).collect();
                 if *forced == 0 {
                     out.push(pass.clone());
                 }
@@ -479,10 +471,10 @@ pub fn infer_chain(prompt: &Msg, up: &[Msg]) -> Inferred {
         break;
     }
     if *forced != 0 {
-        return ((0..n).map(idx).collect(), (n == 1).into());
+        return ((0..n).map(Response::index).collect(), (n == 1).into());
     }
     let mut out = vec![pass];
-    out.extend((0..n).map(idx));
+    out.extend((0..n).map(Response::index));
     (out, Certain::Yes)
 }
 
@@ -499,9 +491,9 @@ pub fn infer_effectyn(prompt: &Msg, up: &[Msg], descs: Option<&[u64]>) -> Inferr
                     && !d.contains(desc)
                 {
                     // another effect of the same card is activated next
-                    return (vec![yes(false), yes(true)], Certain::Yes);
+                    return (vec![Response::yes(false), Response::yes(true)], Certain::Yes);
                 }
-                return (vec![yes(true), yes(false)], (*desc != 0).into());
+                return (vec![Response::yes(true), Response::yes(false)], (*desc != 0).into());
             }
             break;
         }
@@ -510,7 +502,7 @@ pub fn infer_effectyn(prompt: &Msg, up: &[Msg], descs: Option<&[u64]>) -> Inferr
         }
         break;
     }
-    (vec![yes(false), yes(true)], Certain::No)
+    (vec![Response::yes(false), Response::yes(true)], Certain::No)
 }
 
 pub fn infer_option(prompt: &Msg, up: &[Msg], _player: u32) -> Inferred {
@@ -520,8 +512,8 @@ pub fn infer_option(prompt: &Msg, up: &[Msg], _player: u32) -> Inferred {
         if let Some((HINT_OPSELECTED, _, data)) = hint(m)
             && let Some(i) = opts.iter().position(|&o| o == data)
         {
-            let mut c = vec![idx(i)];
-            c.extend((0..opts.len()).filter(|&j| j != i).map(idx));
+            let mut c = vec![Response::index(i)];
+            c.extend((0..opts.len()).filter(|&j| j != i).map(Response::index));
             return (c, Certain::Yes);
         }
     }
@@ -533,13 +525,13 @@ pub fn infer_option(prompt: &Msg, up: &[Msg], _player: u32) -> Inferred {
             let named: Vec<usize> = (0..opts.len()).filter(|&j| opts[j] >> 20 == data).collect();
             if named.len() == 1 {
                 let i = named[0];
-                let mut c = vec![idx(i)];
-                c.extend((0..opts.len()).filter(|&j| j != i).map(idx));
+                let mut c = vec![Response::index(i)];
+                c.extend((0..opts.len()).filter(|&j| j != i).map(Response::index));
                 return (c, Certain::No);
             }
         }
     }
-    ((0..opts.len()).map(idx).collect(), (opts.len() == 1).into())
+    ((0..opts.len()).map(Response::index).collect(), (opts.len() == 1).into())
 }
 
 pub fn infer_hint_value(up: &[Msg], hint_type: u32) -> Option<u64> {
@@ -720,9 +712,9 @@ pub fn infer_announce(prompt: &Msg, up: &[Msg]) -> Inferred {
             if let Some(v) = infer_hint_value(up, HINT_NUMBER)
                 && let Some(i) = values.iter().position(|&x| x == v)
             {
-                return (vec![idx(i)], Certain::Yes);
+                return (vec![Response::index(i)], Certain::Yes);
             }
-            ((0..values.len()).map(idx).collect(), Certain::No)
+            ((0..values.len()).map(Response::index).collect(), Certain::No)
         }
         Msg::AnnounceRace { .. } | Msg::AnnounceAttrib { .. } => {
             let ht = if matches!(prompt, Msg::AnnounceRace { .. }) { HINT_RACE } else { HINT_ATTRIB };
@@ -1341,12 +1333,12 @@ pub fn infer_unselect(prompt: &Msg, up: &[Msg], lm0: &LocMap, ids: Option<Vec<Op
         if !picks.is_empty() {
             let mut first: Vec<Response> = Vec::new();
             for j in picks {
-                let r = idx(j);
+                let r = Response::index(j);
                 if !first.contains(&r) {
                     first.push(r);
                 }
             }
-            let rest: Vec<Response> = (0..sel.len()).map(idx).filter(|r| !first.contains(r)).collect();
+            let rest: Vec<Response> = (0..sel.len()).map(Response::index).filter(|r| !first.contains(r)).collect();
             let f: Vec<Response> = if fin { vec![finish.clone()] } else { vec![] };
             if unsel.is_empty() {
                 return ([first, f, rest].concat(), certain);
@@ -1358,7 +1350,7 @@ pub fn infer_unselect(prompt: &Msg, up: &[Msg], lm0: &LocMap, ids: Option<Vec<Op
     if fin {
         cands.push(finish);
     }
-    cands.extend((0..sel.len()).map(idx));
+    cands.extend((0..sel.len()).map(Response::index));
     let c = !cands.is_empty() && fin && !near.is_empty();
     (cands, c.into())
 }

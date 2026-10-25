@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use ygo_core::constants::*;
 use ygo_core::duel::Duel;
 
-use super::cardpolicy::{CardPolicy, applies, selection_cards, set_applies, set_policy};
+use super::cardpolicy::{card_policy, card_policy_applies, selection_cards, set_policy, set_policy_applies};
 use super::evaluate::evaluate_at;
 use super::history::HistoryTable;
 use super::movegen::{candidates, is_searched, root_candidates};
@@ -317,14 +317,14 @@ impl SearchState<'_> {
         let (Msg::SelectCard { cards, player, .. } | Msg::SelectSum { cards, player, .. }) = m else { return None };
         let rules = &mut self.policies[*player as usize];
         let (order, hint) = (rules.card_order(cards), rules.hint.take());
-        let order = match CardPolicy::get() {
-            Some(policy) if applies(m) => policy.order(duel, m, hint, &order),
+        let order = match card_policy() {
+            Some(policy) if card_policy_applies(m) => policy.order(duel, m, hint, &order),
             _ => order,
         };
         Some(CardOrder { order, hint })
     }
 
-    /// The set policy's answer to a selection of sets of cards (`set_applies`) among the root's
+    /// The set policy's answer to a selection of sets of cards (`set_policy_applies`) among the root's
     /// candidates (the rules' answer among them), None without either.
     fn set_answer(&mut self, duel: &Duel, m: &Msg) -> Option<Response> {
         let policy = set_policy()?;
@@ -424,7 +424,7 @@ impl SearchState<'_> {
         if moves.is_empty() {
             return Ok(evaluate_at(duel, us, Some(prompt)));
         }
-        if set_applies(prompt)
+        if set_policy_applies(prompt)
             && let (Some(policy), Some(c)) = (set_policy(), &card_order)
         {
             // (sets of cards: the set policy's order)
@@ -642,9 +642,9 @@ impl SearchState<'_> {
             let rules = |state: &mut Self, prompt: &Msg| state.policies[prompt.player().unwrap_or(0) as usize].respond_to(prompt, None).map_err(|_| Stop::Broken);
             let response = if is_hidden_prompt(&prompt) {
                 auto_response()
-            } else if applies(&prompt) && at_horizon && CardPolicy::get().is_some() {
+            } else if card_policy_applies(&prompt) && at_horizon && card_policy().is_some() {
                 Response::cards(vec![self.card_order(duel, &prompt).unwrap().order[0]])
-            } else if set_applies(&prompt)
+            } else if set_policy_applies(&prompt)
                 && (at_horizon || !is_searched(&prompt))
                 && let Some(answer) = self.set_answer(duel, &prompt)
             {

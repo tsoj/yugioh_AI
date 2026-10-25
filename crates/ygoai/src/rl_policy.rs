@@ -190,23 +190,18 @@ const KINDS: [&str; 17] = [
 const HINTS: usize = 81; // (select hints 500..579 and "none")
 const EFFECTS: usize = 18; // (effect index 0..15 of a card, a system string, none)
 
-fn index(i: i64) -> Response {
-    Response { index: Some(i), ..Response::default() }
-}
-
 /// The candidates the policy chooses from (belief_mc.candidates): none for other prompts.
 pub fn candidates(p: &Msg) -> Vec<Response> {
     match p {
         Msg::SelectIdlecmd { .. } => idle_options(p),
         Msg::SelectBattlecmd { .. } => battle_options(p),
-        Msg::SelectChain { chains, forced, .. } => (if *forced != 0 { 0 } else { -1 }..chains.len() as i64).map(index).collect(),
-        Msg::SelectEffectyn { .. } | Msg::SelectYesno { .. } => {
-            [true, false].map(|yes| Response { yes: Some(yes), ..Response::default() }).to_vec()
+        Msg::SelectChain { chains, forced, .. } => {
+            let chain = (0..chains.len()).map(Response::index);
+            if *forced != 0 { chain.collect() } else { std::iter::once(Response::pass()).chain(chain).collect() }
         }
-        Msg::SelectOption { options, .. } => (0..options.len() as i64).map(index).collect(),
-        Msg::SelectCard { min: 1, max: 1, cards, .. } => {
-            (0..cards.len() as i64).map(|i| Response { indices: Some(vec![i]), ..Response::default() }).collect()
-        }
+        Msg::SelectEffectyn { .. } | Msg::SelectYesno { .. } => vec![Response::yes(true), Response::yes(false)],
+        Msg::SelectOption { options, .. } => (0..options.len()).map(Response::index).collect(),
+        Msg::SelectCard { min: 1, max: 1, cards, .. } => (0..cards.len()).map(|i| Response::cards(vec![i])).collect(),
         _ => vec![],
     }
 }

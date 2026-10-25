@@ -56,7 +56,7 @@ fn play(book: &ygoai::matchrun::Opening, game: usize, nodes: u64, sets: &[String
         let player = p.player().unwrap();
         let cands = candidates(&p);
         if trace {
-            eprintln!("game {game} decision {} turn {} {} ({} moves, {} messages)", record.responses.len(), duel.ext_get_info()[0], p.name(), cands.len(), step.messages.len());
+            eprintln!("game {game} decision {} turn {} {} ({} moves, {} messages)", record.responses.len(), duel.infos.turn_id, p.name(), cands.len(), step.messages.len());
         }
         let resp = if is_hidden_prompt(&p) {
             auto_response()

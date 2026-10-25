@@ -19,7 +19,8 @@ const TYPES: [u32; 18] = [
 const LOCATIONS: [u32; 8] = [LOCATION_DECK, LOCATION_HAND, LOCATION_MZONE, LOCATION_SZONE, LOCATION_GRAVE, LOCATION_REMOVED, LOCATION_EXTRA, LOCATION_OVERLAY];
 /// (an effect's range, for ignition and quick effects)
 const RANGES: [u32; 5] = [LOCATION_HAND, LOCATION_MZONE, LOCATION_SZONE | LOCATION_FZONE | LOCATION_PZONE, LOCATION_GRAVE, LOCATION_REMOVED];
-const PHASES: [u32; 5] = [PHASE_DRAW | PHASE_STANDBY, PHASE_MAIN1, PHASE_BATTLE_START | PHASE_BATTLE_STEP | PHASE_DAMAGE | PHASE_DAMAGE_CAL | PHASE_BATTLE, PHASE_MAIN2, PHASE_END];
+/// (the phases by group, for the policies' features)
+pub(super) const PHASES: [u32; 5] = [PHASE_DRAW | PHASE_STANDBY, PHASE_MAIN1, PHASE_BATTLE_START | PHASE_BATTLE_STEP | PHASE_DAMAGE | PHASE_DAMAGE_CAL | PHASE_BATTLE, PHASE_MAIN2, PHASE_END];
 /// (the effects one activates, whose categories count)
 const ACTION_TYPES: u32 = EFFECT_TYPE_ACTIVATE | EFFECT_TYPE_IGNITION | EFFECT_TYPE_QUICK_O | EFFECT_TYPE_QUICK_F | EFFECT_TYPE_TRIGGER_O | EFFECT_TYPE_TRIGGER_F | EFFECT_TYPE_FLIP;
 const CATEGORIES: usize = 33;
@@ -37,18 +38,17 @@ pub fn selection_cards(prompt: &Msg) -> Option<(&[crate::messages::Card], &u32)>
     }
 }
 
-/// Whether the policy orders this selection.
-pub fn applies(prompt: &Msg) -> bool {
+/// Whether the card policy orders this selection.
+pub fn card_policy_applies(prompt: &Msg) -> bool {
     matches!(prompt, Msg::SelectCard { min: 1, max: 1, cards, .. } if cards.len() >= 2)
 }
 
-/// The features of each card of the selection `prompt` (`applies`; also of several cards, one at
+/// The features of each card of the selection `prompt` (`card_policy_applies`; also of several cards, one at
 /// a time, a sum or tributes: `selection_cards`), with the select hint `hint` and the rules' order
 /// `rules` (the cards' indices, the preferred first).
 pub fn card_features(d: &Duel, prompt: &Msg, hint: Option<u64>, rules: &[usize]) -> Vec<[f32; CARD_FEATURES]> {
     let Some((cards, player)) = selection_cards(prompt) else { return Vec::new() };
     let me = *player as usize;
-    let info = d.ext_get_info();
     // (the selection's and the position's features, the same for every card)
     let mut shared = Vec::with_capacity(RULED.len() + 16);
     match hint.and_then(|h| RULED.iter().position(|r| *r == h)) {
@@ -57,14 +57,14 @@ pub fn card_features(d: &Duel, prompt: &Msg, hint: Option<u64>, rules: &[usize])
     }
     shared.push(hint.is_some_and(|h| !RULED.contains(&h)) as u32 as f32);
     shared.push(hint.is_none() as u32 as f32);
-    shared.push((info[1] as usize == me) as u32 as f32);
-    shared.extend(PHASES.iter().map(|p| (info[2] & p != 0) as u32 as f32));
+    shared.push((d.infos.turn_player as usize == me) as u32 as f32);
+    shared.extend(PHASES.iter().map(|p| (d.infos.phase as u32 & p != 0) as u32 as f32));
     let side = |p: usize| (&d.player[p], d.player[p].list_mzone.iter().take(5).filter(|c| c.is_some()).count() as f32);
     let ((mine, my_mons), (_, their_mons)) = (side(me), side(1 - me));
     shared.extend([
         cards.len() as f32 / 10.0,
-        info[3 + me] as f32 / 8000.0,
-        info[4 - me] as f32 / 8000.0,
+        d.player[me].lp as f32 / 8000.0,
+        d.player[1 - me].lp as f32 / 8000.0,
         mine.list_hand.len() as f32 / 10.0,
         my_mons / 5.0,
         their_mons / 5.0,
@@ -198,7 +198,7 @@ pub struct CardPolicy {
 
 /// Whether the set policy orders this selection's candidates (sets of cards: several cards, a
 /// sum; tributes not, see DEFAULT_SET_POLICY).
-pub fn set_applies(prompt: &Msg) -> bool {
+pub fn set_policy_applies(prompt: &Msg) -> bool {
     matches!(prompt, Msg::SelectCard { min, max, .. } if (*min, *max) != (1, 1)) || matches!(prompt, Msg::SelectSum { .. })
 }
 
@@ -209,14 +209,14 @@ pub fn set_policy() -> Option<&'static CardPolicy> {
     P.get_or_init(|| CardPolicy::load("YGOAI_SET_POLICY", DEFAULT_SET_POLICY, "models/set_policy_s2_h16.json")).as_ref()
 }
 
-impl CardPolicy {
-    /// The policy in use (read once): $YGOAI_CARD_POLICY's JSON file if set ("none": the rules'
-    /// order), the built-in DEFAULT_POLICY otherwise.
-    pub fn get() -> Option<&'static CardPolicy> {
-        static P: std::sync::OnceLock<Option<CardPolicy>> = std::sync::OnceLock::new();
-        P.get_or_init(|| CardPolicy::load("YGOAI_CARD_POLICY", DEFAULT_POLICY, "models/card_policy_cp4_h16.json")).as_ref()
-    }
+/// The card policy in use (read once): $YGOAI_CARD_POLICY's JSON file if set ("none": none, the
+/// rules' order), the built-in DEFAULT_POLICY otherwise.
+pub fn card_policy() -> Option<&'static CardPolicy> {
+    static P: std::sync::OnceLock<Option<CardPolicy>> = std::sync::OnceLock::new();
+    P.get_or_init(|| CardPolicy::load("YGOAI_CARD_POLICY", DEFAULT_POLICY, "models/card_policy_cp4_h16.json")).as_ref()
+}
 
+impl CardPolicy {
     /// $`var`'s JSON file if set ("none": none), else the built-in `default` (from `path`).
     fn load(var: &str, default: &str, path: &str) -> Option<CardPolicy> {
         let (text, path) = match std::env::var(var).ok().filter(|p| !p.is_empty()) {
@@ -248,7 +248,7 @@ impl CardPolicy {
         order
     }
 
-    /// The indices of `sets` (responses choosing cards of the selection `prompt`, `set_applies`) by
+    /// The indices of `sets` (responses choosing cards of the selection `prompt`, `set_policy_applies`) by
     /// score, the best first (ties: as given).
     pub fn order_sets(&self, d: &Duel, prompt: &Msg, hint: Option<u64>, rules: &[usize], sets: &[crate::actions::Response]) -> Vec<usize> {
         let scores: Vec<f32> = card_features(d, prompt, hint, rules).iter().map(|x| self.score(x)).collect();
