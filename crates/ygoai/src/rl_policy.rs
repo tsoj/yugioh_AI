@@ -1,11 +1,11 @@
 //! The RL policy: the policy/value network of the self-play (reinforcement learning) runs
-//! (runs/nn/rl*, boot1; Python: ygoai/nn/model.py PolicyValueNet, its features ygoai/nn/features.py;
-//! trained by scripts/train_policy_value.py) and the agent that plays whole games with it, without a
-//! search (Python: agents/policy_agent.py PolicyAgent; the opening book's test games,
-//! scripts/make_match_book.py). Not the alpha-beta search's move-ordering policies
-//! (search::cardpolicy).
-//! It makes the Python agent's choices with the same seeds, up to float rounding (numpy sums in
-//! another order: a sampled choice can differ when it falls right at a boundary).
+//! (runs/nn/rl*, boot1) and the agent that plays whole games with it, without a search (the opening
+//! book's test games, ygoai-book-test). Not the alpha-beta search's move-ordering policies
+//! (search::cardpolicy). A port of the Python originals (ygoai/nn/model.py PolicyValueNet, its
+//! features ygoai/nn/features.py, scripts/train_policy_value.py, agents/policy_agent.py
+//! PolicyAgent, scripts/make_match_book.py; removed with the Python play stack, see the git
+//! history before it): it made the Python agent's choices with the same seeds, up to float
+//! rounding (numpy sums in another order: a sampled choice can differ right at a boundary).
 //!
 //! The network: each card [static features | dynamic features] -> MLP -> embedding, summed per
 //! group (decks by count) -> [groups x dim | scalars] -> trunk MLP -> h; a candidate's score is
