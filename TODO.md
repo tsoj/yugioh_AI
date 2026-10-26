@@ -45,6 +45,11 @@ the rerun: longest game 941 decisions).
 - Nothing. For review: branch `tidy` (2026-10-25, the code cleanup after Nalwald's style: same
   search, bench checksums unchanged; the belief regression set equal to a fresh build of main),
   and branch `py-cleanup` (the legacy Python removed).
+- `tt-keep` (77cd2b5, on `tidy`: the TT kept across decisions, no generations; its best move by
+  move id, not by index) SPRT vs main [0, 5]: stopped by the user at 3220 games, +1.7 +/- 9.3, LLR
+  -0.17 (bench: depth 10 265691 nodes, main 362311; move ids alone, the TT still reset per
+  decision: 363004). Not merged: the gain is small, and a TT reset per decision keeps searches
+  independent (easier debugging).
 - `improving2` (643545c: improving rebased; +3.1 at 2720 games before) SPRT vs main [0, 5]:
   stopped by the user at 1340 games, -3.1 +/- 14.2, LLR -0.53 (bench: depth 10 361130 nodes, main
   362311; 3000n depth 13.25, main 13.05; same NPS). Not merged.
