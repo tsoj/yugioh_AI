@@ -20,7 +20,7 @@ use super::cardpolicy::{card_policy, card_policy_applies, selection_cards, set_p
 use super::evaluate::evaluate_at;
 use super::history::HistoryTable;
 use super::movegen::{candidates, is_searched, root_candidates};
-use super::movepick::{KeyContext, move_key, ordered};
+use super::movepick::{KeyContext, history_slot, move_id, ordered};
 use super::params::*;
 use super::stats::{Extension, NodeStats, NodeSummary, TtEntry};
 use super::tt::{NodeType, TranspositionTable, hash_key};
@@ -147,7 +147,6 @@ impl AlphaBeta {
 
     /// The tables for a new decision.
     pub fn prepare(&mut self) {
-        self.hash_table.new_generation();
         self.history_table.decay(self.tune.hist_decay);
     }
 
@@ -418,7 +417,7 @@ impl SearchState<'_> {
         }
         let depth = if extended { 1.0 } else { depth };
 
-        // (moves are indices into the rules' order: the hash table keeps one, the history reorders them)
+        // (moves are indices into the rules' order, which the TT move and the history change)
         let card_order = self.card_order(duel, prompt);
         let mut moves = ordered(prompt, duel.infos.turn_player as u32, card_order.as_ref().map(|c| c.order.as_slice()));
         if moves.is_empty() {
@@ -437,12 +436,10 @@ impl SearchState<'_> {
         // transposition table: update alpha, beta or return immediately
         let key = hash_key(duel, prompt);
         let hash_result = self.tables.hash_table.get(key);
-        let (mut tt_move, mut tt_entry) = (None, TtEntry::Missing);
         let nodes_before = self.tables.nodes;
         self.tables.tt_probes += 1;
         if let Some(h) = hash_result {
             self.tables.tt_hits += 1;
-            tt_entry = if h.best_move >= 0 { TtEntry::WithMove(h.node_type) } else { TtEntry::WithoutMove };
             if h.depth as f64 >= depth {
                 match h.node_type {
                     NodeType::PvNode => return Ok(h.value),
@@ -453,16 +450,20 @@ impl SearchState<'_> {
                     return Ok(h.value);
                 }
             }
-            if h.best_move >= 0 && (h.best_move as usize) < moves.len() {
-                tt_move = Some(h.best_move as usize);
-            }
         }
 
         let tune = self.tables.tune;
         let futility_value = (depth <= tune.futility_max_depth).then(|| evaluate_at(duel, us, Some(prompt)) + futility_margin(&tune, depth));
 
         let ctx = key_context(duel, prompt, card_order.as_ref().and_then(|c| c.hint));
-        let history_keys: Vec<usize> = moves.iter().map(|m| move_key(prompt, m, &ctx)).collect();
+        let move_ids: Vec<u64> = moves.iter().map(|m| move_id(prompt, m, &ctx)).collect();
+        let history_keys: Vec<usize> = move_ids.iter().map(|&id| history_slot(id)).collect();
+        let tt_move = hash_result.and_then(|h| move_ids.iter().position(|&id| id == h.best_move));
+        let tt_entry = match hash_result {
+            None => TtEntry::Missing,
+            Some(h) if tt_move.is_some() => TtEntry::WithMove(h.node_type),
+            Some(_) => TtEntry::MoveNotFound,
+        };
         let move_order = self.move_order(tt_move, &history_keys);
 
         let mut node_type = NodeType::AllNode;
@@ -535,7 +536,7 @@ impl SearchState<'_> {
         }
         if best_value.abs() < WIN / 2.0 {
             // (not a win or loss: those depend on the height)
-            self.tables.hash_table.add(key, node_type, best_value, depth, best_move);
+            self.tables.hash_table.add(key, node_type, best_value, depth, move_ids[best_move]);
         }
         Ok(best_value)
     }

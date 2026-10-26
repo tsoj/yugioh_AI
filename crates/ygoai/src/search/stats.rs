@@ -57,7 +57,8 @@ counters! {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum TtEntry {
     Missing,
-    WithoutMove,
+    /// an entry whose best move is not among the node's moves
+    MoveNotFound,
     WithMove(NodeType),
 }
 
@@ -65,7 +66,7 @@ impl TtEntry {
     pub fn label(self) -> &'static str {
         match self {
             TtEntry::Missing => "no entry",
-            TtEntry::WithoutMove => "no move",
+            TtEntry::MoveNotFound => "move not found",
             TtEntry::WithMove(NodeType::PvNode) => "exact",
             TtEntry::WithMove(NodeType::CutNode) => "lower",
             TtEntry::WithMove(NodeType::AllNode) => "upper",

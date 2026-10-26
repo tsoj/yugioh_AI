@@ -117,21 +117,23 @@ pub struct KeyContext {
     pub chain_top: u128,
 }
 
-/// The history slot of a move: its player, kind and card (and effect) (alphabeta._move_key).
-pub fn move_key(m: &Msg, c: &Response, ctx: &KeyContext) -> usize {
-    slot(move_identity(m, c, ctx))
-}
-
-/// The history slot of a move identity (all its 128 bits mixed: splitmix64's finalizer).
-fn slot(identity: u128) -> usize {
+/// A move by what it is, not by its index in the node's moves: its player, kind and card (and
+/// effect) (`move_identity`, all its 128 bits mixed: splitmix64's finalizer). The hash table keeps a
+/// node's best move by it, the history its score.
+pub fn move_id(m: &Msg, c: &Response, ctx: &KeyContext) -> u64 {
+    let identity = move_identity(m, c, ctx);
     let mut h = (identity as u64) ^ ((identity >> 64) as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     h = (h ^ (h >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     h = (h ^ (h >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    h ^= h >> 31;
-    (h >> (64 - HIST_BITS)) as usize
+    h ^ (h >> 31)
 }
 
-/// What the history tells apart about a move, before it is hashed to a slot (`move_key`): moves
+/// The history slot of a move (alphabeta._move_key).
+pub fn history_slot(move_id: u64) -> usize {
+    (move_id >> (64 - HIST_BITS)) as usize
+}
+
+/// What a move id tells apart about a move (`move_id`): moves
 /// with the same identity share their history by design, others only by a collision. A command's
 /// or chain link's card, effect and location; a pass by the chain it lets resolve; a yes or no by
 /// its effect; an option by its effect; a card selection by its hint and the cards chosen (code,

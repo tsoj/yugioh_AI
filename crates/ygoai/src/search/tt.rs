@@ -1,4 +1,4 @@
-//! The transposition table: a search result per position (`hash_key`), kept within a decision.
+//! The transposition table: a search result per position (`hash_key`), kept across decisions.
 
 use ygo_core::duel::Duel;
 use ygo_core::types::CardId;
@@ -16,27 +16,24 @@ pub enum NodeType {
     AllNode,
 }
 
-/// A stored search result: its value, depth, node type and best move (an index into the node's
-/// ordered moves).
+/// A stored search result: its value, depth, node type and best move (its `movepick::move_id`: the
+/// node's moves can come in another order or number when it is met again).
 #[derive(Clone, Copy, Default)]
 pub struct HashResult {
     key: u64,
     pub value: f64,
     pub depth: f32,
     pub node_type: NodeType,
-    pub best_move: i8,
-    generation: u16,
+    pub best_move: u64,
 }
 
 pub struct TranspositionTable {
     entries: Vec<HashResult>,
-    /// (the decision the entries are for: entries of earlier ones do not count)
-    generation: u16,
 }
 
 impl Default for TranspositionTable {
     fn default() -> Self {
-        TranspositionTable { entries: vec![HashResult::default(); 1 << TT_BITS], generation: 0 }
+        TranspositionTable { entries: vec![HashResult::default(); 1 << TT_BITS] }
     }
 }
 
@@ -45,23 +42,15 @@ impl TranspositionTable {
         (key & ((1 << TT_BITS) - 1)) as usize
     }
 
-    /// The entry of the position, if it has one from this decision's searches.
+    /// The entry of the position, if it has one (an empty slot's key, 0, is no position's).
     pub fn get(&self, key: u64) -> Option<HashResult> {
         let e = self.entries[Self::slot(key)];
-        (e.key == key && e.generation == self.generation).then_some(e)
+        (e.key == key).then_some(e)
     }
 
     /// Stores a result (always replacing the slot's entry).
-    pub fn add(&mut self, key: u64, node_type: NodeType, value: f64, depth: f64, best_move: usize) {
-        self.entries[Self::slot(key)] = HashResult { key, value, depth: depth as f32, node_type, best_move: best_move as i8, generation: self.generation };
-    }
-
-    /// A new decision: the entries so far stop counting.
-    pub fn new_generation(&mut self) {
-        self.generation = ((self.generation as u32 + 1) % 65536) as u16;
-        if self.generation == 0 {
-            self.generation = 1;
-        }
+    pub fn add(&mut self, key: u64, node_type: NodeType, value: f64, depth: f64, best_move: u64) {
+        self.entries[Self::slot(key)] = HashResult { key, value, depth: depth as f32, node_type, best_move };
     }
 }
 

@@ -1,4 +1,4 @@
-//! The history heuristic: a score per move slot (`movepick::move_key`) that cutoffs raise and the
+//! The history heuristic: a score per move slot (`movepick::history_slot`) that cutoffs raise and the
 //! moves tried before a cutoff lower.
 
 use super::params::HIST_BITS;
