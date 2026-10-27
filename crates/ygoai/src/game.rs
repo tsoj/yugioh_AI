@@ -77,14 +77,19 @@ impl Default for DuelConfig {
     }
 }
 
+/// The engine's seed for a game's core seed (not all zero).
+fn duel_seed(mut seed: [u64; 4]) -> [u64; 4] {
+    if seed.iter().all(|&s| s == 0) {
+        seed[0] = 1;
+    }
+    seed
+}
+
 /// A new duel of the Rust engine (without stopping inside card functions: nothing changes the duel
 /// between process calls here).
 pub fn new_duel(seed: [u64; 4], config: &DuelConfig) -> Duel {
     let (db, scripts) = init(None).expect("card database");
-    let mut seed = seed;
-    if seed.iter().all(|&s| s == 0) {
-        seed[0] = 1;
-    }
+    let seed = duel_seed(seed);
     let p = PlayerOptions { starting_lp: config.start_lp, starting_draw_count: config.start_hand, draw_count_per_turn: config.draw_per_turn };
     let mut d = Duel::new(&DuelOptions { seed, flags: config.flags, team1: p, team2: p }, db.clone(), scripts.clone());
     ygo_cards::load_global_scripts(&mut d);
@@ -379,6 +384,8 @@ pub trait Observer {
     fn message(&mut self, _msg: &Msg) {}
     fn prompt(&mut self, _prompt: &Msg, _duel: &mut Duel) {}
     fn response(&mut self, _player: u32, _response: &Response) {}
+    /// The response as the bytes the core reads.
+    fn core_response(&mut self, _raw: &[u8]) {}
 }
 
 /// One item of a player's observation stream.
@@ -587,6 +594,7 @@ pub fn play(
         record.responses.push(RecordedResponse { player, response: response.clone() });
         for obs in observers.iter_mut() {
             obs.response(player, &response);
+            obs.core_response(&raw);
         }
         duel.ocg_set_response(&raw);
         last_player = Some(player);
@@ -604,6 +612,49 @@ pub fn play(
         agent.end(&result);
     }
     Ok(())
+}
+
+/// A recorded game as a `ygo-diff --replay` file (ygopro-core-rust/tools/replay_records.py), for
+/// the differential test against the C++ core: the seed and settings, the cards in creation order
+/// (`card PLAYER LOCATION CODE`; card ids follow it), the piles' orders by card id (`order PLAYER
+/// LOCATION ID...`) and the bytes of every response (`resp HEX`).
+pub fn diff_replay(record: &GameRecord) -> Result<String, GameError> {
+    struct Raw(Vec<Vec<u8>>);
+    impl Observer for Raw {
+        fn core_response(&mut self, raw: &[u8]) {
+            self.0.push(raw.to_vec());
+        }
+    }
+    let duel = record.setup(None)?;
+    let seed = duel_seed(record.core_seed);
+    let c = &record.config;
+    let mut out = format!("seed {} {} {} {}\nconfig {} {} {} {}\n", seed[0], seed[1], seed[2], seed[3], c.flags, c.start_lp, c.start_hand, c.draw_per_turn);
+    let mut cards = Vec::new();
+    let mut orders = String::new();
+    for p in 0..2u8 {
+        for loc in [LOCATION_DECK, LOCATION_EXTRA] {
+            let pile = duel.ext_get_location_cards(p, loc);
+            if pile.is_empty() {
+                continue;
+            }
+            cards.extend(pile.iter().map(|&(code, id)| (id, p, loc, code)));
+            let ids: Vec<String> = pile.iter().map(|&(_, id)| id.to_string()).collect();
+            orders += &format!("order {p} {loc} {}\n", ids.join(" "));
+        }
+    }
+    cards.sort();
+    for (_, p, loc, code) in cards {
+        out += &format!("card {p} {loc} {code}\n");
+    }
+    out += &orders;
+    let mut raw = Raw(Vec::new());
+    replay(record, &mut [&mut raw], None, None)?;
+    for r in raw.0 {
+        out += "resp ";
+        out.extend(r.iter().map(|b| format!("{b:02x}")));
+        out += "\n";
+    }
+    Ok(out)
 }
 
 /// Replays a recorded game, feeding observers; stops before response `upto`.
@@ -635,7 +686,11 @@ pub fn replay(record: &GameRecord, observers: &mut [&mut dyn Observer], upto: Op
             obs.response(entry.player, &entry.response);
         }
         let core = to_core_response(&p, entry.player, &entry.response).map_err(|e| GameError(e.0))?;
-        duel.ocg_set_response(&encode(&p, &core).map_err(|e| GameError(e.0))?);
+        let raw = encode(&p, &core).map_err(|e| GameError(e.0))?;
+        for obs in observers.iter_mut() {
+            obs.core_response(&raw);
+        }
+        duel.ocg_set_response(&raw);
         prompt = Some(p);
     }
     if upto.is_none() {

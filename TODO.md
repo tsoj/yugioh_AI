@@ -829,6 +829,10 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
   scripts/common/ (f4b526f).
   And download_human_decks/ to human_decks/ (snapshots of older commits link it under the old
   name; engine builds no longer link it: the engines never read the decks).
+  ygopro-core-rust/tools: the card porting tools removed (all cards translated); the differential
+  test's tools fixed (rust/ paths); recorded games -> ygo-diff replays now in Rust
+  (game::diff_replay, bin ygoai-diff-replays; the Python core it used is gone). All 3546 games of
+  the tidy SPRT identical on both engines (with a89378b, oracle rebuilt).
   - Eval data tools were only in a temporary directory: now scripts/collect_sprt_games.py and
     scripts/sprt_games_to_npz.py, the rounds 2+3 npz in runs/data/rounds23/ (done on main).
 - [x] Remove the worktrees `wt-old` (main repo) and `wt-old-rust` (rust repo) in the scratchpad (gone).
