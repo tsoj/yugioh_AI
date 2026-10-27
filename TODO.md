@@ -838,7 +838,11 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
   ygoai-match, no built-in agents); protocol version 1 with a handshake (identity, UCI-like options,
   engines ignore unknown messages and members), PROTOCOL.md; reference engine ygo-random-engine.
   sprt_branch.sh refuses refs from before. A fixed-node match's records identical before/after.
-  - [ ] Which of ygoai-engine's YGOAI_* environment knobs become protocol options (user's call).
+  - [ ] Which of the bot's BOT_* environment knobs become protocol options (user's call).
+  Then (user, 2026-10-27): "bot" for the program that plays (engine = the duel engine; agent/AI read
+  as LLMs): crates/bot (was ygoai), crates/bot-py-binding (import bot_py_binding; was ygoai_rs),
+  bins bot, bot-*; env BOT_* and YGO_*; build/bots. Records/baselines keep their JSON keys. SPRTs
+  and snapshots refuse commits from before. Fixed-node match records identical.
   - Eval data tools were only in a temporary directory: now scripts/collect_sprt_games.py and
     scripts/sprt_games_to_npz.py, the rounds 2+3 npz in runs/data/rounds23/ (done on main).
 - [x] Remove the worktrees `wt-old` (main repo) and `wt-old-rust` (rust repo) in the scratchpad (gone).
