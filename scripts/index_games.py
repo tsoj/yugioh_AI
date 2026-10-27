@@ -16,11 +16,9 @@ import multiprocessing as mp
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from ygoai import constants as C  # noqa: E402
-from ygoai.belief.games import play_game  # noqa: E402
-from ygoai.parallel import Crash, run_parallel  # noqa: E402
+from common import constants as C
+from common.games import play_game
+from common.parallel import Crash, run_parallel
 
 # too common to be useful as a selection criterion
 _COMMON = {"move", "hint", "new_turn", "new_phase", "draw", "chaining", "chained", "chain_solving",

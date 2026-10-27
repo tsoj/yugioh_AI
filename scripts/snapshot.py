@@ -2,8 +2,7 @@
 
 A suite or exploration run takes an hour or more and its worker processes are
 recycled, importing the code again: an edit during the run would mix versions.
-`reexec` copies the code (ygoai/, scripts/, lua_fixes/, the Rust engine's binding
-ygoai_rs) to
+`reexec` copies the code (scripts/, lua_fixes/, the Rust engine's binding ygoai_rs) to
 build/snapshots/NAME and runs the calling script again from there; the data
 (external/, the decks, tests/, runs/ and the rest of build/) are symlinks to the
 checkout's, so the results land where they always do.
@@ -20,11 +19,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SNAPSHOTS = ROOT / "build" / "snapshots"
-_CODE = ("ygoai", "scripts", "lua_fixes")
+_CODE = ("scripts", "lua_fixes")
 _SHARED = ("external", "download_human_decks", "tests", "runs")
 _NOT_SHARED = ("snapshots",)
 _ENGINE = "ygopro-core-rust"  # (the engine's submodule)
-_RUST = ("crates", "ygoai_rs", "Cargo.toml", "Cargo.lock")  # (the binding's sources besides the engine)
+_RUST = ("crates", "Cargo.toml", "Cargo.lock")  # (the binding's sources besides the engine)
 _ENV = "YGOAI_SNAPSHOT"  # (set in the snapshot's process: the checkout it was taken from)
 _KEEP_DAYS = 3
 

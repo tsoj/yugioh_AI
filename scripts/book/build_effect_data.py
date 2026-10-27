@@ -31,10 +31,10 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # (scripts/: common)
 
-from ygoai import constants as C  # noqa: E402
-from ygoai.parallel import Crash, run_parallel  # noqa: E402
+from common import constants as C  # noqa: E402
+from common.parallel import Crash, run_parallel  # noqa: E402
 
 ZONES = [("deck", C.LOCATION_DECK), ("hand", C.LOCATION_HAND), ("mzone", C.LOCATION_MZONE),
          ("szone", C.LOCATION_SZONE), ("grave", C.LOCATION_GRAVE), ("removed", C.LOCATION_REMOVED),

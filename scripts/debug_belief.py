@@ -8,12 +8,9 @@ Shows the repairs made, the divergence (both sides and where they first differ) 
 import argparse
 import re
 import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from ygoai.belief.games import add_game_options, play_game  # noqa: E402
-from ygoai.pretty import msg_str, prompt_str  # noqa: E402
+from common.games import add_game_options, play_game
+from common.pretty import msg_str, prompt_str
 
 
 def show(x):

@@ -221,7 +221,7 @@ def main() -> int:
     snapshot.reexec(f"suite-{args.tag}", args.ref)
     sys.path.insert(0, str(ROOT / "scripts"))
     import check_belief as cb
-    from ygoai.parallel import Crash, run_parallel
+    from common.parallel import Crash, run_parallel
     SUITE_DIR.mkdir(parents=True, exist_ok=True)
     # all ranges' games in one pool, the slowest (by the baselines) first: no range
     # waits for its last few slow cases while the other workers are idle

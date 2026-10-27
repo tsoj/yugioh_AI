@@ -77,8 +77,8 @@ impl Default for DuelConfig {
     }
 }
 
-/// A new duel of the Rust engine (what ygoai_rs.RustDuel does, without stopping inside card
-/// functions: nothing changes the duel between process calls here).
+/// A new duel of the Rust engine (without stopping inside card functions: nothing changes the duel
+/// between process calls here).
 pub fn new_duel(seed: [u64; 4], config: &DuelConfig) -> Duel {
     let (db, scripts) = init(None).expect("card database");
     let mut seed = seed;

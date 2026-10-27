@@ -38,7 +38,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # (scripts/: common)
 
 MAIN, EXTRA, TOP = 60, 15, 8
 # (per input mode, each seat's parts: (tokens, part, positions: the draw order counts))
@@ -145,7 +145,7 @@ def binomial_nll(logit, n, k):
 
 
 def archetype_split(rows, seed, test_openings):
-    from ygoai.carddb import default_db
+    from common.carddb import default_db
 
     db = default_db()
     cache = {}

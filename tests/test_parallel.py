@@ -1,9 +1,13 @@
 """The parallel runner must survive worker crashes."""
 
 import os
+import sys
 import unittest
+from pathlib import Path
 
-from ygoai.parallel import Crash, run_parallel
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+
+from common.parallel import Crash, run_parallel  # noqa: E402
 
 
 def work(x):

@@ -3,6 +3,15 @@ Rust: ygoai_rs.play_with_streams, ygoai_rs.check_game)."""
 
 from __future__ import annotations
 
+import json
+import random
+
+import ygoai_rs
+
+from .carddb import default_db
+from .decks import RANDOM_DECK_STYLES, Deck, DeckPool, random_card_deck
+from .paths import DECKS_DIR, NEW_DECKS_DIR
+
 PAIRS = [("random", "random"), ("random", "greedy"), ("greedy", "random"), ("greedy", "greedy")]
 DECK_MODES = ("random", "diverse", "cards", "new", "new-cards", "new-mixed")
 _deck_pools: dict = {}
@@ -29,8 +38,6 @@ def add_game_options(ap) -> None:
 
 def load_book(path) -> list:
     """The openings (pairs of decks) of a book written by scripts/make_book.py."""
-    import json
-    from ..decks import Deck
     key = str(path)
     if key not in _books:
         with open(path) as f:
@@ -44,10 +51,6 @@ def game_decks(seed: int, mirror_prob: float = 0.2, decks: str = "random", book:
     possible (game `seed` uses its positions 2*seed and 2*seed + 1), with
     decks="new" the same among the decks downloaded later; with a `book`
     (see scripts/make_book.py) opening seed % (number of openings)."""
-    import random
-    from ..carddb import default_db
-    from ..decks import DeckPool
-    from ..paths import DECKS_DIR, NEW_DECKS_DIR
     if book:
         return tuple(load_book(book)[seed % len(load_book(book))])  # (the book decides the pairing)
     pool_name = "new" if decks.startswith("new") else decks
@@ -56,14 +59,12 @@ def game_decks(seed: int, mirror_prob: float = 0.2, decks: str = "random", book:
     pool = _deck_pools.get(pool_name)
     rng = random.Random(seed)
     if decks == "cards":
-        from ..decks import RANDOM_DECK_STYLES, random_card_deck
         db = default_db()
         d0 = random_card_deck(db, rng, f"random cards {seed}a", rng.choice(RANDOM_DECK_STYLES))
         return d0, d0 if rng.random() < mirror_prob else random_card_deck(
             db, rng, f"random cards {seed}b", rng.choice(RANDOM_DECK_STYLES))
     if decks == "new-cards":
         # (a human deck against a deck of random cards, on either side)
-        from ..decks import RANDOM_DECK_STYLES, random_card_deck
         human = pool.diverse(seed)
         rand = random_card_deck(default_db(), rng, f"random cards {seed}", rng.choice(RANDOM_DECK_STYLES))
         return (human, rand) if rng.random() < 0.5 else (rand, human)
@@ -81,8 +82,6 @@ def game_decks(seed: int, mirror_prob: float = 0.2, decks: str = "random", book:
 def _mixed_deck(a, b, rng):
     """About half of each of two decks' Main Decks (at most 3 copies of a card, 40
     cards) and a sample of both Extra Decks (at most 15)."""
-    from ..carddb import default_db
-    from ..decks import Deck
     db = default_db()
     counts: dict[int, int] = {}
 
@@ -111,6 +110,5 @@ def play_game(seed: int, mirror_prob: float = 0.2, pairs: list[tuple[str, str]] 
               decks: str = "random", book: str | None = None) -> tuple[dict, list[list[tuple]]]:
     """The test game for `seed` (the decks of game_decks, the agents of `agents`): its record and
     both players' observation streams."""
-    import ygoai_rs
     deck_pair = game_decks(seed, mirror_prob, decks, book)
     return ygoai_rs.play_with_streams(seed, [d.to_json() for d in deck_pair], agents(seed, pairs))

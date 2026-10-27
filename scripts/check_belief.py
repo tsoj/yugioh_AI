@@ -21,10 +21,8 @@ import time
 import zlib
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from ygoai.belief.games import add_game_options, agents, game_decks  # noqa: E402
-from ygoai.parallel import Crash, run_parallel  # noqa: E402
+from common.games import add_game_options, agents, game_decks
+from common.parallel import Crash, run_parallel
 
 SEQUENCE_FRAC = 2.0  # (the "cut" of an agent sequence's result: the whole game, decision by decision)
 

@@ -1,6 +1,6 @@
 """Candidate openings for a book, screened by the one-sided predictor (train_onesided.py --split
 none --out): random openings (deck pairs from the corpus, seeds), each with its main decks' draw
-order as the game shuffles them (ygoai.game.new_record), then scored; the KEEP share predicted
+order as the game shuffles them (ygoai_rs.new_record), then scored; the KEEP share predicted
 least often decided by the seat goes on to the policy games (ygoai-book-test).
 
     .venv/bin/python scripts/book/onesided_candidates.py generate ALL.jsonl -n N [--seed S]
@@ -19,8 +19,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # (scripts/: common)
 
 TOP = 8
 
@@ -29,8 +28,8 @@ def random_openings(n: int, seed: int) -> list[tuple[int, list]]:
     """`n` openings (a seed and a pair of decks) of random corpus decks."""
     import random
 
-    from ygoai.carddb import default_db
-    from ygoai.decks import DeckPool
+    from common.carddb import default_db
+    from common.decks import DeckPool
     pool = DeckPool(default_db())
     rng = random.Random(seed)
     out = []

@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 EXTERNAL = ROOT / "external"
 CARD_SCRIPTS_DIR = Path(os.environ.get("YGOAI_SCRIPTS", EXTERNAL / "CardScripts"))
 # corrected card scripts (bugs in CardScripts), read instead of the originals (the Rust cards are

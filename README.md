@@ -24,14 +24,14 @@ It has three parts:
 
 ```sh
 git submodule update --init external/CardScripts external/BabelCDB external/HiGHS rust
-# the Python binding of the belief checks (ygoai_rs/), into the venv below
-cd ygoai_rs && CARGO_TARGET_DIR=../ygopro-core-rust/target VIRTUAL_ENV=../.venv ../.venv/bin/maturin develop --release
+# the Python binding of the belief checks (crates/ygoai_rs/), into the venv below
+cd crates/ygoai_rs && CARGO_TARGET_DIR=../../ygopro-core-rust/target VIRTUAL_ENV=../../.venv ../../.venv/bin/maturin develop --release
 ```
 
 Requirements: Rust (stable), cmake (HiGHS is built from `external/HiGHS`), a C++ compiler, Python >=
 3.11 with numpy and maturin. The Rust code is one Cargo workspace (`Cargo.toml`): the ygoai crate
 (`crates/ygoai`: messages, observations, the arbiter `ygoai-match`, the agents' search, the belief
-replay), the binding (`ygoai_rs`) and HiGHS (`crates/highs`). The C++ core is only the Rust engine's
+replay), the binding (`crates/ygoai_rs`) and HiGHS (`crates/highs`). The C++ core is only the Rust engine's
 test oracle, in `ygopro-core-rust/oracle/` (not fetched by default; see ygopro-core-rust/README.md).
 The learned deck completion (`--completion neural`) is compiled from the deck models' ONNX export
 (`download_human_decks/onnx_export/`, from `export_deck_models.py`; PyTorch only trains them), the
@@ -456,7 +456,7 @@ against; `ygopro-core-rust/oracle/build.sh`):
   random games segfaulted) and made the order of the resulting messages depend on memory
   addresses. They now iterate a snapshot sorted by effect id.
 
-The command line tools run games in a crash tolerant process pool (`ygoai/parallel.py`): a
+The command line tools run games in a crash tolerant process pool (`scripts/common/parallel.py`): a
 worker that dies is reported with its seed instead of hanging the run. Long runs (the suite,
 SPRTs) work from snapshots of the code and the binding (`scripts/snapshot.py`), so a rebuild
 during a run does not affect it.
@@ -467,7 +467,7 @@ The engine's models (`crates/ygoai/models/`, compiled in) and how to rebuild the
 
 - the evaluation `eval_mover2_sprt2r23os_64.json`: SPRT records -> `scripts/collect_sprt_games.py`
   -> `ygoai-refeature --features mover2` -> `scripts/sprt_games_to_npz.py` (with rounds 2 and 3:
-  ygoai-datagen -> `scripts/eval_mover_features.py --rust`, in `runs/data/rounds23/`) ->
+  ygoai-datagen -> `scripts/eval_mover_features.py`, in `runs/data/rounds23/`) ->
   `scripts/train_eval_mover.py --dims 64 --held 400 --drop-onesided --lam 0.5`;
 - the card policy `card_policy_cp4_h16.json`: `ygoai-card-refs --independent` ->
   `scripts/train_card_policy.py`; the set policy `set_policy_s2_h16.json`: `ygoai-card-refs
@@ -485,14 +485,16 @@ ygopro-core-rust/  submodule: the engine (ygo-core), the cards (ygo-cards), the 
                    tester (ygo-diff) and its C++ oracle (oracle/)
 crates/ygoai/      the ygoai crate: messages, observations, actions, state views, games and records,
                    the arbiter (bin ygoai-match), agents and alpha-beta search, the belief replay
+crates/ygoai_rs/   its Python binding (the belief checks' games and checks, replays)
 crates/highs/      HiGHS (external/HiGHS) for the belief's flow model
-ygoai_rs/          the Python binding (the belief checks' games and checks, replays)
+crates/deckmodels/ the deck completion models (their ONNX export, compiled in)
+download_human_decks/  the deck corpus, its download and the deck completion models' training
 external/          submodules: CardScripts, BabelCDB, HiGHS
 lua_fixes/         corrected card scripts
-scripts/           command line tools (book/: the SPRT opening book)
+scripts/           command line tools
+  common/          what they share: carddb.py (the card database), decks.py (deck lists, the
+                   corpus), games.py (the belief checks' decks and agents), parallel.py (a crash
+                   tolerant pool), pretty.py (messages as text), constants.py (the core's)
+  book/            the SPRT opening book's pipeline
 tests/             unit and integration tests (baselines/: the belief suite's)
-ygoai/             the Python package of the tools
-  carddb.py      the card database      decks.py      deck lists, the corpus
-  parallel.py    crash tolerant pool    pretty.py     messages as text
-  constants.py   the core's constants   belief/       the belief checks' decks and agents
 ```

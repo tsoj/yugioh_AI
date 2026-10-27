@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Builds an opening book of deck pairs that together contain every card of the
 deck corpus (a greedy set cover: the first round of the diverse deck order, see
-ygoai.decks.diverse_order). The decks are stored inline, so a book stays the
+common.decks.diverse_order). The decks are stored inline, so a book stays the
 same when the corpus changes.
 
     python3 scripts/make_book.py -o build/book.jsonl
@@ -13,14 +13,11 @@ from __future__ import annotations
 import argparse
 import json
 import random
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from ygoai.carddb import default_db  # noqa: E402
-from ygoai.decks import DeckPool, diverse_order  # noqa: E402
-from ygoai.paths import ROOT  # noqa: E402
+from common.carddb import default_db
+from common.decks import DeckPool, diverse_order
+from common.paths import ROOT
 
 
 def main() -> None:

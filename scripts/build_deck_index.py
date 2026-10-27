@@ -11,16 +11,13 @@ exact opponent deck list.
 from __future__ import annotations
 
 import argparse
-import sys
 from collections import Counter
-from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from ygoai.carddb import default_db  # noqa: E402
-from ygoai.decks import canonical_code, deck_split, parse_ydk  # noqa: E402
-from ygoai.paths import DECKS_DIR, ROOT  # noqa: E402
+from common.carddb import default_db
+from common.decks import canonical_code, deck_split, parse_ydk
+from common.paths import DECKS_DIR, ROOT
 
 INDEX_PATH = ROOT / "build" / "deck_index.npz"
 

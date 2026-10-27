@@ -39,7 +39,7 @@ import torch
 from torch import nn
 from torch.utils.checkpoint import checkpoint
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # (scripts/: common)
 
 from card_text import Names  # noqa: E402
 
@@ -317,7 +317,7 @@ REAL_NAMES = False
 
 def _texts(keys: list, data: Data, seeds=None) -> list[str]:
     from card_text import _texts as raw, type_line
-    from ygoai.carddb import default_db
+    from common.carddb import default_db
     out = []
     for seed, ci in keys:
         code = int(data.codes[ci])

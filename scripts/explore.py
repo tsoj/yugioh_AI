@@ -28,7 +28,6 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 STATE = ROOT / "runs" / "explore" / "state.json"
@@ -90,7 +89,7 @@ def main() -> int:
     snapshot.reexec("explore")  # (from a frozen copy of the code: edits during the run cannot mix in)
     import check_belief as cb
     from compare_runs import reviewed
-    from ygoai.parallel import Crash, run_parallel
+    from common.parallel import Crash, run_parallel
 
     LOG.parent.mkdir(parents=True, exist_ok=True)
     try:
