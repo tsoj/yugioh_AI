@@ -7,7 +7,7 @@ Mover-view eval with a deck-pair term (experiment).
 logit P(mover wins) = sgn * a[pair, seat order] + v(x); the search value's target is sigmoid(v(x))
 alone (the search knows nothing of deck strength). a is dropped at inference.
 """
-import argparse, math, sys
+import argparse
 import numpy as np
 import torch
 

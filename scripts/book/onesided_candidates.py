@@ -25,16 +25,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 TOP = 8
 
 
+def random_openings(n: int, seed: int) -> list[tuple[int, list]]:
+    """`n` openings (a seed and a pair of decks) of random corpus decks."""
+    import random
+
+    from ygoai.carddb import default_db
+    from ygoai.decks import DeckPool
+    pool = DeckPool(default_db())
+    rng = random.Random(seed)
+    out = []
+    for i in range(n):
+        d0 = pool.sample(rng)
+        rng.random()  # (the draw for a mirror match, never one: the candidates of match2 drew it)
+        out.append((seed * 1_000_003 + i, [d0, pool.sample(rng)]))
+    return out
+
+
 def generate(a):
-    from ygoai.game import new_record
-    from ygoai.match import random_openings
+    import ygoai_rs
 
     with open(a.out, "w") as f:
-        for op in random_openings(a.n, a.seed, 0.0):
-            orders = new_record(op.decks, op.seed).deck_orders
+        for seed, decks in random_openings(a.n, a.seed):
+            decks = [d.to_json() for d in decks]
             # (deck_orders: bottom card first; the top cards are drawn first)
-            order = [list(reversed(o)) for o in orders]
-            f.write(json.dumps({"seed": op.seed, "decks": [d.to_json() for d in op.decks], "top": [o[:TOP] for o in order], "order": order}) + "\n")
+            order = [list(reversed(o)) for o in ygoai_rs.new_record(decks, seed)["deck_orders"]]
+            f.write(json.dumps({"seed": seed, "decks": decks, "top": [o[:TOP] for o in order], "order": order}) + "\n")
     print(f"{a.n} candidates -> {a.out}")
 
 

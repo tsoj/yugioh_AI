@@ -1,4 +1,4 @@
-//! Running duels: setup, the process loop, the arbiter and deterministic replays (ygoai/game.py),
+//! Running duels: setup, the process loop, the arbiter and deterministic replays ,
 //! on the Rust engine.
 //!
 //! A game is fully determined by a [`GameRecord`] (decks, seeds and the responses of both
@@ -287,7 +287,7 @@ fn record_version() -> u32 {
     RECORD_VERSION
 }
 
-/// A new game: the core's seed and both deck orders from `seed` (game.new_record).
+/// A new game: the core's seed and both deck orders from `seed`.
 pub fn new_record(decks: &[Deck], seed: i64, config: &DuelConfig) -> GameRecord {
     let mut rng = PyRandom::new(seed as i128);
     let core_seed = [0; 4].map(|_| rng.getrandbits(64) as u64);
@@ -320,7 +320,7 @@ impl GameRecord {
     }
 }
 
-/// What a player knows before the duel starts (game.init_info): its deck, its Extra Deck's order
+/// What a player knows before the duel starts: its deck, its Extra Deck's order
 /// (`extra_order`), the sizes of the opponent's decks and the duel's settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InitInfo {
@@ -351,7 +351,7 @@ pub enum AgentError {
     Failed(String),
 }
 
-/// An AI playing one side of a duel (agents/base.py): `start` once, then `observe` for every
+/// An AI playing one side of a duel: `start` once, then `observe` for every
 /// message the player is allowed to see (already filtered) and `respond` whenever the player has
 /// to decide, with the (filtered) prompt and, if it wants it, the player's view of the state.
 /// Under a time control `clock` is (seconds left, increment per decision).
@@ -381,7 +381,7 @@ pub trait Observer {
     fn response(&mut self, _player: u32, _response: &Response) {}
 }
 
-/// One item of a player's observation stream (game.ObservationLog).
+/// One item of a player's observation stream.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum ObsItem {
     Msg(Msg),
@@ -458,7 +458,7 @@ fn result_of(winner: Option<u32>, reason: Value) -> serde_json::Map<String, Valu
     r
 }
 
-/// Plays a game between two agents, filling `record.responses` and `record.result` (game.play).
+/// Plays a game between two agents, filling `record.responses` and `record.result`.
 ///
 /// An agent loses immediately if it fails (e.g. a forfeit or a crashed engine), runs out of time
 /// on its clock, or - with `illegal_is_loss` - sends a response the core rejects. Otherwise
@@ -606,7 +606,7 @@ pub fn play(
     Ok(())
 }
 
-/// Replays a recorded game, feeding observers; stops before response `upto` (game.replay).
+/// Replays a recorded game, feeding observers; stops before response `upto`.
 /// Returns the live duel positioned at that prompt. `creation_seed` replaces the game's (hidden)
 /// random card creation order: what the players observe must not depend on it.
 pub fn replay(record: &GameRecord, observers: &mut [&mut dyn Observer], upto: Option<usize>, creation_seed: Option<i128>) -> Result<Duel, GameError> {

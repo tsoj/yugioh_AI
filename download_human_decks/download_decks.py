@@ -8,7 +8,6 @@ needed to reconstruct YDK files. No per-deck HTTP requests required.
 import argparse
 import json
 import re
-import sys
 import time
 from pathlib import Path
 from urllib.parse import urlencode

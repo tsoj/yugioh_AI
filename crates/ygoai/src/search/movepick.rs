@@ -117,7 +117,7 @@ pub struct KeyContext {
     pub chain_top: u128,
 }
 
-/// The history slot of a move: its player, kind and card (and effect) (alphabeta._move_key).
+/// The history slot of a move: its player, kind and card (and effect).
 pub fn move_key(m: &Msg, c: &Response, ctx: &KeyContext) -> usize {
     slot(move_identity(m, c, ctx))
 }

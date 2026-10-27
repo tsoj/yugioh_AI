@@ -16,63 +16,39 @@ import argparse
 import collections
 import faulthandler
 import os
-import signal
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from ygoai.belief.check import make_game  # noqa: E402
-from ygoai.game import ObservationLog, replay  # noqa: E402
+from ygoai.belief.games import add_game_options, play_game  # noqa: E402
 from ygoai.parallel import run_parallel  # noqa: E402
 
 
-def streams(record, creation_seed=None):
-    logs = [ObservationLog(0), ObservationLog(1)]
-    replay(record, logs, creation_seed=creation_seed).close()
-    return [log.items for log in logs]
-
-
-class _Timeout(Exception):
-    pass
-
-
-def _alarm(*_):
-    raise _Timeout()
-
-
-def diff(task: tuple, timeout: int = 300) -> list[tuple] | str:
-    """Differences for (seed, agent pairings), or a string if the check itself failed."""
-    seed, pairs, decks, book = task
-    signal.signal(signal.SIGALRM, _alarm)
-    signal.alarm(timeout)
-    # (a loop inside the core never returns to Python: the watchdog ends the
-    # worker, which run_parallel reports as a crash of this seed)
-    faulthandler.dump_traceback_later(timeout + 60, exit=True)
+def diff(task: tuple, timeout: int = 360) -> list[tuple] | str:
+    """Differences for (seed, mirror_prob, pairs, decks, book), or a string if the check itself
+    failed."""
+    # (a loop inside the engine never returns to Python: the watchdog ends the worker, which
+    # run_parallel reports as a crash of this seed)
+    faulthandler.dump_traceback_later(timeout, exit=True)
     try:
-        return _diff(seed, pairs, decks, book)
-    except _Timeout:
-        return "timeout"
+        return _diff(*task)
     except Exception as e:  # noqa: BLE001
         return f"{type(e).__name__}: {e}"
     finally:
         faulthandler.cancel_dump_traceback_later()
-        signal.alarm(0)
 
 
-def _diff(seed: int, pairs=None, decks="random", book=None) -> list[tuple]:
-    record = make_game(seed, pairs=[tuple(p) for p in pairs] if pairs else None, decks=decks, book=book)
-    base = streams(record)
+def _diff(seed: int, mirror_prob: float, pairs, decks: str, book) -> list[tuple]:
+    import ygoai_rs
+    record, _ = play_game(seed, mirror_prob, pairs, decks, book)
+    base, error = ygoai_rs.replay_streams(record)
+    if error:
+        raise RuntimeError(error)
     out = []
     for k in (1, 2):
-        logs = [ObservationLog(0), ObservationLog(1)]
-        try:
-            replay(record, logs, creation_seed=record.core_seed[0] + 7919 * k).close()
-        except _Timeout:
-            raise
-        except Exception:  # noqa: BLE001  (the game went differently: responses no longer fit)
-            pass
-        other = [log.items for log in logs]
+        # (a replay that stops early: the game went differently, the responses no longer fit)
+        other, _ = ygoai_rs.replay_streams(record, record["core_seed"][0] + 7919 * k)
         for viewer in (0, 1):
             a, b = base[viewer], other[viewer]
             for i, (x, y) in enumerate(zip(a, b)):
@@ -98,17 +74,14 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("-n", type=int, default=200)
     ap.add_argument("--start", type=int, default=3000)
-    ap.add_argument("--pairs", help="agent pairings as in check_belief.py, e.g. setter-greedy,mixed-random")
-    ap.add_argument("--decks", choices=["random", "diverse", "cards", "new", "new-cards", "new-mixed"], default="random")
-    ap.add_argument("--book", help="opening book (scripts/make_book.py)")
+    add_game_options(ap)
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
-    pairs = tuple(tuple(p.split("-")) for p in args.pairs.split(",")) if args.pairs else None
     kinds = collections.Counter()
     games = leaky = 0
     failed = []
-    tasks = [(seed, pairs, args.decks, args.book) for seed in range(args.start, args.start + args.n)]
-    for (seed, _, _, _), res in run_parallel(diff, tasks, os.cpu_count()):
+    tasks = [(seed, args.mirror_prob, args.pairs, args.decks, args.book) for seed in range(args.start, args.start + args.n)]
+    for (seed, *_), res in run_parallel(diff, tasks, os.cpu_count()):
         if not isinstance(res, list):
             failed.append((seed, res))
             print(seed, "check failed:", res, flush=True)

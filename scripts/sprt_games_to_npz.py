@@ -36,7 +36,7 @@ keys = {}; gpair = np.array([keys.setdefault(m["pair"], len(keys)) for m in M]);
 gval = np.array([zlib.crc32(str(i).encode()) % 10 == 0 for i in range(len(M))])
 g = C["game"]
 d = np.load(r23)
-n23 = len(d["x"]); g23 = d["game"]; k23 = g23 % 20
+g23 = d["game"]; k23 = g23 % 20
 off_game, off_pair = int(g23.max()) + 1, int(g23.max()) // 20 + 1
 res = {
     "x": np.concatenate([X, d["x"]]),

@@ -125,6 +125,16 @@ pub trait Completion: Send + Sync {
     }
 }
 
+/// A deck completion by name: vanilla (None: the replay's own effect-less cards), corpus or neural.
+pub fn by_name(name: &str) -> Result<Option<&'static dyn Completion>, String> {
+    Ok(match name {
+        "vanilla" => None,
+        "corpus" => Some(CorpusCompletion::get()?),
+        "neural" => Some(crate::belief::neural::NeuralCompletion::get()?),
+        _ => return Err(format!("unknown completion {name}")),
+    })
+}
+
 fn fill(pool: &[u32], known: &[u32], n: usize) -> Result<Vec<u32>, String> {
     let mut counts: HashMap<u32, u32> = HashMap::new();
     for &c in known {

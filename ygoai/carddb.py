@@ -43,10 +43,6 @@ class CardData:
         return bool(self.type & C.TYPE_MONSTER) and bool(self.type & C.EXTRA_DECK_TYPES)
 
     @property
-    def is_monster(self) -> bool:
-        return bool(self.type & C.TYPE_MONSTER)
-
-    @property
     def is_token(self) -> bool:
         return bool(self.type & C.TYPE_TOKEN)
 

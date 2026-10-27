@@ -1,4 +1,4 @@
-//! Full (god view) state snapshots of a duel and their per-player projection (ygoai/state.py).
+//! Full (god view) state snapshots of a duel and their per-player projection.
 
 use serde::{Deserialize, Serialize};
 use ygo_core::api::QueryInfo;

@@ -29,8 +29,8 @@ use crate::search::{MAX_AUTO_STEPS, candidates, is_searched};
 /// UCB1's exploration constant by default (results in [0, 1]; MctsParams::c to tune it)
 pub const C_UCT: f64 = std::f64::consts::SQRT_2;
 pub const ROLLOUT_TURNS: u32 = 30;
-/// the evaluation's LP -> win probability (logistic regression of the SPRT games' results, as
-/// agents/puct.py's VALUE_K: 0.0216 per point of 100 LP)
+/// the evaluation's LP -> win probability (logistic regression of the SPRT games' results: 0.0216
+/// per point of 100 LP)
 pub const VALUE_K: f64 = 0.000216;
 pub const ROLLOUT_DECISIONS: usize = 5000;
 /// simulations per decision without a time control or a given number

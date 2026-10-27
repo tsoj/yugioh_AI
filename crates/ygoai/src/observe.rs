@@ -1,5 +1,4 @@
-//! Per-player filtering of god-view core messages, the "fastchess protocol" view
-//! (ygoai/observe.py).
+//! Per-player filtering of god-view core messages, the "fastchess protocol" view.
 //!
 //! [`filter_message`] returns what `viewer` is allowed to see of a core message, or None if the
 //! message is not shown to them at all. The rules follow EDOPro's server (Multirole) and are

@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from ygoai.belief.check import load_book, make_game, observation_stream  # noqa: E402
+from ygoai.belief.games import add_game_options, load_book, play_game  # noqa: E402
 from ygoai.carddb import default_db  # noqa: E402
 from ygoai.parallel import run_parallel  # noqa: E402
 
@@ -33,13 +33,12 @@ def _codes(x, out: set) -> None:
 
 
 def play(task: tuple) -> tuple[set, set, set]:
-    seed, pairs, decks, book = task
-    rec = make_game(seed, pairs=[tuple(p) for p in pairs] if pairs else None, decks=decks, book=book)
-    in_decks = {c for d in rec.decks for c in d.main + d.extra}
+    rec, streams = play_game(*task)
+    in_decks = {c for d in rec["decks"] for c in d["main"] + d["extra"]}
     seen: set[int] = set()
     activated: set[int] = set()
-    for viewer in (0, 1):
-        for it in observation_stream(rec, viewer):
+    for stream in streams:
+        for it in stream:
             if it[0] == "msg":
                 _codes(it[1], seen)
                 if it[1].get("type") == "CHAINING":
@@ -51,13 +50,10 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("-n", type=int, default=100)
     ap.add_argument("--start", type=int, default=0)
-    ap.add_argument("--pairs")
-    ap.add_argument("--decks", choices=["random", "diverse"], default="random")
-    ap.add_argument("--book")
+    add_game_options(ap)
     args = ap.parse_args()
     db = default_db()
-    pairs = tuple(tuple(p.split("-")) for p in args.pairs.split(",")) if args.pairs else None
-    tasks = [(s, pairs, args.decks, args.book) for s in range(args.start, args.start + args.n)]
+    tasks = [(s, args.mirror_prob, args.pairs, args.decks, args.book) for s in range(args.start, args.start + args.n)]
     base = lambda codes: {db.get(c).alias or c for c in codes if db.get(c)}  # noqa: E731
     in_decks, seen, activated = set(), set(), set()
     for _, res in run_parallel(play, tasks, os.cpu_count()):

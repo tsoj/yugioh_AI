@@ -1,4 +1,4 @@
-//! Engine-vs-engine matches in the spirit of fastchess (ygoai/match.py).
+//! Engine-vs-engine matches in the spirit of fastchess.
 //!
 //! An "opening" is a pair of decks plus a seed (which fixes both starting deck orders and the
 //! core's RNG). Every opening is played twice with the engines swapping seats, so both engines

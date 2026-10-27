@@ -40,6 +40,7 @@ def passes(commit: str, seed: int, viewer: int, frac: float, flags: list[str], t
         wt = snapshot.make(f"bisect-{commit[:12]}", commit)
     except (subprocess.CalledProcessError, OSError):
         return None
+    # (YGOAI_GAME_CACHE: commits from before the test games were played in Rust kept them in a cache)
     env = dict(os.environ, YGOAI_SNAPSHOT=str(ROOT),  # (it is one: no snapshot of the snapshot)
                YGOAI_SCRIPTS=str(ROOT / "external" / "CardScripts"), YGOAI_CDB_DIR=str(ROOT / "external" / "BabelCDB"),
                YGOAI_DECKS=str(ROOT / "download_human_decks" / "decks"),

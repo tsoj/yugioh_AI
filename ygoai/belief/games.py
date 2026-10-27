@@ -1,24 +1,30 @@
-"""Test games for the belief checks: decks, agents, playing them and the
-observation streams of both players. (Kept apart from the checks themselves:
-the game cache key covers this module, so changing the checks does not make
-every cached game be played again.)"""
+"""Test games for the belief checks: their decks and agents (the games themselves are played in
+Rust: ygoai_rs.play_with_streams, ygoai_rs.check_game)."""
 
 from __future__ import annotations
 
-from ..game import GameRecord, ObservationLog, new_record, play, replay
-
-
-def observation_stream(record: GameRecord, viewer: int, with_state: bool = True) -> list[tuple]:
-    log = ObservationLog(viewer, with_state=with_state)
-    replay(record, [log]).close()
-    return log.items
-
-
 PAIRS = [("random", "random"), ("random", "greedy"), ("greedy", "random"), ("greedy", "greedy")]
+DECK_MODES = ("random", "diverse", "cards", "new", "new-cards", "new-mixed")
 _deck_pools: dict = {}
-
-
 _books: dict = {}
+
+
+def pairs_of(text: str) -> list[tuple[str, str]]:
+    """Agent pairings from "setter-greedy,mixed-random"."""
+    return [tuple(p.split("-")) for p in text.split(",")]
+
+
+def add_game_options(ap) -> None:
+    """The options that choose the test games (argparse): --pairs, --decks, --book, --mirror-prob."""
+    ap.add_argument("--pairs", type=pairs_of,
+                    help="agent pairings, e.g. setter-greedy,mixed-random (game seed %% number of pairs picks one; "
+                         "default: random/greedy in all four combinations)")
+    ap.add_argument("--decks", choices=DECK_MODES, default="random",
+                    help="random corpus decks, decks ordered to cover as many different cards as possible, "
+                         "decks of random cards (\"cards\"), or the decks downloaded later in the diverse order "
+                         "(\"new\")")
+    ap.add_argument("--book", help="opening book (scripts/make_book.py): game seed %% openings picks the decks")
+    ap.add_argument("--mirror-prob", type=float, default=0.2)
 
 
 def load_book(path) -> list:
@@ -95,51 +101,16 @@ def _mixed_deck(a, b, rng):
     return Deck(main=main, extra=extra, name=f"mix of {a.name} and {b.name}")
 
 
-def make_game(seed: int, mirror_prob: float = 0.2, pairs: list[tuple[str, str]] | None = None,
-              decks: str = "random", book: str | None = None, observers: list | None = None,
-              deck_pair: tuple | None = None) -> GameRecord:
-    """The test game for `seed`: the decks of game_decks (or `deck_pair`, e.g. chosen
-    by a process that has the deck corpus loaded) and agent pairing
-    pairs[seed % len(pairs)] (by default PAIRS)."""
-    from ..agents import make_agent
-    if observers is None:
-        # (the game as checked: from the cache, e.g. a belief_mc game played by an
-        # older version of the belief)
-        return make_game_streams(seed, mirror_prob, pairs, decks, book, deck_pair)[0]
-    d0, d1 = deck_pair or game_decks(seed, mirror_prob, decks, book)
+def agents(seed: int, pairs: list[tuple[str, str]] | None = None) -> tuple[str, str]:
+    """The agents of test game `seed`: pairs[seed % len(pairs)] (by default PAIRS)."""
     pairs = pairs or PAIRS
-    names = pairs[seed % len(pairs)]
-    record = new_record([d0, d1], seed)
-    # (a time limit makes a game depend on the machine's speed: only for the slow
-    # belief_mc agents, whose games the cache keeps)
-    play(record, [make_agent(names[0], seed * 2), make_agent(names[1], seed * 2 + 1)],
-         time_limit=120 if any("belief" in n for n in names) else None, observers=observers)
-    return record
+    return tuple(pairs[seed % len(pairs)])
 
 
-def make_game_streams(seed: int, mirror_prob: float = 0.2, pairs: list[tuple[str, str]] | None = None,
-                      decks: str = "random", book: str | None = None,
-                      deck_pair: tuple | None = None) -> tuple[GameRecord, list[list[tuple]]]:
-    """make_game and both players' observation streams, recorded while the game
-    is played (the same as observation_stream, without replaying the game).
-    Games played before come from the on-disk cache (ygoai.game_cache)."""
-    from .. import game_cache
-    deck_pair = deck_pair or game_decks(seed, mirror_prob, decks, book)
-    names = (pairs or PAIRS)[seed % len(pairs or PAIRS)]
-    key = {"seed": seed, "pairs": [list(names)], "decks": [d.to_json() for d in deck_pair]}
-    # (games of agents that use the belief are kept too when the belief changes: the
-    # same games are checked again; they are played anew only when the game changes)
-    with_belief = False
-    cached = game_cache.load(key, with_belief)
-    if cached is not None:
-        return cached
-    logs = [ObservationLog(v) for v in (0, 1)]
-    record = make_game(seed, mirror_prob, pairs, decks, book, observers=logs, deck_pair=deck_pair)
-    streams = []
-    for log in logs:
-        items = log.items
-        # (a replay stops at the win; the game itself goes on to the end of its step)
-        end = next((i + 1 for i, it in enumerate(items) if it[0] == "msg" and it[1]["type"] == "WIN"), len(items))
-        streams.append(items[:end])
-    game_cache.store(key, (record, streams), with_belief)
-    return record, streams
+def play_game(seed: int, mirror_prob: float = 0.2, pairs: list[tuple[str, str]] | None = None,
+              decks: str = "random", book: str | None = None) -> tuple[dict, list[list[tuple]]]:
+    """The test game for `seed` (the decks of game_decks, the agents of `agents`): its record and
+    both players' observation streams."""
+    import ygoai_rs
+    deck_pair = game_decks(seed, mirror_prob, decks, book)
+    return ygoai_rs.play_with_streams(seed, [d.to_json() for d in deck_pair], agents(seed, pairs))

@@ -19,8 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ygoai import constants as C  # noqa: E402
-from ygoai.belief.check import make_game  # noqa: E402
-from ygoai.game import Observer, replay  # noqa: E402
+from ygoai.belief.games import play_game  # noqa: E402
 from ygoai.parallel import Crash, run_parallel  # noqa: E402
 
 # too common to be useful as a selection criterion
@@ -33,43 +32,45 @@ _COMMON = {"move", "hint", "new_turn", "new_phase", "draw", "chaining", "chained
            "pay_lpcost", "missed_effect", "field_disabled", "player_hint", "card_selected"}
 
 
-class Tagger(Observer):
-    def __init__(self):
-        self.tags: set[str] = set()
-
-    def message(self, m: dict) -> None:
-        t = m["type"]
-        self.tags.add(t.lower())
-        if t == "MOVE":
-            if m["to"]["loc"] & C.LOCATION_OVERLAY:
-                self.tags.add("xyz")
-            if not m["from"]["loc"]:
-                self.tags.add("created")
-            if m["to"]["loc"] == C.LOCATION_REMOVED and not m["to"]["pos"] & C.POS_FACEUP:
-                self.tags.add("banish_facedown")
-            if m["from"]["loc"] == C.LOCATION_DECK and m["to"]["loc"] == C.LOCATION_DECK:
-                self.tags.add("deck_reorder")
-            if m["to"]["loc"] == C.LOCATION_SZONE and m["to"]["seq"] == 5:
-                self.tags.add("field_spell")
-        elif t == "SHUFFLE_EXTRA":
-            self.tags.add("extra_shuffle")
-
-    def prompt(self, p: dict, duel) -> None:
-        self.tags.add(p["type"].lower())
+def message_tags(m: dict) -> set[str]:
+    """A message's type, and what it shows about the mechanics."""
+    t = m["type"]
+    tags = {t.lower()}
+    if t == "MOVE":
+        if m["to"]["loc"] & C.LOCATION_OVERLAY:
+            tags.add("xyz")
+        if not m["from"]["loc"]:
+            tags.add("created")
+        if m["to"]["loc"] == C.LOCATION_REMOVED and not m["to"]["pos"] & C.POS_FACEUP:
+            tags.add("banish_facedown")
+        if m["from"]["loc"] == C.LOCATION_DECK and m["to"]["loc"] == C.LOCATION_DECK:
+            tags.add("deck_reorder")
+        if m["to"]["loc"] == C.LOCATION_SZONE and m["to"]["seq"] == 5:
+            tags.add("field_spell")
+    elif t == "SHUFFLE_EXTRA":
+        tags.add("extra_shuffle")
+    return tags
 
 
 def index_game(seed: int) -> dict:
-    record = make_game(seed)
-    tagger = Tagger()
-    replay(record, [tagger]).close()
-    tags = {t for t in tagger.tags if t not in _COMMON}
-    if record.decks[0].name == record.decks[1].name:
+    import ygoai_rs
+    record, _ = play_game(seed)
+    events, _ = ygoai_rs.replay_events(record)
+    tags = set()
+    for event in events:
+        if event[0] == "msg":
+            tags |= message_tags(event[1])
+        elif event[0] == "prompt":
+            tags.add(event[1]["type"].lower())
+    tags -= _COMMON
+    names = [d["name"] for d in record["decks"]]
+    if names[0] == names[1]:
         tags.add("mirror")
-    turns = record.result.get("turns", 0)
+    turns = record["result"].get("turns", 0)
     if turns >= 20:
         tags.add("long")
-    return {"seed": seed, "decks": [d.name for d in record.decks], "agents": record.agents,
-            "turns": turns, "decisions": len(record.responses), "tags": sorted(tags)}
+    return {"seed": seed, "decks": names, "agents": record["agents"], "turns": turns,
+            "decisions": len(record["responses"]), "tags": sorted(tags)}
 
 
 def main() -> int:

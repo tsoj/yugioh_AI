@@ -5,9 +5,8 @@ recycled, importing the code again: an edit during the run would mix versions.
 `reexec` copies the code (ygoai/, scripts/, lua_fixes/, the Rust engine's binding
 ygoai_rs) to
 build/snapshots/NAME and runs the calling script again from there; the data
-(external/, the decks, tests/, runs/ and the rest of build/, e.g. the game cache)
-are symlinks to the checkout's, so the results land where they always do and the
-game cache is shared (its fingerprint covers file contents, which are the same).
+(external/, the decks, tests/, runs/ and the rest of build/) are symlinks to the
+checkout's, so the results land where they always do.
 """
 
 from __future__ import annotations

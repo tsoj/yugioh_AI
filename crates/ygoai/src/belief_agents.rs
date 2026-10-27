@@ -1,30 +1,30 @@
-//! Search agents on the belief's reconstruction (agents/belief_mc.py's BeliefMCAgent and its
-//! subclasses alphabeta.py, alphabeta_naive.py and mcts.py): at a decision with several candidates
+//! Search agents on the belief's reconstruction: at a decision with several candidates
 //! (search::is_searched prompts), the agent reconstructs the duel from its observations
 //! (belief::agent::AgentBelief) and searches it; other decisions, and searched ones when the
-//! reconstruction fails or time is short, go to the heuristic player. Same seeds, same draws from
-//! the same random generator as the Python agents: the same moves.
+//! reconstruction fails or time is short, go to the heuristic player. And belief_mc, the
+//! belief checks' test agent.
 
-use std::collections::BTreeSet;
 use std::time::Instant;
 
 use serde_json::Value;
 use ygo_core::constants::*;
 
-use crate::actions::Response;
+use crate::actions::{Response, battle_options, encode, idle_options};
+use crate::agents::GreedyAgent;
 use crate::belief::agent::AgentBelief;
-use crate::belief::completion::{Completion, CorpusCompletion, VanillaCompletion, card};
-use crate::belief::neural::NeuralCompletion;
+use crate::belief::check::state_diffs;
+use crate::belief::completion::{Completion, CorpusCompletion, VanillaCompletion, by_name, card};
 use crate::belief::tracker::Need;
 use crate::belief::script_index::zone_sensitive;
-use crate::game::{Agent, AgentError, InitInfo, ObsItem};
+use crate::game::{Agent, AgentError, InitInfo, ObsItem, run_until_prompt};
 use crate::heuristic::Heuristic;
 use crate::messages::Msg;
 use crate::observe::to_core_response;
 use crate::pyrandom::PyRandom;
 use crate::rduel::RDuel;
 use crate::search::{AlphaBeta, SearchParams, TIME_BUFFER, hard_limit, root_candidates};
-use crate::state::{LOCATIONS, Snapshot, viewer_view};
+use crate::state::{LOCATIONS, PlayerCards, Snapshot, capture, viewer_view};
+use ygo_core::duel::Duel;
 
 /// public facts an approximate reconstruction may get wrong to be searched on
 pub const MAX_APPROX_DIFFS: usize = 4;
@@ -70,28 +70,17 @@ fn env_num(name: &str) -> Option<u64> {
     std::env::var(name).ok().and_then(|s| s.parse().ok())
 }
 
-/// The deck completion by name (vanilla, corpus, neural; neural without the models: corpus).
+/// The deck completion by name (`completion::by_name`), with what the belief replay and the
+/// completions load on first use loaded now, before the clock runs (the neural completion takes the
+/// corpus completion's cards for what its model cannot supply).
 pub fn completion(name: &str) -> Result<Option<&'static dyn Completion>, String> {
-    // (what the belief replay and the completions load on first use: loaded before the clock runs;
-    // the neural completion takes the corpus completion's cards for what its model cannot supply)
     crate::belief::script_index::warm_up();
     crate::belief::completion::monster_sset_codes();
     VanillaCompletion::get();
     if name != "vanilla" {
-        let _ = CorpusCompletion::get();
+        CorpusCompletion::get()?;
     }
-    Ok(match name {
-        "vanilla" => None,
-        "corpus" => Some(CorpusCompletion::get()?),
-        "neural" => match NeuralCompletion::get() {
-            Ok(n) => Some(n),
-            Err(e) => {
-                eprintln!("{e}: the corpus completion instead");
-                Some(CorpusCompletion::get()?)
-            }
-        },
-        _ => return Err(format!("unknown completion {name}")),
-    })
+    by_name(name)
 }
 
 pub struct BeliefSearchAgent {
@@ -215,7 +204,7 @@ impl BeliefSearchAgent {
         };
         if r.approximate {
             // (a best-effort state only if it matches what this agent observes now)
-            let ok = state.is_some_and(|s| count_diffs(&jv(s), &jv(&viewer_view(&mut duel.d, self.player))) <= MAX_APPROX_DIFFS);
+            let ok = state.is_some_and(|s| state_diffs(s, &mut duel.d, self.player) <= MAX_APPROX_DIFFS);
             if !ok {
                 self.failures += 1;
                 return None;
@@ -256,22 +245,6 @@ impl BeliefSearchAgent {
                 best
             }
         })
-    }
-}
-
-fn jv<T: serde::Serialize>(x: &T) -> Value {
-    serde_json::to_value(x).unwrap_or(Value::Null)
-}
-
-/// Facts that differ between two views (check._count_diffs).
-pub fn count_diffs(a: &Value, b: &Value) -> usize {
-    match (a, b) {
-        (Value::Object(x), Value::Object(y)) => {
-            let keys: BTreeSet<&String> = x.keys().chain(y.keys()).collect();
-            keys.into_iter().map(|k| count_diffs(x.get(k).unwrap_or(&Value::Null), y.get(k).unwrap_or(&Value::Null))).sum()
-        }
-        (Value::Array(x), Value::Array(y)) if x.len() == y.len() => x.iter().zip(y).map(|(p, q)| count_diffs(p, q)).sum(),
-        _ => (a != b) as usize,
     }
 }
 
@@ -349,8 +322,7 @@ impl Agent for BeliefSearchAgent {
     }
 }
 
-/// Gives the opponent's currently hidden cards new codes guessed from the cards visible now only
-/// (agents/alphabeta_naive.py).
+/// Gives the opponent's currently hidden cards new codes guessed from the cards visible now only.
 pub fn naive_hidden_cards(duel: &mut RDuel, me: u32, completion: Option<&'static dyn Completion>, rng: &mut PyRandom) {
     let comp: &dyn Completion = completion.unwrap_or(VanillaCompletion::get());
     let opp = 1 - me;
@@ -428,10 +400,161 @@ pub fn naive_hidden_cards(duel: &mut RDuel, me: u32, completion: Option<&'static
     }
 }
 
+/// belief_mc's rollouts per candidate, the decisions a rollout plays at most, and the candidates
+/// it searches at most
+const MC_ROLLOUTS: usize = 2;
+const MC_HORIZON: usize = 80;
+const MC_MAX_CANDIDATES: usize = 16;
+
+/// Flat Monte Carlo on the belief's reconstruction, the belief checks' test agent (the choices of
+/// the former Python agent with the same seed; it plays without a time control): at a decision with
+/// several candidates (`mc_candidates`), each is played MC_ROLLOUTS times on copies of the
+/// reconstructed duel, both sides continued by greedy players for at most MC_HORIZON decisions, and
+/// valued by `material_value`; the best mean is played. The greedy player answers the other
+/// decisions, and those without a reconstruction fit to search.
+pub struct BeliefMcAgent {
+    rng: PyRandom,
+    fallback: GreedyAgent,
+    completion: Option<&'static dyn Completion>,
+    player: u32,
+    items: Vec<ObsItem>,
+    belief: Option<AgentBelief>,
+}
+
+impl BeliefMcAgent {
+    pub fn new(seed: i64) -> Result<BeliefMcAgent, String> {
+        Ok(BeliefMcAgent {
+            rng: PyRandom::new(seed as i128),
+            fallback: GreedyAgent::new(seed),
+            completion: completion("neural")?,
+            player: 0,
+            items: Vec::new(),
+            belief: None,
+        })
+    }
+
+    /// The index of the candidate to play (None: no reconstruction fit to search).
+    fn search(&mut self, prompt: &Msg, state: Option<&Snapshot>, cands: &[Response]) -> Result<Option<usize>, AgentError> {
+        let (r, duel) = self.belief.as_mut().expect("started").reconstruct(&self.items, None);
+        let Some(mut duel) = duel else { return Ok(None) };
+        // (a best-effort state only if it matches what this agent observes now)
+        if r.approximate && !state.is_some_and(|s| state_diffs(s, &mut duel.d, self.player) <= MAX_APPROX_DIFFS) {
+            return Ok(None);
+        }
+        let core_prompt = r.final_prompt.unwrap_or_else(|| prompt.clone());
+        let core_cands = cands
+            .iter()
+            .map(|c| to_core_response(&core_prompt, self.player, c))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AgentError::Failed(format!("InvalidResponse: {}", e.0)))?;
+        let mut best: Option<(usize, f64)> = None;
+        for (k, cand) in core_cands.iter().enumerate() {
+            let mut total = 0.0;
+            for _ in 0..MC_ROLLOUTS {
+                let seed = self.rng.getrandbits(32) as i64;
+                total += rollout(duel.d.clone(), &core_prompt, cand, seed, self.player).unwrap_or(-1.0);
+            }
+            let mean = total / MC_ROLLOUTS as f64;
+            if best.is_none_or(|(_, b)| mean > b) {
+                best = Some((k, mean));
+            }
+        }
+        Ok(best.map(|(k, _)| k))
+    }
+}
+
+/// The candidates belief_mc searches: the commands of an idle or battle command, a chain window's
+/// effects (and passing, unless forced), yes and no, the options, the cards of a one-card selection.
+fn mc_candidates(prompt: &Msg) -> Vec<Response> {
+    match prompt {
+        Msg::SelectIdlecmd { .. } => idle_options(prompt),
+        Msg::SelectBattlecmd { .. } => battle_options(prompt),
+        Msg::SelectChain { chains, forced, .. } => {
+            let pass = (*forced == 0).then(Response::pass);
+            pass.into_iter().chain((0..chains.len()).map(Response::index)).collect()
+        }
+        Msg::SelectEffectyn { .. } | Msg::SelectYesno { .. } => vec![Response::yes(true), Response::yes(false)],
+        Msg::SelectOption { options, .. } => (0..options.len()).map(Response::index).collect(),
+        Msg::SelectCard { min: 1, max: 1, cards, .. } => (0..cards.len()).map(|i| Response::cards(vec![i])).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// `cand` played on `duel` (a copy), then greedy players for both sides: 1 / -1 if `me` won / lost
+/// within MC_HORIZON decisions, else `material_value` (None: a broken line).
+fn rollout(mut duel: Duel, prompt: &Msg, cand: &Response, seed: i64, me: u32) -> Option<f64> {
+    let mut players = [GreedyAgent::new(seed), GreedyAgent::new(seed + 1)];
+    duel.ocg_set_response(&encode(prompt, cand).ok()?);
+    let mut prompt = prompt.clone();
+    for _ in 0..MC_HORIZON {
+        let step = run_until_prompt(&mut duel, Some(&prompt)).ok()?;
+        if let Some(winner) = step.messages.iter().find_map(|m| if let Msg::Win { player, .. } = m { Some(*player) } else { None }) {
+            return Some(if winner == me { 1.0 } else { -1.0 });
+        }
+        if step.ended {
+            break;
+        }
+        prompt = step.prompt?;
+        let response = players[prompt.player()? as usize].respond(&prompt, None, None).ok()?;
+        duel.ocg_set_response(&encode(&prompt, &response).ok()?);
+    }
+    Some(material_value(&mut duel, me))
+}
+
+/// belief_mc's value of the position for `me`, in [-1, 1]: the LP difference / 8000 plus a tenth
+/// of the material difference (cards on the field, half a card per card in hand, the face-up
+/// monsters' ATK / 3000).
+fn material_value(duel: &mut Duel, me: u32) -> f64 {
+    let snap = capture(duel);
+    let material = |p: &PlayerCards| {
+        let field = p.mzone.iter().chain(&p.szone).flatten().count() as f64;
+        let atk: i64 = p.mzone.iter().flatten().filter(|c| c.position.unwrap_or(0) & POS_FACEUP != 0).map(|c| c.attack.unwrap_or(0) as i64).sum();
+        field + 0.5 * p.hand.len() as f64 + atk as f64 / 3000.0
+    };
+    let (mine, theirs) = (&snap.players[me as usize], &snap.players[1 - me as usize]);
+    let value = (snap.lp[me as usize] - snap.lp[1 - me as usize]) as f64 / 8000.0 + 0.1 * (material(mine) - material(theirs));
+    value.clamp(-1.0, 1.0)
+}
+
+impl Agent for BeliefMcAgent {
+    fn name(&self) -> String {
+        "belief_mc".into()
+    }
+    fn wants_state(&self) -> bool {
+        true
+    }
+    fn start(&mut self, player: u32, init: &InitInfo) -> Result<(), AgentError> {
+        self.player = player;
+        self.items.clear();
+        self.belief = Some(AgentBelief::new(player, init.clone(), self.completion));
+        Ok(())
+    }
+    fn observe(&mut self, msg: &Msg) {
+        self.items.push(ObsItem::Msg(msg.clone()));
+        self.fallback.observe(msg);
+    }
+    fn respond(&mut self, prompt: &Msg, state: Option<&Snapshot>, _clock: Option<(f64, f64)>) -> Result<Response, AgentError> {
+        self.items.push(ObsItem::Prompt(prompt.clone(), state.cloned()));
+        let mut cands = mc_candidates(prompt);
+        cands.truncate(MC_MAX_CANDIDATES);
+        let searched = if cands.len() > 1 { self.search(prompt, state, &cands)? } else { None };
+        let response = match searched {
+            Some(k) => cands[k].clone(),
+            None => self.fallback.respond(prompt, state, None)?,
+        };
+        self.items.push(ObsItem::Response(response.clone()));
+        Ok(response)
+    }
+}
+
 /// Agents by name, the belief ones included (not Send: the belief's state is not); None: unknown.
 pub fn make_agent(name: &str, seed: Option<i64>) -> Result<Box<dyn Agent>, String> {
-    if let Some(a) = crate::agents::make_agent(name, seed.unwrap_or_else(|| entropy() as i64)) {
+    let seed_or_entropy = seed.unwrap_or_else(|| entropy() as i64);
+    if let Some(a) = crate::agents::make_agent(name, seed_or_entropy) {
         return Ok(a);
+    }
+    if name == "belief_mc" {
+        return Ok(Box::new(BeliefMcAgent::new(seed_or_entropy)?));
     }
     Ok(Box::new(BeliefSearchAgent::new(name, seed)?))
 }

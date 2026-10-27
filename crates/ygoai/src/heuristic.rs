@@ -1,4 +1,4 @@
-//! The heuristic player (agents/heuristic_agents.py HeuristicAgent): a fixed order of priorities
+//! The heuristic player: a fixed order of priorities
 //! in the Main Phase and in battle, chains above 2000 LP, yes to optional effects in its own turn,
 //! cards chosen by what the selection is for (the core's select hint before it). Repeated
 //! activations of the same effect are capped per turn. It makes the same choices as the Python
@@ -366,7 +366,7 @@ impl Heuristic {
     }
 }
 
-/// The heuristic player as an agent (agents/heuristic_agents.py HeuristicAgent).
+/// The heuristic player as an agent.
 pub struct HeuristicAgent(pub Heuristic);
 
 impl HeuristicAgent {

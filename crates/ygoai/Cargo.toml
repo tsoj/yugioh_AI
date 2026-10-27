@@ -15,5 +15,6 @@ rustc-hash = "2"
 mimalloc = { version = "0.1", default-features = false }
 deckmodels = { path = "../deckmodels" }
 regex = "1"
+crc32fast = "1"
 highs = { path = "../highs" }
 zip = { version = "2", default-features = false, features = ["deflate"] }

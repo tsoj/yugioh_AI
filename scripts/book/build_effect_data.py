@@ -5,9 +5,8 @@ happens after a decision, from recorded games.
   scripts/book/build_effect_data.py runs/sprt/*.jsonl -o runs/data/effects1.npz [--keep 0.5] [--games N]
 
 Replays each game and reads the full state (both decks known: the model learns
-the rules, it does not play) at every prompt, in a forked process (reads change
-the core's allocations, and the replay could go on differently, see
-build_policy_data.py). A sample is a decision with its state, the decision
+the rules, it does not play) at the prompts, on copies of the duel (the replay
+goes on exactly as the game was played). A sample is a decision with its state, the decision
 (prompt type, kind, the cards it names), and what followed until the next
 prompt: every card's change (by its id in the core: new location, position,
 ATK/DEF), which cards the messages name (activated, targeted, attacking, ...),
@@ -35,10 +34,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from ygoai import constants as C  # noqa: E402
-from ygoai.game import GameRecord, Observer, replay  # noqa: E402
-from ygoai.observe import to_core_response  # noqa: E402
 from ygoai.parallel import Crash, run_parallel  # noqa: E402
-from ygoai.state import capture  # noqa: E402
 
 ZONES = [("deck", C.LOCATION_DECK), ("hand", C.LOCATION_HAND), ("mzone", C.LOCATION_MZONE),
          ("szone", C.LOCATION_SZONE), ("grave", C.LOCATION_GRAVE), ("removed", C.LOCATION_REMOVED),
@@ -57,6 +53,13 @@ PROMPTS = ["SELECT_IDLECMD", "SELECT_BATTLECMD", "SELECT_CHAIN", "SELECT_EFFECTY
            "SELECT_POSITION", "SELECT_COUNTER", "SORT_CARD", "SORT_CHAIN", "ANNOUNCE_RACE", "ANNOUNCE_ATTRIB",
            "ANNOUNCE_CARD", "ANNOUNCE_NUMBER", "ROCK_PAPER_SCISSORS", "OTHER"]
 SCALARS = ["lp0", "lp1", "turn", "turn_player", "phase", "chain"]
+# (the commands of an idle and a battle command, the action's kind 1 + its index, and the prompt's
+# list of each command's cards)
+IDLE_KINDS = ["summon", "spsummon", "repos", "mset", "sset", "activate", "to_bp", "to_ep", "shuffle"]
+IDLE_LISTS = {"summon": "summonable", "spsummon": "spsummonable", "repos": "repositionable",
+              "mset": "msetable", "sset": "ssetable", "activate": "activatable"}
+BATTLE_KINDS = ["activate", "attack", "to_m2", "to_ep"]
+BATTLE_LISTS = {"activate": "activatable", "attack": "attackable"}
 
 
 def _ptype(t: str) -> int:
@@ -129,7 +132,6 @@ def _message_refs(m: dict) -> list[tuple[str, tuple]]:
 
 def _action(prompt: dict, resp: dict) -> tuple[list[int], list[tuple]]:
     """(prompt type, kind, yes/no or option, number of cards; the (con, loc, seq) of the cards the response names)."""
-    from ygoai.actions import BATTLE_KINDS, BATTLE_LISTS, IDLE_KINDS, IDLE_LISTS
     t = prompt["type"]
     kind, flag, cards = 0, 0, []
 
@@ -171,45 +173,37 @@ def _action(prompt: dict, resp: dict) -> tuple[list[int], list[tuple]]:
     return [_ptype(t), kind, flag, len(cards)], cards
 
 
-class _Game(Observer):
-    """The prompts with responses and messages; the state is read only at the kept
-    prompts and the ones after them (each read forks)."""
-
-    def __init__(self, keep: float, rng: random.Random):
-        self.keep, self.rng = keep, rng
-        self.items = []  # (prompt, core response or None, state rows, scalars, messages after the response, kept)
-
-    def message(self, msg: dict) -> None:
-        if self.items:
-            self.items[-1][4].append(msg)
-
-    def prompt(self, prompt: dict, duel) -> None:
-        # (chain windows are most prompts and mostly passed: a quarter as many of those)
-        kept = self.rng.random() < self.keep * (0.25 if prompt["type"] == "SELECT_CHAIN" else 1.0)
-        if not kept and not (self.items and self.items[-1][5]):
-            self.items.append([prompt, None, None, None, [], False])
-            return
-        snap = capture(duel.clone())  # (the queries on a copy: the game goes on exactly as it was played)
-        rows, scalars = _rows(snap), _scalars(snap)
-        self.items.append([prompt, None, rows, scalars, [], kept])
-
-    def response(self, player: int, response: dict) -> None:
-        if self.items and self.items[-1][1] is None:
-            p = self.items[-1][0]
-            try:
-                self.items[-1][1] = to_core_response(p, p["player"], response)
-            except Exception:  # noqa: BLE001
-                self.items[-1][1] = response
+def _decisions(events: list[tuple], keep: float, rng: random.Random) -> list[list]:
+    """The prompts of a replay's god view (ygoai_rs.replay_events), each [prompt, core response,
+    state rows, scalars, the messages after the response, kept]; the state only at the kept prompts
+    and the ones after them."""
+    items: list[list] = []
+    for event in events:
+        if event[0] == "msg":
+            if items:
+                items[-1][4].append(event[1])
+        elif event[0] == "prompt":
+            prompt, snap = event[1], event[2]
+            # (chain windows are most prompts and mostly passed: a quarter as many of those)
+            kept = rng.random() < keep * (0.25 if prompt["type"] == "SELECT_CHAIN" else 1.0)
+            if kept or (items and items[-1][5]):
+                items.append([prompt, None, _rows(snap), _scalars(snap), [], kept])
+            else:
+                items.append([prompt, None, None, None, [], False])
+        elif items and items[-1][1] is None:
+            _, _, response, core = event
+            items[-1][1] = core if core is not None else response
+    return items
 
 
 def samples(task):
+    import ygoai_rs
     line, keep, seed = task
-    d = json.loads(line)
-    record = GameRecord.from_json(d)
-    g = _Game(keep, random.Random(seed))
-    replay(record, [g]).close()
+    record = json.loads(line)
+    events, _ = ygoai_rs.replay_events(record, None, True)
+    items = _decisions(events, keep, random.Random(seed))
     out = []
-    for a, b in zip(g.items, g.items[1:]):
+    for a, b in zip(items, items[1:]):
         prompt, resp, rows, scalars, msgs, kept = a
         if not kept or resp is None or rows is None or b[2] is None:
             continue
@@ -241,7 +235,7 @@ def samples(task):
                     "scalars": scalars, "msgs": sorted(mtypes), "next": _ptype(nxt_prompt["type"]),
                     "next_same": int(nxt_prompt.get("player", 0) == prompt.get("player", 0)),
                     "dlp": [nscalars[0] - scalars[0], nscalars[1] - scalars[1]]})
-    return record.seed, out
+    return record["seed"], out
 
 
 def main() -> int:

@@ -13,12 +13,10 @@ from __future__ import annotations
 import argparse
 import collections
 import ctypes
-import gc
 import gzip
 import json
 import multiprocessing as mp
 import os
-import signal
 import sys
 import time
 import zlib
@@ -26,144 +24,23 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from ygoai.belief.check import check_prefix, cut_point, game_decks, make_game_streams  # noqa: E402
+from ygoai.belief.games import add_game_options, agents, game_decks  # noqa: E402
 from ygoai.parallel import Crash, run_parallel  # noqa: E402
-
-class Timeout(BaseException):  # not swallowed by check_prefix
-    pass
-
-
-def _alarm(_signum, frame):
-    # (an exception raised where Python ignores it, e.g. in a destructor: try again a second
-    # later; the task cancels the alarm when it ends. The Rust replay is not interrupted by it:
-    # it gets the timeout as its deadline)
-    signal.alarm(1)
-    raise Timeout()
-
-
-def get_completion(name: str) -> str:
-    """The completion by name (the Rust replay's: vanilla, corpus, neural)."""
-    return name
-
-
-def _replay_case(record, items, seed: int, viewer: int, frac: float, timeout: int, completion: str) -> dict | None:
-    cut = cut_point(items, frac)
-    if cut is None:
-        return None  # (e.g. a turn the game did not reach)
-    signal.alarm(timeout)
-    t0 = time.monotonic()
-    try:
-        if os.environ.get("YGOAI_AGENT_MODE"):
-            from ygoai.belief.check import check_agent
-            r = check_agent(record, viewer, items, cut, completion=get_completion(completion))
-        else:
-            r = check_prefix(record, viewer, items, cut, timeout=timeout, completion=get_completion(completion))
-        if time.monotonic() - t0 > timeout or r.error == "timeout":
-            # (the alarm came while the core ran one long step: the only Python code
-            # running then is its log callback, which swallows the exception)
-            raise Timeout()
-        return {"seed": seed, "viewer": viewer, "frac": frac, "cut": cut, "len": len(items),
-                "ok": r.ok, "error": r.error, "seconds": r.seconds,
-                "decisions": r.opponent_decisions, "probed": r.probed, "probes": r.probes,
-                "restarts": r.restarts, "fixes": r.fixes, "repairs": r.repairs, "end_ignored": r.end_ignored,
-                **({"approximate": r.approximate, "state_diffs": r.state_diffs}
-                   if os.environ.get("YGOAI_AGENT_MODE") else {})}
-    except Timeout:
-        return {"seed": seed, "viewer": viewer, "frac": frac, "cut": cut, "len": len(items),
-                "ok": False, "error": "timeout", "seconds": time.monotonic() - t0}
-    finally:
-        signal.alarm(0)
-
 
 SEQUENCE_FRAC = 2.0  # (the "cut" of an agent sequence's result: the whole game, decision by decision)
 
 
-def _agent_sequence(record, items, seed: int, viewer: int, every: int, timeout: int, completion: str) -> dict:
-    """The viewer's belief at every `every`-th of its decisions, as belief_mc
-    reconstructs it (AgentBelief); the timeout is per reconstruction."""
-    from ygoai.belief.agent import AgentBelief
-    from ygoai.belief.check import _count_diffs, init_info
-    from ygoai.state import viewer_view
-    belief = AgentBelief(viewer, init_info(record, viewer), get_completion(completion))
-    cuts = [i + 1 for i, it in enumerate(items) if it[0] == "prompt"][::every]
-    res = {"seed": seed, "viewer": viewer, "frac": SEQUENCE_FRAC, "cut": len(items), "len": len(items),
-           "reconstructions": 0, "consistent": 0, "approximate_n": 0, "failed": 0, "diffs_total": 0,
-           "approximate": False, "state_diffs": 0, "retries": 0, "seconds": 0.0, "first_problem": None}
-    for cut in cuts:
-        signal.alarm(timeout)
-        t0 = time.monotonic()
-        try:
-            br, duel = belief.reconstruct(items[:cut], timeout)
-            if time.monotonic() - t0 > timeout:
-                raise Timeout()
-            problem = None
-            if duel is None:
-                res["failed"] += 1
-                problem = "no reconstruction"
-            elif br.approximate:  # (the duels belong to `belief`)
-                d = _count_diffs(items[cut - 1][2], viewer_view(duel, viewer))
-                res["approximate_n"] += 1
-                res["diffs_total"] += d
-                res["state_diffs"] = max(res["state_diffs"], d)
-                problem = f"approximate ({d} state differences)"
-            else:
-                res["consistent"] += 1
-        except Timeout:
-            res["failed"] += 1
-            problem = "timeout"
-            retries = belief.retries
-            belief.close()
-            belief = AgentBelief(viewer, init_info(record, viewer), get_completion(completion))
-            belief.retries = retries
-        finally:
-            signal.alarm(0)
-        res["seconds"] += time.monotonic() - t0
-        res["reconstructions"] += 1
-        if problem is not None and res["first_problem"] is None:
-            res["first_problem"] = f"at item {cut}: {problem}"
-    res["retries"], res["extended"] = belief.retries, belief.extended
-    belief.close()
-    res["approximate"] = res["approximate_n"] > 0
-    res["ok"] = res["consistent"] == res["reconstructions"]
-    res["error"] = "" if res["ok"] else (f"{res['reconstructions'] - res['consistent']} of {res['reconstructions']} "
-                                         f"not consistent, first {res['first_problem']}")
-    return res
-
-
 def run_task(task: tuple) -> list[dict]:
-    """All reconstructions of one game: (seed, [(viewer, cut), ...], ...). The game
-    is played once, recording both players' observation streams on the way."""
-    seed, cases, mirror_prob, timeout, completion, pairs, decks, book, deck_pair, *opt = task
-    every = opt[0] if opt else int(os.environ.get("YGOAI_AGENT_SEQUENCE") or 0)
-    signal.signal(signal.SIGALRM, _alarm)
+    """All checks of one game (ygoai_rs.check_game: played once, then each case checked):
+    (seed, [(viewer, frac), ...], agents, decks, completion, timeout, every, agent_mode)."""
+    import ygoai_rs
+    seed, cases, names, decks, completion, timeout, every, agent_mode = task
     try:
-        record, streams = make_game_streams(seed, mirror_prob, [tuple(p) for p in pairs] if pairs else None,
-                                            decks, book, deck_pair=deck_pair)
-    except Exception as e:  # noqa: BLE001
-        return [{"seed": seed, "viewer": v, "frac": f, "ok": False, "error": f"game failed: {e}"}
-                for v, f in cases]
-    out = []
-    done = set()
-    if every:
-        for viewer in sorted({v for v, _ in cases}):
-            r = _agent_sequence(record, streams[viewer], seed, viewer, every, timeout, completion)
-            r["game"] = zlib.crc32(repr(streams[viewer]).encode())
-            out.append(r)
-        cases = []
-    for viewer, frac in cases:
-        cut = cut_point(streams[viewer], frac)
-        if cut is None or (viewer, cut) in done:
-            continue  # (the same prefix as another cut)
-        done.add((viewer, cut))
-        r = _replay_case(record, streams[viewer], seed, viewer, frac, timeout, completion)
-        if r is not None:
-            # (which game it was: runs are compared only on the same games)
-            r["game"] = zlib.crc32(repr(streams[viewer]).encode())
-        out.append(r)
-    # (give the memory of the game's replays back: a worker runs many games, and the
-    # heap would otherwise stay at the largest replay's peak)
-    del record, streams
-    gc.collect()
+        out = ygoai_rs.check_game(seed, decks, names, cases, completion, timeout, every, agent_mode)
+    except ValueError as e:
+        out = [{"seed": seed, "viewer": v, "frac": f, "ok": False, "error": f"game failed: {e}"} for v, f in cases]
+    # (give the memory of the game's replays back: a worker runs many games, and the heap would
+    # otherwise stay at the largest replay's peak)
     _malloc_trim()
     return out
 
@@ -194,7 +71,6 @@ def make_parser() -> argparse.ArgumentParser:
     ap.add_argument("--previous", type=Path,
                     help="an earlier output: games whose reconstruction failed there (at any cut, for that "
                          "viewer) get the --turns cuts too")
-    ap.add_argument("--mirror-prob", type=float, default=0.2)
     ap.add_argument("--timeout", type=int, default=180, help="seconds per belief replay")
     ap.add_argument("--agent-mode", action="store_true",
                     help="reconstruct as an agent does: at the viewer's decisions, with the best effort "
@@ -209,13 +85,7 @@ def make_parser() -> argparse.ArgumentParser:
     ap.add_argument("-j", "--jobs", type=int, default=mp.cpu_count())
     ap.add_argument("-o", "--output", type=Path, help="write all results as JSON lines")
     ap.add_argument("-v", "--verbose", action="store_true")
-    ap.add_argument("--pairs", help="agent pairings, e.g. setter-greedy,mixed-random (game seed %% number "
-                                    "of pairs picks one; default: random/greedy in all four combinations)")
-    ap.add_argument("--decks", choices=["random", "diverse", "cards", "new", "new-cards", "new-mixed"], default="random",
-                    help="random corpus decks, decks ordered to cover as many different cards as possible, "
-                         "decks of random cards (\"cards\"), or the decks downloaded later in the diverse order "
-                         "(\"new\")")
-    ap.add_argument("--book", help="opening book (scripts/make_book.py): game seed %% openings picks the decks")
+    add_game_options(ap)
     ap.add_argument("--completion", choices=["vanilla", "corpus", "neural"], default="corpus",
                     help="how unknown opponent cards are guessed")
     return ap
@@ -255,22 +125,17 @@ def build_tasks(args: argparse.Namespace) -> list[tuple]:
         cases = [(seed, viewer, frac) for seed in seeds for viewer in (0, 1)
                  for frac in (sorted(cuts(seed, viewer), reverse=True) if not args.agent_sequence
                               else (SEQUENCE_FRAC,))]
-    pairs = tuple(tuple(p.split("-")) for p in args.pairs.split(",")) if args.pairs else None
     by_seed: dict[int, list] = {}
     for seed, viewer, frac in cases:
         by_seed.setdefault(seed, []).append((viewer, frac))
-    # (the decks are chosen here: the workers then never load the deck corpus,
-    # which keeps them small and the replay's probes (forks) cheap)
-    # (the agent sequence mode is part of the task: the suite runs tasks without main())
-    return [(seed, cs, args.mirror_prob, args.timeout, args.completion, pairs, args.decks, args.book,
-             game_decks(seed, args.mirror_prob, args.decks, args.book), args.agent_sequence or 0)
+    # (the decks are chosen here: the workers then never load the deck corpus, which keeps them small)
+    return [(seed, cs, agents(seed, args.pairs), [d.to_json() for d in game_decks(seed, args.mirror_prob, args.decks, args.book)],
+             args.completion, args.timeout, args.agent_sequence or 0, args.agent_mode)
             for seed, cs in by_seed.items()]
 
 
 def main() -> int:
     args = make_parser().parse_args()
-    if args.agent_mode:
-        os.environ["YGOAI_AGENT_MODE"] = "1"
     if args.read_guided_ok:
         os.environ["YGOAI_READ_GUIDED_OK"] = "1"
     tasks = build_tasks(args)

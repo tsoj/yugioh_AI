@@ -24,7 +24,7 @@ It has three parts:
 
 ```sh
 git submodule update --init external/CardScripts external/BabelCDB external/HiGHS rust
-# the Python binding of the engine and the belief replay (ygoai_rs/), into the venv below
+# the Python binding of the belief checks (ygoai_rs/), into the venv below
 cd ygoai_rs && CARGO_TARGET_DIR=../ygopro-core-rust/target VIRTUAL_ENV=../.venv ../.venv/bin/maturin develop --release
 ```
 
@@ -123,20 +123,19 @@ An AI is a process speaking JSON lines on stdin/stdout (see `crates/ygoai/src/pr
 -> {"type": "end", "obs": [...], "result": {"winner": 1, "reason": 1, ...}}
 ```
 
-`obs` are the core's messages as parsed by `ygoai/messages.py`, filtered for the player by
-`ygoai/observe.py`: the player sees what an EDOPro client would show, minus several leaks that
+`obs` are the core's messages as parsed by `messages.rs`, filtered for the player by `observe.rs`
+(in `crates/ygoai/src/`): the player sees what an EDOPro client would show, minus several leaks that
 EDOPro has (hidden-card effect descriptions in card hints, stale "reason" fields, deck positions
 that distinguish returned cards, ...). A `prompt` is a core selection message, and the response
-format for each kind is documented in `ygoai/actions.py`. `state` is the player's view of the
+format for each kind is documented in `actions.rs`. `state` is the player's view of the
 whole field. `clock` (only under a time control, `ygoai-match --tc BASE+INC`: Fischer, per decision)
 is the time the player has left; the time the response takes is subtracted, then the increment
 added, and below zero the player loses on time.
 
 ## How the belief replay works (`crates/ygoai/src/belief/`)
 
-The belief replay is Rust (it was Python, `ygoai/belief/`, until the port; the module names are the
-same). Python uses it through `ygoai_rs` (`ygoai/belief/check.py`, `ygoai/belief/agent.py`); the deck
-completions stay Python where they need PyTorch (the neural one is called from Rust).
+The belief replay is Rust; the belief checks (`check.rs`: `check_belief.py` calls them through
+`ygoai_rs`) play its test games (`games.rs`) and reconstruct each player's view at several cuts.
 
 * `tracker.rs` follows every card slot of both players through the observation stream,
   mirroring the core's pile semantics exactly. Unknown identities are variables; a shuffle turns
@@ -225,19 +224,16 @@ An AI keeps its observation stream as a list of items `("msg", message)`, `("pro
 state)` and `("response", response)`, exactly as the engine protocol delivers them. At a
 decision it reconstructs the duel and searches from it on copies (`duel.clone()`, microseconds):
 
-```python
-from ygoai.belief.agent import AgentBelief
-from ygoai.actions import encode
-from ygoai.observe import to_core_response
-
-belief = AgentBelief(player, init, completion="neural")   # one per game ("vanilla", "corpus")
+```rust
+let mut belief = AgentBelief::new(player, init, completion::by_name("neural")?);   // one per game
 ...
-replay, duel = belief.reconstruct(items)   # a duel waiting for this player's response (yours to keep)
-core_prompt = replay.final_prompt          # (the core's version of the prompt)
-for candidate in candidates:
-    copy = duel.clone()
-    copy.set_response(encode(core_prompt, to_core_response(core_prompt, player, candidate)))
-    ...                                    # simulate on, evaluate
+let (r, duel) = belief.reconstruct(&items, timeout);   // a duel waiting for this player's response
+let core_prompt = r.final_prompt.unwrap_or(prompt);    // (the core's version of the prompt)
+for candidate in &candidates {
+    let mut copy = duel.d.clone();
+    copy.ocg_set_response(&encode(&core_prompt, &to_core_response(&core_prompt, player, candidate)?)?);
+    // ... simulate on, evaluate
+}
 ```
 
 `AgentBelief` reconstructs decision by decision: the previous consistent duel goes on with the
@@ -245,12 +241,13 @@ new observations (`BeliefReplay::extend`; the viewer's own draws and hand shuffl
 just in time, as a hypothesis of the longer stream would arrange them); when that runs into a
 mismatch, a full replay inherits the previous one's repairs and decisions
 (`BeliefReplay::inherit`); when that fails too, one from scratch. The duel it returns is a copy,
-the caller's to change. When no consistent reconstruction exists, `replay.approximate` is set: the
+the caller's to change. When no consistent reconstruction exists, `r.approximate` is set: the
 best effort re-aligned with the stream, its public state re-synchronized with what the player saw
 at each of its Idle/Battle commands (`belief/sync.rs`).
 
-`ygoai/agents/belief_mc.py` is a complete (deliberately simple) example: flat Monte Carlo with
-greedy rollouts on the reconstructed duel. `scripts/check_belief.py --agent-sequence K` checks
+`BeliefMcAgent` (`belief_agents.rs`) is a complete (deliberately simple) example: flat Monte
+Carlo with greedy rollouts on the reconstructed duel; the engine's `BeliefSearchAgent` searches
+it with alpha-beta. `scripts/check_belief.py --agent-sequence K` checks
 reconstructions made this way (every K-th decision of each player; suite range
 `agentseq50000`), `--agent-mode` single reconstructions as an agent sees them (with the state
 differences of approximate ones).
@@ -332,7 +329,7 @@ Open design questions (from the remaining failures):
 
 ## Information leaks
 
-`ygoai/observe.py` hides everything a player must not know, and the belief replay doubles as a
+`observe.rs` hides everything a player must not know, and the belief replay doubles as a
 leak detector: it rebuilds the game with *wrong* hidden cards, so any hidden detail that leaks
 into the observations makes the streams differ. This found several leaks that EDOPro itself has:
 positions of face-down cards in piles (a card returned to the deck has a different position
@@ -489,16 +486,13 @@ ygopro-core-rust/  submodule: the engine (ygo-core), the cards (ygo-cards), the 
 crates/ygoai/      the ygoai crate: messages, observations, actions, state views, games and records,
                    the arbiter (bin ygoai-match), agents and alpha-beta search, the belief replay
 crates/highs/      HiGHS (external/HiGHS) for the belief's flow model
-ygoai_rs/          the Python binding (engine, belief replay, search)
+ygoai_rs/          the Python binding (the belief checks' games and checks, replays)
 external/          submodules: CardScripts, BabelCDB, HiGHS
 lua_fixes/         corrected card scripts
 scripts/           command line tools (book/: the SPRT opening book)
 tests/             unit and integration tests (baselines/: the belief suite's)
-ygoai/             the Python package
-  core.py        the engine (ygoai_rs)  messages.py   message parser
-  actions.py     responses              observe.py    per-player filtering
-  state.py       state snapshots        game.py       arbiter, records, replays
-  match.py       openings, statistics   decks.py      deck lists, the corpus
-  agents/        the belief checks' AIs (random, greedy, setter, mixed, belief_mc)
-  belief/        the belief checks and an agent's belief (the replay itself is in Rust)
+ygoai/             the Python package of the tools
+  carddb.py      the card database      decks.py      deck lists, the corpus
+  parallel.py    crash tolerant pool    pretty.py     messages as text
+  constants.py   the core's constants   belief/       the belief checks' decks and agents
 ```

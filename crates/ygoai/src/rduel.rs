@@ -1,7 +1,6 @@
-//! The Rust engine's duel with the interface of ygoai.core.Duel (ygoai/core_rust.py): the
-//! extension API (changes made while a card function waits are recorded and re-applied, see
-//! Duel::outside_change) and the questions the C++ core answered with Lua chunks. Used by the
-//! belief replay; the Python binding exposes the same calls.
+//! The belief replay's duel: the engine's duel with the extension API (changes made while a card
+//! function waits are recorded and re-applied, see Duel::outside_change) and the questions the C++
+//! core answered with Lua chunks.
 
 use ygo_core::api::{NewCardInfo, QueryInfo};
 use ygo_core::constants::*;

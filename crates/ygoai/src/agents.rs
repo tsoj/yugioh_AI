@@ -1,5 +1,6 @@
-//! Built-in agents (ygoai/agents): random and greedy (the heuristic player: crate::heuristic),
-//! which make exactly the choices of the Python ones with the same seeds.
+//! Built-in agents: random, greedy, setter and mixed (the heuristic player: crate::heuristic). They
+//! make the choices of the former Python agents with the same seeds (Python's random numbers:
+//! crate::pyrandom), so that the belief checks' games stay the games of their baselines.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -12,7 +13,7 @@ use crate::messages::Msg;
 use crate::pyrandom::PyRandom;
 use crate::state::Snapshot;
 
-/// The codes an ANNOUNCE_CARD filter allows, in the card database's order (actions.declarable_codes).
+/// The codes an ANNOUNCE_CARD filter allows, in the card database's order.
 pub fn declarable_codes(opcodes: &[u64]) -> Vec<u32> {
     static CACHE: OnceLock<Mutex<HashMap<Vec<u64>, Vec<u32>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
@@ -46,8 +47,7 @@ fn low(param: u32) -> u32 {
     if o2 != 0 { o1.min(o2) } else { o1 }
 }
 
-/// A selection for a SELECT_SUM prompt by depth-first search in a random order
-/// (actions.random_sum_selection).
+/// A selection for a SELECT_SUM prompt by depth-first search in a random order.
 pub fn random_sum_selection(m: &Msg, rng: &mut PyRandom, budget: usize) -> Option<Vec<usize>> {
     let Msg::SelectSum { mode, acc, max, must_cards, cards, .. } = m else { return None };
     let n = cards.len();
@@ -90,7 +90,7 @@ pub fn random_sum_selection(m: &Msg, rng: &mut PyRandom, budget: usize) -> Optio
     dfs(&mut s, 0, &mut Vec::new(), must_low)
 }
 
-/// A uniformly-ish random valid response to a prompt (actions.random_response).
+/// A uniformly-ish random valid response to a prompt.
 pub fn random_response(m: &Msg, rng: &mut PyRandom, cancel_prob: f64) -> Result<Response, AgentError> {
     use Msg::*;
     let fail = |t: &str| AgentError::Failed(format!("InvalidResponse: no random response for {t}"));
@@ -200,7 +200,7 @@ pub fn random_response(m: &Msg, rng: &mut PyRandom, cancel_prob: f64) -> Result<
     })
 }
 
-/// Picks uniformly random valid responses (agents/random_agent.py).
+/// Picks uniformly random valid responses.
 pub struct RandomAgent {
     rng: PyRandom,
 }
@@ -222,35 +222,48 @@ impl Agent for RandomAgent {
 
 pub const MAX_SAME_ACTIVATION_PER_TURN: u32 = 3;
 
-/// Activates everything it can, summons, sets, always attacks; random where it has no opinion
-/// (agents/greedy_agent.py, the same choices with the same seed).
-pub struct GreedyAgent {
-    rng: PyRandom,
-    activations: HashMap<(u32, u32, u32, Option<u64>), u32>,
-}
+/// How often each effect was activated this turn, capped at `MAX_SAME_ACTIVATION_PER_TURN` (so
+/// that unlimited effects cannot loop forever); reset by NEW_TURN.
+#[derive(Default)]
+struct ActivationCaps(HashMap<(u32, u32, u32, Option<u64>), u32>);
 
-impl GreedyAgent {
-    pub fn new(seed: i64) -> GreedyAgent {
-        GreedyAgent { rng: PyRandom::new(seed as i128), activations: HashMap::new() }
-    }
-
+impl ActivationCaps {
     fn key(e: &crate::messages::Card) -> (u32, u32, u32, Option<u64>) {
         (e.code, e.loc, e.seq, e.desc)
     }
 
     fn allowed(&self, e: &crate::messages::Card) -> bool {
-        self.activations.get(&Self::key(e)).copied().unwrap_or(0) < MAX_SAME_ACTIVATION_PER_TURN
+        self.0.get(&Self::key(e)).copied().unwrap_or(0) < MAX_SAME_ACTIVATION_PER_TURN
     }
 
     fn note(&mut self, e: &crate::messages::Card) {
-        *self.activations.entry(Self::key(e)).or_insert(0) += 1;
+        *self.0.entry(Self::key(e)).or_insert(0) += 1;
     }
 
-    fn pick(&mut self, opts: &[Response]) -> Result<Response, AgentError> {
-        if opts.is_empty() {
-            return Err(AgentError::Failed("IndexError: Cannot choose from an empty sequence".into()));
+    fn observe(&mut self, msg: &Msg) {
+        if let Msg::NewTurn { .. } = msg {
+            self.0.clear();
         }
-        Ok(self.rng.choice(opts).clone())
+    }
+}
+
+/// A random one of `opts` (Python's random.choice, which fails on an empty list).
+fn pick<T: Clone>(rng: &mut PyRandom, opts: &[T]) -> Result<T, AgentError> {
+    if opts.is_empty() {
+        return Err(AgentError::Failed("IndexError: Cannot choose from an empty sequence".into()));
+    }
+    Ok(rng.choice(opts).clone())
+}
+
+/// Activates everything it can, summons, sets, always attacks; random where it has no opinion.
+pub struct GreedyAgent {
+    rng: PyRandom,
+    caps: ActivationCaps,
+}
+
+impl GreedyAgent {
+    pub fn new(seed: i64) -> GreedyAgent {
+        GreedyAgent { rng: PyRandom::new(seed as i128), caps: ActivationCaps::default() }
     }
 }
 
@@ -259,9 +272,7 @@ impl Agent for GreedyAgent {
         "greedy".into()
     }
     fn observe(&mut self, msg: &Msg) {
-        if let Msg::NewTurn { .. } = msg {
-            self.activations.clear();
-        }
+        self.caps.observe(msg);
     }
     fn respond(&mut self, prompt: &Msg, _state: Option<&Snapshot>, _clock: Option<(f64, f64)>) -> Result<Response, AgentError> {
         match prompt {
@@ -276,44 +287,44 @@ impl Agent for GreedyAgent {
                     };
                     let cands: Vec<Response> = opts
                         .iter()
-                        .filter(|o| o.kind == Some(command) && list.is_none_or(|l| self.allowed(&l[o.index.unwrap() as usize])))
+                        .filter(|o| o.kind == Some(command) && list.is_none_or(|l| self.caps.allowed(&l[o.index.unwrap() as usize])))
                         .cloned()
                         .collect();
                     if !cands.is_empty() {
-                        let choice = self.pick(&cands)?;
+                        let choice = pick(&mut self.rng, &cands)?;
                         if let Some(l) = list {
-                            self.note(&l[choice.index.unwrap() as usize]);
+                            self.caps.note(&l[choice.index.unwrap() as usize]);
                         }
                         return Ok(choice);
                     }
                 }
-                self.pick(&opts)
+                pick(&mut self.rng, &opts)
             }
             Msg::SelectBattlecmd { activatable, .. } => {
                 let opts = battle_options(prompt);
                 let acts: Vec<Response> =
-                    opts.iter().filter(|o| o.kind == Some(Command::Activate) && self.allowed(&activatable[o.index.unwrap() as usize])).cloned().collect();
+                    opts.iter().filter(|o| o.kind == Some(Command::Activate) && self.caps.allowed(&activatable[o.index.unwrap() as usize])).cloned().collect();
                 if !acts.is_empty() {
-                    let choice = self.pick(&acts)?;
-                    self.note(&activatable[choice.index.unwrap() as usize]);
+                    let choice = pick(&mut self.rng, &acts)?;
+                    self.caps.note(&activatable[choice.index.unwrap() as usize]);
                     return Ok(choice);
                 }
                 let attacks: Vec<Response> = opts.iter().filter(|o| o.kind == Some(Command::Attack)).cloned().collect();
                 if !attacks.is_empty() {
-                    return self.pick(&attacks);
+                    return pick(&mut self.rng, &attacks);
                 }
                 for command in [Command::ToM2, Command::ToEp] {
                     if let Some(o) = opts.iter().find(|o| o.kind == Some(command)) {
                         return Ok(o.clone());
                     }
                 }
-                self.pick(&opts)
+                pick(&mut self.rng, &opts)
             }
             Msg::SelectChain { chains, forced, .. } => {
-                let cands: Vec<usize> = (0..chains.len()).filter(|&i| self.allowed(&chains[i])).collect();
+                let cands: Vec<usize> = (0..chains.len()).filter(|&i| self.caps.allowed(&chains[i])).collect();
                 if !cands.is_empty() {
                     let i = *self.rng.choice(&cands);
-                    self.note(&chains[i]);
+                    self.caps.note(&chains[i]);
                     return Ok(Response::index(i));
                 }
                 Ok(if *forced != 0 { Response::index(0) } else { Response::pass() })
@@ -336,11 +347,116 @@ impl Agent for GreedyAgent {
     }
 }
 
-/// A built-in agent by name (random, greedy, heuristic), seeded as make_agent(name, seed).
+/// Plays defensively: sets monsters and spells/traps face-down, activates only sometimes in its
+/// own turn, responds in chain windows (e.g. with its set traps), attacks now and then.
+pub struct SetterAgent {
+    rng: PyRandom,
+    caps: ActivationCaps,
+}
+
+impl SetterAgent {
+    pub fn new(seed: i64) -> SetterAgent {
+        SetterAgent { rng: PyRandom::new(seed as i128), caps: ActivationCaps::default() }
+    }
+}
+
+impl Agent for SetterAgent {
+    fn name(&self) -> String {
+        "setter".into()
+    }
+    fn observe(&mut self, msg: &Msg) {
+        self.caps.observe(msg);
+    }
+    fn respond(&mut self, prompt: &Msg, _state: Option<&Snapshot>, _clock: Option<(f64, f64)>) -> Result<Response, AgentError> {
+        let rng = &mut self.rng;
+        let of = |opts: &[Response], command: Command| -> Vec<Response> { opts.iter().filter(|o| o.kind == Some(command)).cloned().collect() };
+        match prompt {
+            Msg::SelectIdlecmd { activatable, .. } => {
+                let opts = idle_options(prompt);
+                let acts: Vec<Response> = of(&opts, Command::Activate).into_iter().filter(|o| self.caps.allowed(&activatable[o.index.unwrap() as usize])).collect();
+                if !acts.is_empty() && rng.random() < 0.3 {
+                    let choice = pick(rng, &acts)?;
+                    self.caps.note(&activatable[choice.index.unwrap() as usize]);
+                    return Ok(choice);
+                }
+                for command in [Command::Mset, Command::Sset, Command::Summon] {
+                    let cands = of(&opts, command);
+                    if !cands.is_empty() && rng.random() < 0.8 {
+                        return pick(rng, &cands);
+                    }
+                }
+                if let Some(to_bp) = of(&opts, Command::ToBp).first()
+                    && rng.random() < 0.5
+                {
+                    return Ok(to_bp.clone());
+                }
+                if let Some(to_ep) = of(&opts, Command::ToEp).first() {
+                    return Ok(to_ep.clone());
+                }
+                pick(rng, &opts)
+            }
+            Msg::SelectBattlecmd { .. } => {
+                let opts = battle_options(prompt);
+                let attacks = of(&opts, Command::Attack);
+                if !attacks.is_empty() && rng.random() < 0.5 {
+                    return pick(rng, &attacks);
+                }
+                for command in [Command::ToM2, Command::ToEp] {
+                    if let Some(o) = opts.iter().find(|o| o.kind == Some(command)) {
+                        return Ok(o.clone());
+                    }
+                }
+                pick(rng, &opts)
+            }
+            Msg::SelectChain { chains, forced, .. } => {
+                let cands: Vec<usize> = (0..chains.len()).filter(|&i| self.caps.allowed(&chains[i])).collect();
+                if !cands.is_empty() && rng.random() < 0.7 {
+                    let i = *rng.choice(&cands);
+                    self.caps.note(&chains[i]);
+                    return Ok(Response::index(i));
+                }
+                Ok(if *forced != 0 { Response::index(0) } else { Response::pass() })
+            }
+            Msg::SelectPosition { positions, .. } if let Some(position) = [POS_FACEDOWN_DEFENSE, POS_FACEUP_DEFENSE].into_iter().find(|p| positions & p != 0) => {
+                Ok(Response { position: Some(position as i64), ..Response::default() })
+            }
+            _ => random_response(prompt, rng, 0.0),
+        }
+    }
+}
+
+/// Greedy, but a random response instead 30% of the time (one random number generator for both).
+pub struct MixedAgent(GreedyAgent);
+
+impl MixedAgent {
+    pub fn new(seed: i64) -> MixedAgent {
+        MixedAgent(GreedyAgent::new(seed))
+    }
+}
+
+impl Agent for MixedAgent {
+    fn name(&self) -> String {
+        "mixed".into()
+    }
+    fn observe(&mut self, msg: &Msg) {
+        self.0.observe(msg);
+    }
+    fn respond(&mut self, prompt: &Msg, state: Option<&Snapshot>, clock: Option<(f64, f64)>) -> Result<Response, AgentError> {
+        if self.0.rng.random() < 0.3 {
+            return random_response(prompt, &mut self.0.rng, 0.05);
+        }
+        self.0.respond(prompt, state, clock)
+    }
+}
+
+/// A built-in agent by name (random, greedy, setter, mixed, heuristic), seeded as
+/// make_agent(name, seed).
 pub fn make_agent(name: &str, seed: i64) -> Option<Box<dyn Agent + Send>> {
     Some(match name {
         "random" => Box::new(RandomAgent::new(seed)),
         "greedy" => Box::new(GreedyAgent::new(seed)),
+        "setter" => Box::new(SetterAgent::new(seed)),
+        "mixed" => Box::new(MixedAgent::new(seed)),
         "heuristic" => Box::new(crate::heuristic::HeuristicAgent::new(seed)),
         _ => return None,
     })

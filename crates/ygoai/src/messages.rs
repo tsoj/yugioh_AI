@@ -1,4 +1,4 @@
-//! Parsing of ygopro-core binary messages (ygoai/messages.py).
+//! Parsing of ygopro-core binary messages.
 //!
 //! Every message becomes a [`Msg`], which serializes to the dict of the Python parser: a "type"
 //! key holding the message name without the MSG_ prefix (e.g. "MOVE") and the fields under the

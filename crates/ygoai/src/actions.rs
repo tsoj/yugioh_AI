@@ -1,4 +1,4 @@
-//! Responses to selection messages (ygoai/actions.py).
+//! Responses to selection messages.
 //!
 //! A response is a small record whose shape depends on the prompt type (see [`encode`]). This
 //! module turns responses into the binary format the core expects and enumerates the options of
