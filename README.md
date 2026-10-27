@@ -95,6 +95,9 @@ ygopro-core-rust/target/release/ygo-arbiter --bot "new=ygopro-core-rust/target/r
     --bot "base=ygopro-core-rust/target/release/ygo-random-bot" --book runs/books/match2.jsonl -n 200 --tc 10+0.1
 ```
 
+`ygopro-core-rust/ygo-arbiter/README.md` describes all options of the arbiter and the format of an
+opening book.
+
 Other checks:
 
 | Check | Command | When |

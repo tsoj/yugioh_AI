@@ -21,7 +21,7 @@ use std::time::Instant;
 
 use ygo_arbiter::game::{DuelConfig, init, new_record, run_until_prompt};
 use bot::heuristic::Heuristic;
-use ygo_arbiter::matchrun::load_book_head;
+use ygo_arbiter::matchrun::load_book;
 use ygo_arbiter::observe::{auto_response, is_hidden_prompt};
 use bot::search::stats::{Extension, Reductions, Subtree, TtEntry, Width};
 use bot::search::{AlphaBeta, NodeStats, SearchParams, candidates, is_searched};
@@ -32,7 +32,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let n: usize = args.get(2).map_or(2, |s| s.parse().unwrap());
-    let book = load_book_head(args[1].as_ref(), 0, n).expect("book");
+    let book = load_book(args[1].as_ref(), 0, usize::MAX, n).expect("book");
     let budget = args.get(3).map_or("0.5", |s| s.as_str());
     let (budget, max_nodes, depth) = match (budget.strip_suffix('n'), budget.strip_suffix('d')) {
         (Some(k), _) => (None, Some(k.parse::<u64>().unwrap()), None),

@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use bot::datarow::{GameData, Label, row, set_results};
 use ygo_arbiter::game::{DuelConfig, RecordedResponse, init, new_record, run_until_prompt};
 use bot::heuristic::Heuristic;
-use ygo_arbiter::matchrun::load_book_head;
+use ygo_arbiter::matchrun::load_book;
 use ygo_arbiter::messages::Msg;
 use ygo_arbiter::observe::{auto_response, is_hidden_prompt};
 use bot::search::{AlphaBeta, SearchParams, candidates, is_searched};
@@ -95,7 +95,7 @@ fn main() {
     let jobs: usize = a.get(6).filter(|s| !s.starts_with("--")).map_or(8, |s| s.parse().unwrap());
     let sets: Vec<String> = a.iter().position(|x| x == "--features").map_or("mover2,static", |i| a[i + 1].as_str()).split(',').map(String::from).collect();
     let sets = Arc::new(sets);
-    let book = Arc::new(load_book_head(a[1].as_ref(), 0, first + count).expect("book").split_off(first));
+    let book = Arc::new(load_book(a[1].as_ref(), 0, usize::MAX, first + count).expect("book").split_off(first));
     init(None).unwrap();
     let create = |path: String| Arc::new(Mutex::new(std::io::BufWriter::new(std::fs::File::create(path).expect("output"))));
     let (out, games_out) = (create(a[5].clone()), create(format!("{}.games.jsonl", a[5].trim_end_matches(".jsonl"))));
