@@ -1,11 +1,11 @@
-"""Candidate openings for a book, screened by the one-sided predictor (scripts/train_onesided.py
---split none --out): random openings (deck pairs from the corpus, seeds), each with its main
-decks' draw order as the game shuffles them (ygoai.game.new_record), then scored; the KEEP share
-predicted least often decided by the seat goes on to the policy games (make_match_book.py --from).
+"""Candidate openings for a book, screened by the one-sided predictor (train_onesided.py --split
+none --out): random openings (deck pairs from the corpus, seeds), each with its main decks' draw
+order as the game shuffles them (ygoai.game.new_record), then scored; the KEEP share predicted
+least often decided by the seat goes on to the policy games (ygoai-book-test).
 
-    .venv/bin/python scripts/onesided_candidates.py generate ALL.jsonl -n N [--seed S]
-    .venv/bin/python scripts/embed_cards.py EMB.npz ALL.jsonl          (the candidates' cards)
-    .venv/bin/python scripts/onesided_candidates.py score ALL.jsonl KEPT.jsonl --model M.pt --emb EMB.npz [--keep 0.5]
+    .venv/bin/python scripts/book/onesided_candidates.py generate ALL.jsonl -n N [--seed S]
+    .venv/bin/python scripts/book/embed_cards.py EMB.npz ALL.jsonl          (the candidates' cards)
+    .venv/bin/python scripts/book/onesided_candidates.py score ALL.jsonl KEPT.jsonl --model M.pt --emb EMB.npz [--keep 0.5]
 
 Kept rows keep their candidate order and get "onesided": the predicted share of pairs the seat
 decides.
@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 TOP = 8

@@ -1,4 +1,4 @@
-//! What a card's script is about, read statically from its text (belief/script_index.py).
+//! What a card's script is about, read statically from its text.
 //!
 //! The scripts declare the archetypes and cards they refer to (`s.listed_series`,
 //! `s.listed_names`); and some checks read values of several cards (how many different Pendulum

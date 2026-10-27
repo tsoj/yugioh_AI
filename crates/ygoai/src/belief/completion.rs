@@ -1,8 +1,8 @@
-//! Guessing the unknown part of the opponent's deck list (belief/completion.py, corpus.py).
+//! Guessing the unknown part of the opponent's deck list.
 //!
 //! [`Completion`] is the interface; [`VanillaCompletion`] fills with effect-less cards,
 //! [`CorpusCompletion`] with the cards of the corpus decks that best match the known cards (the
-//! numpy index build/deck_index.npz that belief/corpus.py builds).
+//! numpy index build/deck_index.npz that scripts/build_deck_index.py builds).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Read;
@@ -234,7 +234,7 @@ pub(crate) fn npy_array(zip: &mut zip::ZipArchive<std::fs::File>, name: &str) ->
     Ok((header, buf[hstart + hlen..].to_vec()))
 }
 
-/// Opponent deck completion from a corpus of human deck lists (belief/corpus.py).
+/// Opponent deck completion from a corpus of human deck lists.
 pub struct CorpusCompletion {
     deck: Vec<i32>,
     code: Vec<i64>,
@@ -253,7 +253,7 @@ pub fn index_path() -> PathBuf {
 }
 
 impl CorpusCompletion {
-    /// The completion from the index (build it with belief/corpus.py: build_index).
+    /// The completion from the index (scripts/build_deck_index.py).
     pub fn load(path: &Path) -> Result<CorpusCompletion, String> {
         let f = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let mut z = zip::ZipArchive::new(f).map_err(|e| e.to_string())?;

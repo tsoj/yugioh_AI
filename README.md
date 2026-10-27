@@ -32,9 +32,11 @@ Requirements: Rust (stable), cmake (HiGHS is built from `external/HiGHS`), a C++
 3.11 with numpy and maturin. The Rust code is one Cargo workspace (`Cargo.toml`): the ygoai crate
 (`crates/ygoai`: messages, observations, the arbiter `ygoai-match`, the agents' search, the belief
 replay), the binding (`ygoai_rs`) and HiGHS (`crates/highs`). The C++ core is only the Rust engine's
-test oracle, in `ygopro-core-rust/oracle/` (not fetched by default; see ygopro-core-rust/README.md). The learned deck
-completion (`--completion neural`, ygoai/belief/neural_completion.py) also needs PyTorch and the models in
-`download_human_decks/` (`deck_existence.pt`, `deck_counts.pt`); the project environment is made with uv:
+test oracle, in `ygopro-core-rust/oracle/` (not fetched by default; see ygopro-core-rust/README.md).
+The learned deck completion (`--completion neural`) is compiled from the deck models' ONNX export
+(`download_human_decks/onnx_export/`, from `export_deck_models.py`; PyTorch only trains them), the
+corpus completion reads `build/deck_index.npz` (`scripts/build_deck_index.py`). The project
+environment is made with uv:
 
 ```sh
 uv venv .venv --python 3.14
@@ -110,7 +112,7 @@ cargo test --release -p ygoai                    # (with CARGO_TARGET_DIR=ygopro
 
 ## The engine protocol
 
-An AI is a process speaking JSON lines on stdin/stdout (see `ygoai/protocol.py`):
+An AI is a process speaking JSON lines on stdin/stdout (see `crates/ygoai/src/protocol.rs`):
 
 ```
 -> {"type": "init", "player": 0, "deck": {"main": [...], "extra": [...]}, "extra_order": [...],
@@ -225,11 +227,10 @@ decision it reconstructs the duel and searches from it on copies (`duel.clone()`
 
 ```python
 from ygoai.belief.agent import AgentBelief
-from ygoai.belief.neural_completion import neural_completion   # or CorpusCompletion()
 from ygoai.actions import encode
 from ygoai.observe import to_core_response
 
-belief = AgentBelief(player, init, completion=neural_completion())   # one per game
+belief = AgentBelief(player, init, completion="neural")   # one per game ("vanilla", "corpus")
 ...
 replay, duel = belief.reconstruct(items)   # a duel waiting for this player's response (yours to keep)
 core_prompt = replay.final_prompt          # (the core's version of the prompt)
@@ -311,7 +312,7 @@ Open design questions (from the remaining failures):
 * **Hidden deck contents with a specific property.** Forcing hidden cards to match a filter
   covers "the deck holds a fitting card", but not checks that compare values of several cards,
   e.g. two Pendulum Scales that differ (Solfachord Happiness) or an Xyz monster a given number of
-  Ranks higher in the Extra Deck (Rank-Up-Magic), never revealed. `belief/script_index.py` reads
+  Ranks higher in the Extra Deck (Rank-Up-Magic), never revealed. `belief/script_index.rs` reads
   from each script which archetypes and cards it refers to (`listed_series`, `listed_names`),
   which piles it names and whether it compares values (`GetClassCount`, `GetMaxGroup`, ...); the
   replay then places such cards (one per distinct Scale/Level/Rank, the opponent's seen cards
@@ -338,10 +339,7 @@ positions of face-down cards in piles (a card returned to the deck has a differe
 value than the original deck cards), stale "reason" fields (how a card got into the hand,
 visible when it is later played or reordered), card hints emitted while cards are created (they
 reveal deck contents), `reason_card` pointers into hidden piles, status bits of pile cards, and
-multi-card listings in card creation order. `ygoai/audit.py` is an independent check that
-replays games step by step and flags opponent card codes that appear in a stream without ever
-having been visible; it reports nothing on the current filter (and does catch deliberately
-planted leaks).
+multi-card listings in card creation order.
 
 Further leaks fixed since: empty chain windows (the core offers them when the *opponent* has a
 pending optional trigger, so they are answered by the arbiter and not shown), the
@@ -466,6 +464,23 @@ worker that dies is reported with its seed instead of hanging the run. Long runs
 SPRTs) work from snapshots of the code and the binding (`scripts/snapshot.py`), so a rebuild
 during a run does not affect it.
 
+## Models
+
+The engine's models (`crates/ygoai/models/`, compiled in) and how to rebuild them:
+
+- the evaluation `eval_mover2_sprt2r23os_64.json`: SPRT records -> `scripts/collect_sprt_games.py`
+  -> `ygoai-refeature --features mover2` -> `scripts/sprt_games_to_npz.py` (with rounds 2 and 3:
+  ygoai-datagen -> `scripts/eval_mover_features.py --rust`, in `runs/data/rounds23/`) ->
+  `scripts/train_eval_mover.py --dims 64 --held 400 --drop-onesided --lam 0.5`;
+- the card policy `card_policy_cp4_h16.json`: `ygoai-card-refs --independent` ->
+  `scripts/train_card_policy.py`; the set policy `set_policy_s2_h16.json`: `ygoai-card-refs
+  --independent --decisions` -> `scripts/train_set_policy.py`;
+- the deck models (`crates/deckmodels`, from `download_human_decks/onnx_export/`):
+  download_human_decks/README.md;
+- the corpus completion's index `build/deck_index.npz`: `scripts/build_deck_index.py`.
+
+The SPRT opening book (runs/books/match2.jsonl): scripts/book/README.md.
+
 ## Layout
 
 ```
@@ -477,15 +492,13 @@ crates/highs/      HiGHS (external/HiGHS) for the belief's flow model
 ygoai_rs/          the Python binding (engine, belief replay, search)
 external/          submodules: CardScripts, BabelCDB, HiGHS
 lua_fixes/         corrected card scripts
-scripts/           command line tools
+scripts/           command line tools (book/: the SPRT opening book)
 tests/             unit and integration tests (baselines/: the belief suite's)
 ygoai/             the Python package
   core.py        the engine (ygoai_rs)  messages.py   message parser
   actions.py     responses              observe.py    per-player filtering
   state.py       state snapshots        game.py       arbiter, records, replays
-  protocol.py    engine protocol        match.py      matches, Elo, SPRT
-  agents/        AIs (random, summon_attack, heuristic,     belief/       checks, agent belief, deck
-                 greedy, setter, mixed, belief_mc,                        completions, script scans
-                 alphabeta, puct, policy)
-  nn/            policy/value networks
+  match.py       openings, statistics   decks.py      deck lists, the corpus
+  agents/        the belief checks' AIs (random, greedy, setter, mixed, belief_mc)
+  belief/        the belief checks and an agent's belief (the replay itself is in Rust)
 ```

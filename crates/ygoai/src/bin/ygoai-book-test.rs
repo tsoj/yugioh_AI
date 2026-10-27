@@ -1,6 +1,6 @@
 //! The opening book's test games (the old scripts/make_match_book.py's, with the policy agents in Rust:
 //! ygoai::rl_policy). Each candidate (a row with "seed" and "decks", e.g. from
-//! scripts/onesided_candidates.py score) is played up to GAMES times by policy agents (each game a
+//! scripts/book/onesided_candidates.py score) is played up to GAMES times by policy agents (each game a
 //! random one of POLICIES for both seats, sampling at temperature 1; the decks keep their seats),
 //! stopping once each seat won STOP_MIN. Each tested candidate is appended to OUT as it finishes:
 //! its row with the games each seat won ("wins") and the games played ("games"). Candidates

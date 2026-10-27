@@ -1,10 +1,10 @@
-"""Embeds card texts with the effect model's encoder (scripts/train_effect_model.py's OUT/encoder,
+"""Embeds card texts with the effect model's encoder (scripts/book/train_effect_model.py's OUT/encoder,
 sentence-transformers): every card of the decks in the given books or opening files, its text
-rendered by ygoai/nn/card_text.py with one set of pseudo-names for all (the same name, the same
+rendered by scripts/book/card_text.py with one set of pseudo-names for all (the same name, the same
 made-up word: links between cards kept, real names not). A card's embedding depends on its text
 only, so cards no training game had get one too.
 
-    .venv/bin/python scripts/embed_cards.py OUT.npz DECKS.jsonl [DECKS.jsonl ...] [--encoder runs/nn/effect1/encoder]
+    .venv/bin/python scripts/book/embed_cards.py OUT.npz DECKS.jsonl [DECKS.jsonl ...] [--encoder runs/nn/effect1/encoder]
 """
 
 import argparse
@@ -15,9 +15,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from ygoai.nn.card_text import Names  # noqa: E402
+from card_text import Names  # noqa: E402
 
 
 def main():

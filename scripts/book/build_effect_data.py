@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Training data for the effect model (scripts/train_effect_model.py): what
+"""Training data for the effect model (scripts/book/train_effect_model.py): what
 happens after a decision, from recorded games.
 
-  scripts/build_effect_data.py runs/sprt/*.jsonl -o runs/data/effects1.npz [--keep 0.5] [--games N]
+  scripts/book/build_effect_data.py runs/sprt/*.jsonl -o runs/data/effects1.npz [--keep 0.5] [--games N]
 
 Replays each game and reads the full state (both decks known: the model learns
 the rules, it does not play) at every prompt, in a forked process (reads change
@@ -32,7 +32,7 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from ygoai import constants as C  # noqa: E402
 from ygoai.game import GameRecord, Observer, replay  # noqa: E402

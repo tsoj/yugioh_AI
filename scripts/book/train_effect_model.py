@@ -2,11 +2,11 @@
 """The effect model: a text encoder for card texts (EmbeddingGemma 2, fine-tuned),
 trained by predicting what happens after a decision (build_effect_data.py).
 
-  scripts/train_effect_model.py runs/data/effects1.npz -o runs/nn/effect1 [--steps 20000]
+  scripts/book/train_effect_model.py runs/data/effects1.npz -o runs/nn/effect1 [--steps 20000]
       [--freeze-encoder] [--train-layers N] [--real-names] [--encoding v1|v2|v3]
 
 Each card of the position is a token: its text's embedding (name, type line,
-effect: ygoai/nn/card_text.py, with per-game pseudo-names unless --real-names)
+effect: scripts/book/card_text.py, with per-game pseudo-names unless --real-names)
 plus its state (own/opponent, zone, sequence, position, ATK/DEF/level, materials,
 counters, public, whether the decision names it); one more token holds LP, turn,
 phase, chain and the decision (prompt type, kind, yes/no or option). A
@@ -39,9 +39,9 @@ import torch
 from torch import nn
 from torch.utils.checkpoint import checkpoint
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from ygoai.nn.card_text import Names  # noqa: E402
+from card_text import Names  # noqa: E402
 
 ENCODER = "google/embeddinggemma-2"
 N_LOC = 10  # (deck, hand, mzone, szone, grave, removed, extra, overlay, gone, other)
@@ -316,7 +316,7 @@ REAL_NAMES = False
 
 
 def _texts(keys: list, data: Data, seeds=None) -> list[str]:
-    from ygoai.nn.card_text import _texts as raw, type_line
+    from card_text import _texts as raw, type_line
     from ygoai.carddb import default_db
     out = []
     for seed, ci in keys:

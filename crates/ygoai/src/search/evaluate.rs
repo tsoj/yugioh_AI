@@ -57,10 +57,10 @@ pub fn eval_features(d: &mut Duel, me: u32) -> [f64; 6] {
     f
 }
 
-/// One player's side for the rich features (scripts/train_eval.py side_features): LP/1000, hand,
-/// deck/10, grave/10, banished/10, extra/10, monsters, face-up ones, face-up attackers, face-down
-/// ones, the attackers' ATK sum/1000, the best face-up battle stat/1000, face-down and face-up
-/// spells/traps, a field spell, deck out (2 cards or fewer).
+/// One player's side for the rich and the mover features: LP/1000, hand, deck/10, grave/10,
+/// banished/10, extra/10, monsters, face-up ones, face-up attackers, face-down ones, the attackers'
+/// ATK sum/1000, the best face-up battle stat/1000, face-down and face-up spells/traps, a field
+/// spell, deck out (2 cards or fewer).
 fn side_features(d: &mut Duel, p: u32) -> [f64; 16] {
     let mons: Vec<_> = parse_location_query(&query(d, p, LOCATION_MZONE, MZONE_QUERY)).into_iter().flatten().collect();
     let (mut up, mut atk_up, mut atk_sum, mut best) = (0, 0, 0i64, 0i32);
@@ -104,8 +104,8 @@ fn side_features(d: &mut Duel, p: u32) -> [f64; 16] {
     ]
 }
 
-/// The rich features for `me` (scripts/train_eval.py rich_features): the sides' differences, mine
-/// minus the opponent's, then the evaluation's dominance term.
+/// The rich features for `me`: the sides' differences, mine minus the opponent's, then the
+/// evaluation's dominance term.
 pub fn rich_features(d: &mut Duel, me: u32) -> Vec<f64> {
     let (a, b) = (side_features(d, me), side_features(d, 1 - me));
     let mut f: Vec<f64> = a.iter().zip(b).map(|(x, y)| x - y).collect();
@@ -321,28 +321,27 @@ fn side_scan(d: &mut Duel, p: u32) -> SideScan {
     SideScan { base, more, turn, ready_atk, fx, mons }
 }
 
-/// The features of the mover's view (the player whose decision is pending; scripts/train_eval.py
-/// mover features): the mover's side (`side_features`, then its dominant monsters), the
-/// opponent's the same way, whether the mover is the turn player, the phase group, the prompt
-/// type (none without a prompt) and the turn / 10 (at most 3). With `more` (`mover2`) then: the
-/// mover's and the opponent's further terms (their face-up monsters' Levels (Ranks for Xyz)
-/// summed / 10 and the most / 10, those of Level 5 or more, their Extra Deck monsters on the
-/// field; monsters, spells and traps in hand; monsters and spells/traps in the GY / 10; banished
-/// monsters / 10; Xyz materials, equipped cards and counters on the field; the Extra Monster
-/// Zones held), the pending prompt's options (Normal Summons, Special Summons, repositions,
-/// monster Sets, spell/trap Sets and activations of an idle command; attacks and activations of a
-/// battle command; the effects of a chain window) and the chain's length. With `turn` (`mover3`)
-/// then: for the mover and the opponent their Normal Summons, Special Summons / 5 and attacks
-/// this turn, their face-up attack position monsters that have not attacked yet and their ATK /
-/// 1000, the Level 1-4 monsters in hand (the opponent's: 0, hidden) and the free Main Monster
-/// Zones; whether each could attack directly for the other's LP (no monsters there, those ready
-/// enough), and whether the chain's last link is the mover's. With level 4 (`mover4`) then: for the
-/// mover and the opponent their face-up cards with an Ignition or Quick Effect with uses left this
-/// turn, their GY's cards with an effect to choose to activate there (Ignition, Quick, optional
-/// Trigger) with uses left, the same in hand (the opponent's: 0), their set Traps and Quick-Play
-/// Spells (0), their Extra Deck's Fusion and Synchro, and Xyz and Link Monsters (0), their face-up
-/// monsters' second best battle stat / 1000 and their weakest attacker's ATK / 1000; each side's
-/// face-up monsters that the other's strongest attacker beats.
+/// The features of the mover's view (the player whose decision is pending): the mover's side
+/// (`side_features`, then its dominant monsters), the opponent's the same way, whether the mover is
+/// the turn player, the phase group, the prompt type (none without a prompt) and the turn / 10 (at
+/// most 3). With `more` (`mover2`) then: the mover's and the opponent's further terms (their
+/// face-up monsters' Levels (Ranks for Xyz) summed / 10 and the most / 10, those of Level 5 or
+/// more, their Extra Deck monsters on the field; monsters, spells and traps in hand; monsters and
+/// spells/traps in the GY / 10; banished monsters / 10; Xyz materials, equipped cards and counters
+/// on the field; the Extra Monster Zones held), the pending prompt's options (Normal Summons,
+/// Special Summons, repositions, monster Sets, spell/trap Sets and activations of an idle command;
+/// attacks and activations of a battle command; the effects of a chain window) and the chain's
+/// length. With `turn` (`mover3`) then: for the mover and the opponent their Normal Summons,
+/// Special Summons / 5 and attacks this turn, their face-up attack position monsters that have not
+/// attacked yet and their ATK / 1000, the Level 1-4 monsters in hand (the opponent's: 0, hidden)
+/// and the free Main Monster Zones; whether each could attack directly for the other's LP (no
+/// monsters there, those ready enough), and whether the chain's last link is the mover's. With
+/// level 4 (`mover4`) then: for the mover and the opponent their face-up cards with an Ignition or
+/// Quick Effect with uses left this turn, their GY's cards with an effect to choose to activate
+/// there (Ignition, Quick, optional Trigger) with uses left, the same in hand (the opponent's: 0),
+/// their set Traps and Quick-Play Spells (0), their Extra Deck's Fusion and Synchro, and Xyz and
+/// Link Monsters (0), their face-up monsters' second best battle stat / 1000 and their weakest
+/// attacker's ATK / 1000; each side's face-up monsters that the other's strongest attacker beats.
 fn mover_view(d: &mut Duel, mover: u32, prompt: Option<&Msg>, level: u8) -> Vec<f64> {
     let (a, b) = (side_scan(d, mover), side_scan(d, 1 - mover));
     let mut f = Vec::with_capacity(122);
@@ -596,16 +595,7 @@ impl LearnedEval {
 /// an MLP with a hidden layer of 64 on the 87 mover2 features), trained on all SPRT games with
 /// search values since the round-2+3 net became the default (2026-10-17 23:22 to 2026-10-24, 184522
 /// games, 28.1M positions, runs/data/sprt_net2/) and on rounds 2 and 3, without the deck pairs where
-/// one deck won every game. The previous one, models/eval_mover2_sprtr23os_64.json, the same on the
-/// SPRT games to 2026-10-21 (86594 games, 13.2M positions, runs/data/sprt_net/); it had SPRT H1
-/// +35.8 +/- 20.0 at 702 games vs the MLP16 on those, models/eval_mover2_sprtr23os_mlp16.json.
-/// The previous one, models/eval_mover2_r23os_mlp16.json, the same on rounds 2 and 3 alone,
-/// runs/data/pairs500x20b_2000n.jsonl and runs/data/pairs500x20c_2000n_all.games.jsonl:
-/// SPRT H1 +21.0 +/- 14.4 at 1242 games vs the same on all pairs,
-/// models/eval_mover2_r23_mlp16.json, which vs the round-2 net, models/eval_mover2_mlp16.json,
-/// stopped at +6.7 +/- 10.0 after 2540 games.
-/// That one had SPRT +31.9 +/- 18.7 vs the 49-feature MLP16 (on runs/data/pairs500x20_2000n.jsonl),
-/// which had +28.5 +/- 17.6 vs the hand-written eval).
+/// one deck won every game (its predecessors and their SPRTs: TODO.md, "Evaluation").
 const DEFAULT_EVAL: &str = include_str!("../../models/eval_mover2_sprt2r23os_64.json");
 
 /// The position's value for `me` (in LP): the trained evaluation (`LearnedEval::from_env`).

@@ -20,8 +20,8 @@ import re
 import sqlite3
 from functools import lru_cache
 
-from .. import constants_gen as G
-from ..carddb import default_db
+from ygoai import constants_gen as G
+from ygoai.carddb import default_db
 
 _UNOFFICIAL = re.compile(r"\n*\* The above text is unofficial.*$", re.S)
 _WORD = re.compile(r"[A-Za-z][A-Za-z'\-]*")

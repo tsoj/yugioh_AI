@@ -1,8 +1,8 @@
 """Predicts how often an opening's result is decided by the seat (the same seat wins both games of
 a pair, whoever plays it), from its cards: both decks (main, extra) and the top cards of each
-deck (the opening hands and first draws), each card its text embedding (scripts/embed_cards.py:
+deck (the opening hands and first draws), each card its text embedding (scripts/book/embed_cards.py:
 cards no training game had get one too) or, as a control, a learned per-card embedding (unseen
-cards: none). Data: scripts/build_onesided_data.py (per opening the pairs played and how many
+cards: none). Data: scripts/book/build_onesided_data.py (per opening the pairs played and how many
 the seat decided); loss: the binomial likelihood of those counts.
 
 Splits: --split none (every opening trains: the model to use, --out), random (every --held-th
@@ -23,7 +23,7 @@ predicted and the observed rate (openings with >= 8 pairs), and as a filter: the
 seat-decided share of the held-out openings left after dropping the 10/25/50% predicted most
 one-sided.
 
-    .venv/bin/python scripts/train_onesided.py OPENINGS.jsonl EMB.npz [--model attn|set|pool] [--inputs deck+top|deck|top|seq]
+    .venv/bin/python scripts/book/train_onesided.py OPENINGS.jsonl EMB.npz [--model attn|set|pool] [--inputs deck+top|deck|top|seq]
         [--cards text|id] [--split random|archetype]
 """
 
@@ -38,7 +38,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 MAIN, EXTRA, TOP = 60, 15, 8
 # (per input mode, each seat's parts: (tokens, part, positions: the draw order counts))

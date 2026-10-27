@@ -1,6 +1,5 @@
-//! Deck completion by the learned deck models (belief/neural_completion.py and the inference of
-//! download_human_decks/complete_deck.py), on burn code generated from their ONNX export
-//! (crates/deckmodels).
+//! Deck completion by the learned deck models (the inference of download_human_decks/complete_deck.py),
+//! on burn code generated from their ONNX export (crates/deckmodels).
 //!
 //! An existence model predicts which cards a deck holds given the ones seen so far, a count model
 //! how many copies of each. The replay's own constraints apply on top, as for the corpus
@@ -373,7 +372,7 @@ type CompleteKey = (Vec<u32>, Vec<u32>, usize, usize, Vec<u32>);
 type StandInKey = (Need, Vec<u32>);
 type Fills = (Vec<u32>, Vec<u32>);
 
-/// The neural completion (neural_completion.NeuralCompletion).
+/// The neural completion.
 pub struct NeuralCompletion {
     models: DeckModels,
     cache: Mutex<HashMap<CompleteKey, Fills>>,

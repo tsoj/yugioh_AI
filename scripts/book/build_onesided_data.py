@@ -5,7 +5,7 @@ draw order ("order", the top card first; "top": its first TOP cards, the opening
 draws), the pairs played over all records, how many the seat decided, and how many seat 0 won
 both.
 
-    python3 scripts/build_onesided_data.py OUT.jsonl [RECORDS.jsonl ...]   (default: runs/sprt/*.jsonl)
+    python3 scripts/book/build_onesided_data.py OUT.jsonl [RECORDS.jsonl ...]   (default: runs/sprt/*.jsonl)
 """
 
 import glob

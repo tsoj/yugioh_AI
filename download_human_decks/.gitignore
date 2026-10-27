@@ -6,7 +6,5 @@ decks_new/
 *.pt
 vocab.pkl
 sweep_results*/
-card_deck_frequency.png
-card_deck_frequency.tsv
 *.onnx
 onnx_export/
