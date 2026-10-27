@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import argparse
 import collections
-import ctypes
 import gzip
 import json
 import multiprocessing as mp
@@ -36,20 +35,9 @@ def run_task(task: tuple) -> list[dict]:
     import ygoai_rs
     seed, cases, names, decks, completion, timeout, every, agent_mode = task
     try:
-        out = ygoai_rs.check_game(seed, decks, names, cases, completion, timeout, every, agent_mode)
+        return ygoai_rs.check_game(seed, decks, names, cases, completion, timeout, every, agent_mode)
     except ValueError as e:
-        out = [{"seed": seed, "viewer": v, "frac": f, "ok": False, "error": f"game failed: {e}"} for v, f in cases]
-    # (give the memory of the game's replays back: a worker runs many games, and the heap would
-    # otherwise stay at the largest replay's peak)
-    _malloc_trim()
-    return out
-
-
-def _malloc_trim() -> None:
-    try:
-        ctypes.CDLL("libc.so.6").malloc_trim(0)
-    except (OSError, AttributeError):
-        pass
+        return [{"seed": seed, "viewer": v, "frac": f, "ok": False, "error": f"game failed: {e}"} for v, f in cases]
 
 
 def make_parser() -> argparse.ArgumentParser:

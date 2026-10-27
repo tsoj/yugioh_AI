@@ -105,6 +105,12 @@ class CardDB:
     def __contains__(self, code: int) -> bool:
         return code in self.cards
 
+    def original(self, code: int) -> int:
+        """The code of the card `code` is a version of (its alias: an alternate artwork, or a card
+        that counts as another), else `code`."""
+        card = self.cards.get(code)
+        return card.alias or code if card else code
+
     def strings(self, code: int) -> tuple[str, ...]:
         """The card's effect strings (str1..str16)."""
         if self._strings is None:

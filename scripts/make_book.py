@@ -35,7 +35,7 @@ def main() -> None:
     cover = []
     for name in diverse_order(pool, ROOT / "build" / "diverse_decks.json"):
         deck = pool.load(by_name[name])
-        cards = {db.get(c).alias or c for c in deck.main + deck.extra}
+        cards = {db.original(c) for c in deck.main + deck.extra}
         if not cards - covered:
             break  # (the first round of the order is the cover)
         covered |= cards

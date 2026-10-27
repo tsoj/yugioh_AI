@@ -54,7 +54,7 @@ def main() -> None:
     args = ap.parse_args()
     db = default_db()
     tasks = [(s, args.mirror_prob, args.pairs, args.decks, args.book) for s in range(args.start, args.start + args.n)]
-    base = lambda codes: {db.get(c).alias or c for c in codes if db.get(c)}  # noqa: E731
+    base = lambda codes: {db.original(c) for c in codes if c in db}  # noqa: E731
     in_decks, seen, activated = set(), set(), set()
     for _, res in run_parallel(play, tasks, os.cpu_count()):
         if isinstance(res, tuple):

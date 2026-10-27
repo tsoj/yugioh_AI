@@ -88,7 +88,7 @@ def normalize(deck: Deck, db: CardDB) -> Deck | None:
         return None
     counts: dict[int, int] = {}
     for code in main + extra:
-        base = db.get(code).alias or code
+        base = db.original(code)
         counts[base] = counts.get(base, 0) + 1
         if counts[base] > 3:
             return None
@@ -113,6 +113,8 @@ class DeckPool:
         if not self.paths:
             raise FileNotFoundError(f"no .ydk files in {decks_dir}")
         self._cache: dict[Path, Deck | None] = {}
+        self._by_name = {p.name: p for p in self.paths}
+        self._order: list[str] | None = None  # (the diverse order, made on first use)
 
     def load(self, path: Path) -> Deck | None:
         if path not in self._cache:
@@ -121,15 +123,10 @@ class DeckPool:
 
     def diverse(self, index: int) -> Deck:
         """The deck at `index` of the diverse order (see `diverse_order`), wrapping around."""
-        if not hasattr(self, "_order"):
+        if self._order is None:
             name = "diverse_decks.json" if self.dir == DECKS_DIR else f"diverse_decks_{self.dir.name}.json"
             self._order = diverse_order(self, ROOT / "build" / name)
-        return self.load(self._by_name()[self._order[index % len(self._order)]])
-
-    def _by_name(self) -> dict[str, Path]:
-        if not hasattr(self, "_names"):
-            self._names = {p.name: p for p in self.paths}
-        return self._names
+        return self.load(self._by_name[self._order[index % len(self._order)]])
 
     def sample(self, rng: random.Random) -> Deck:
         for _ in range(1000):
@@ -167,7 +164,7 @@ def diverse_order(pool: DeckPool, cache: Path | None = None, seed: int = 0) -> l
             continue
         seen.add(key)
         names.append(path.name)
-        cards.append(frozenset(pool.db.get(c).alias or c for c in deck.main + deck.extra))
+        cards.append(frozenset(pool.db.original(c) for c in deck.main + deck.extra))
     pool._cache.clear()  # (the decks are loaded again when used)
     tiebreak = [rng.random() for _ in names]
     left = set(range(len(names)))

@@ -89,7 +89,7 @@ def _mixed_deck(a, b, rng):
     def take(cards, n):
         out = []
         for c in rng.sample(cards, len(cards)):
-            base = db.get(c).alias or c
+            base = db.original(c)
             if len(out) < n and counts.get(base, 0) < 3:
                 counts[base] = counts.get(base, 0) + 1
                 out.append(c)
