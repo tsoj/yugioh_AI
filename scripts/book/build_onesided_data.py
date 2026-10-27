@@ -1,6 +1,6 @@
 """Openings of the SPRT records with how often the seat decided them: in a match each opening is
-played twice with the engines' seats swapped, and if the same seat won both games, the decks (and
-the shuffles) decided it, not the engines. Per opening (its seed): both decks, each main deck in
+played twice with the bots' seats swapped, and if the same seat won both games, the decks (and
+the shuffles) decided it, not the bots. Per opening (its seed): both decks, each main deck in
 draw order ("order", the top card first; "top": its first TOP cards, the opening hands and first
 draws), the pairs played over all records, how many the seat decided, and how many seat 0 won
 both.

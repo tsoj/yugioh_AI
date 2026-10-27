@@ -24,8 +24,8 @@ def show(x):
 def print_god_view(record: dict, viewer: int, lo: int, hi: int) -> None:
     """The real game's events (god view) where the viewer's stream is between `lo` and `hi`,
     annotated with the viewer's stream position."""
-    import ygoai_rs
-    events, positions = ygoai_rs.replay_events(record, viewer)
+    import bot_py_binding
+    events, positions = bot_py_binding.replay_events(record, viewer)
     for event, pos in zip(events, positions):
         if lo <= pos <= hi:
             kind = event[0]
@@ -45,14 +45,14 @@ def main():
     add_game_options(ap)
     ap.add_argument("--completion", choices=["vanilla", "corpus", "neural"], default="corpus")
     args = ap.parse_args()
-    import ygoai_rs
+    import bot_py_binding
     rec, streams = play_game(args.seed, args.mirror_prob, args.pairs, args.decks, args.book)
     print(rec["decks"][0]["name"], "vs", rec["decks"][1]["name"], rec["agents"], rec["result"])
     items = streams[args.viewer]
-    cut = ygoai_rs.cut_point(items, args.cut)
+    cut = bot_py_binding.cut_point(items, args.cut)
     if cut is None:
         sys.exit(f"the game has no cut {args.cut}")
-    r = ygoai_rs.check_prefix(rec, args.viewer, items, cut, args.completion)
+    r = bot_py_binding.check_prefix(rec, args.viewer, items, cut, args.completion)
     for text in r["repairs"]:
         print("  ..", text[:220])
     if r["ok"]:

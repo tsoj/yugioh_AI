@@ -12,7 +12,7 @@ does not decide too often. Each step's usage is in its script's docstring.
    - the predictor: `build_onesided_data.py` (per opening of the SPRT records, how often the seat
      decided it) -> `train_onesided.py`;
    - `onesided_candidates.py score` keeps the less one-sided candidates.
-3. Test games: `ygoai-book-test CANDIDATES OUT --policies ...` plays each candidate with the RL
+3. Test games: `bot-book-test CANDIDATES OUT --policies ...` plays each candidate with the RL
    policy nets (runs/nn/rl1-rl4, boot1: given, their training was removed with the Python play
    stack) and writes the wins of each seat. The match loads the rows where each seat won at least
    `--book-min` games.

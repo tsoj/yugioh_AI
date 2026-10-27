@@ -1,6 +1,6 @@
 # Deck completion models
 
-The human deck lists and the learned deck completion (the engine's `--completion neural`):
+The human deck lists and the learned deck completion (the bot's `--completion neural`):
 
 ```bash
 python download_decks.py                  # the deck lists into decks/
@@ -11,4 +11,4 @@ python export_deck_models.py              # onnx_export/: what crates/deckmodels
 ```
 
 `deck_common.py` reads the deck lists; `complete_deck.py` is the models' completion (the Rust
-engine's `belief/neural.rs` does the same on the export).
+bot's `belief/neural.rs` does the same on the export).

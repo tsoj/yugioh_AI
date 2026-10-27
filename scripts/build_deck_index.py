@@ -1,4 +1,4 @@
-"""Builds the corpus completion's index (crates/ygoai/src/belief/completion.rs: CorpusCompletion,
+"""Builds the corpus completion's index (crates/bot/src/belief/completion.rs: CorpusCompletion,
 the neural completion's source for what its models cannot supply): the human deck lists
 (human_decks/decks/*.ydk) as numpy arrays in build/deck_index.npz, one row per (deck, card).
 

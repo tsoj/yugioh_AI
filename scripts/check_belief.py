@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Belief replay consistency test.
 
-Plays games between the built-in agents (random / greedy, random deck pairs,
+Plays games between the built-in bots (random / greedy, random deck pairs,
 some mirror matches), then for both players and for several cut points of
 the game (default: ~1/3, ~2/3 and the full game) reconstructs the duel from
 that player's observations only and checks that the reconstruction produces
@@ -21,19 +21,19 @@ import time
 import zlib
 from pathlib import Path
 
-from common.games import add_game_options, agents, game_decks
+from common.games import add_game_options, bots, game_decks
 from common.parallel import Crash, run_parallel
 
-SEQUENCE_FRAC = 2.0  # (the "cut" of an agent sequence's result: the whole game, decision by decision)
+SEQUENCE_FRAC = 2.0  # (the "cut" of a bot sequence's result: the whole game, decision by decision)
 
 
 def run_task(task: tuple) -> list[dict]:
-    """All checks of one game (ygoai_rs.check_game: played once, then each case checked):
-    (seed, [(viewer, frac), ...], agents, decks, completion, timeout, every, agent_mode)."""
-    import ygoai_rs
-    seed, cases, names, decks, completion, timeout, every, agent_mode = task
+    """All checks of one game (bot_py_binding.check_game: played once, then each case checked):
+    (seed, [(viewer, frac), ...], bots, decks, completion, timeout, every, bot_mode)."""
+    import bot_py_binding
+    seed, cases, names, decks, completion, timeout, every, bot_mode = task
     try:
-        return ygoai_rs.check_game(seed, decks, names, cases, completion, timeout, every, agent_mode)
+        return bot_py_binding.check_game(seed, decks, names, cases, completion, timeout, every, bot_mode)
     except ValueError as e:
         return [{"seed": seed, "viewer": v, "frac": f, "ok": False, "error": f"game failed: {e}"} for v, f in cases]
 
@@ -58,10 +58,10 @@ def make_parser() -> argparse.ArgumentParser:
                     help="an earlier output: games whose reconstruction failed there (at any cut, for that "
                          "viewer) get the --turns cuts too")
     ap.add_argument("--timeout", type=int, default=180, help="seconds per belief replay")
-    ap.add_argument("--agent-mode", action="store_true",
-                    help="reconstruct as an agent does: at the viewer's decisions, with the best effort "
+    ap.add_argument("--bot-mode", action="store_true",
+                    help="reconstruct as a bot does: at the viewer's decisions, with the best effort "
                          "allowed (approximate states count separately, with their state differences)")
-    ap.add_argument("--agent-sequence", type=int, metavar="K",
+    ap.add_argument("--bot-sequence", type=int, metavar="K",
                     help="reconstruct as belief_mc does: at every K-th decision of the viewer, each inheriting "
                          "from the previous consistent one (one result per game and viewer: consistent if all "
                          "of them are; approximate ones are counted with their state differences)")
@@ -109,21 +109,21 @@ def build_tasks(args: argparse.Namespace) -> list[tuple]:
         else:
             seeds = [args.start + i for i in range(args.games)]
         cases = [(seed, viewer, frac) for seed in seeds for viewer in (0, 1)
-                 for frac in (sorted(cuts(seed, viewer), reverse=True) if not args.agent_sequence
+                 for frac in (sorted(cuts(seed, viewer), reverse=True) if not args.bot_sequence
                               else (SEQUENCE_FRAC,))]
     by_seed: dict[int, list] = {}
     for seed, viewer, frac in cases:
         by_seed.setdefault(seed, []).append((viewer, frac))
     # (the decks are chosen here: the workers then never load the deck corpus, which keeps them small)
-    return [(seed, cs, agents(seed, args.pairs), [d.to_json() for d in game_decks(seed, args.mirror_prob, args.decks, args.book)],
-             args.completion, args.timeout, args.agent_sequence or 0, args.agent_mode)
+    return [(seed, cs, bots(seed, args.pairs), [d.to_json() for d in game_decks(seed, args.mirror_prob, args.decks, args.book)],
+             args.completion, args.timeout, args.bot_sequence or 0, args.bot_mode)
             for seed, cs in by_seed.items()]
 
 
 def main() -> int:
     args = make_parser().parse_args()
     if args.read_guided_ok:
-        os.environ["YGOAI_READ_GUIDED_OK"] = "1"
+        os.environ["BOT_READ_GUIDED_OK"] = "1"
     tasks = build_tasks(args)
     results = []
     t0 = time.monotonic()
@@ -155,15 +155,15 @@ def main() -> int:
     for frac, (k, n) in sorted(by_frac.items()):
         print(f"  cut {f'turn {-frac:.0f}' if frac < 0 else f'{frac:.2f}'}: {k}/{n}")
     approx = [r for r in results if r.get("approximate")]
-    if args.agent_mode:
+    if args.bot_mode:
         diffs = sorted(r["state_diffs"] for r in approx)
-        print(f"  agent mode: {len(approx)} approximate (state differences: "
+        print(f"  bot mode: {len(approx)} approximate (state differences: "
               f"{'none' if not diffs else f'median {diffs[len(diffs) // 2]}, max {diffs[-1]}, exact {diffs.count(0)}'}), "
               f"{sum(1 for r in results if not r['ok'] and not r.get('approximate'))} without any state")
-    if args.agent_sequence:
+    if args.bot_sequence:
         seqs = [r for r in results if "reconstructions" in r]
         n = sum(r["reconstructions"] for r in seqs)
-        print(f"  agent sequence (every {args.agent_sequence}. decision, inherited): {n} reconstructions, "
+        print(f"  bot sequence (every {args.bot_sequence}. decision, inherited): {n} reconstructions, "
               f"{sum(r['consistent'] for r in seqs)} consistent, {sum(r['approximate_n'] for r in seqs)} approximate "
               f"(state differences {sum(r['diffs_total'] for r in seqs)}), {sum(r['failed'] for r in seqs)} without "
               f"any state, {sum(r.get('extended', 0) for r in seqs)} incremental, "

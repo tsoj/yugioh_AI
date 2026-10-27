@@ -1,12 +1,12 @@
-"""Test games for the belief checks: their decks and agents (the games themselves are played in
-Rust: ygoai_rs.play_with_streams, ygoai_rs.check_game)."""
+"""Test games for the belief checks: their decks and bots (the games themselves are played in
+Rust: bot_py_binding.play_with_streams, bot_py_binding.check_game)."""
 
 from __future__ import annotations
 
 import json
 import random
 
-import ygoai_rs
+import bot_py_binding
 
 from .carddb import default_db
 from .decks import RANDOM_DECK_STYLES, Deck, DeckPool, random_card_deck
@@ -19,14 +19,14 @@ _books: dict = {}
 
 
 def pairs_of(text: str) -> list[tuple[str, str]]:
-    """Agent pairings from "setter-greedy,mixed-random"."""
+    """Bot pairings from "setter-greedy,mixed-random"."""
     return [tuple(p.split("-")) for p in text.split(",")]
 
 
 def add_game_options(ap) -> None:
     """The options that choose the test games (argparse): --pairs, --decks, --book, --mirror-prob."""
     ap.add_argument("--pairs", type=pairs_of,
-                    help="agent pairings, e.g. setter-greedy,mixed-random (game seed %% number of pairs picks one; "
+                    help="bot pairings, e.g. setter-greedy,mixed-random (game seed %% number of pairs picks one; "
                          "default: random/greedy in all four combinations)")
     ap.add_argument("--decks", choices=DECK_MODES, default="random",
                     help="random corpus decks, decks ordered to cover as many different cards as possible, "
@@ -100,15 +100,15 @@ def _mixed_deck(a, b, rng):
     return Deck(main=main, extra=extra, name=f"mix of {a.name} and {b.name}")
 
 
-def agents(seed: int, pairs: list[tuple[str, str]] | None = None) -> tuple[str, str]:
-    """The agents of test game `seed`: pairs[seed % len(pairs)] (by default PAIRS)."""
+def bots(seed: int, pairs: list[tuple[str, str]] | None = None) -> tuple[str, str]:
+    """The bots of test game `seed`: pairs[seed % len(pairs)] (by default PAIRS)."""
     pairs = pairs or PAIRS
     return tuple(pairs[seed % len(pairs)])
 
 
 def play_game(seed: int, mirror_prob: float = 0.2, pairs: list[tuple[str, str]] | None = None,
               decks: str = "random", book: str | None = None) -> tuple[dict, list[list[tuple]]]:
-    """The test game for `seed` (the decks of game_decks, the agents of `agents`): its record and
+    """The test game for `seed` (the decks of game_decks, the bots of `bots`): its record and
     both players' observation streams."""
     deck_pair = game_decks(seed, mirror_prob, decks, book)
-    return ygoai_rs.play_with_streams(seed, [d.to_json() for d in deck_pair], agents(seed, pairs))
+    return bot_py_binding.play_with_streams(seed, [d.to_json() for d in deck_pair], bots(seed, pairs))

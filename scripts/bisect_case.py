@@ -38,13 +38,9 @@ def passes(commit: str, seed: int, viewer: int, frac: float, flags: list[str], t
     when empty and is compared with otherwise."""
     try:
         wt = snapshot.make(f"bisect-{commit[:12]}", commit)
-    except (subprocess.CalledProcessError, OSError):
-        return None
-    # (YGOAI_GAME_CACHE: commits from before the test games were played in Rust kept them in a cache)
-    env = dict(os.environ, YGOAI_SNAPSHOT=str(ROOT),  # (it is one: no snapshot of the snapshot)
-               YGOAI_SCRIPTS=str(ROOT / "external" / "CardScripts"), YGOAI_CDB_DIR=str(ROOT / "external" / "BabelCDB"),
-               YGOAI_DECKS=str(ROOT / "human_decks" / "decks"),
-               YGOAI_NEW_DECKS=str(ROOT / "human_decks" / "decks_new"), YGOAI_GAME_CACHE="0")
+    except (subprocess.CalledProcessError, OSError, RuntimeError):
+        return None  # (e.g. a commit from before the bot crate's rename)
+    env = dict(os.environ, YGO_SNAPSHOT=str(ROOT))  # (it is one: no snapshot of the snapshot)
     out = wt / "bisect_case.jsonl"
     out.unlink(missing_ok=True)
     # (only this reconstruction: the case's viewer at the case's cut)

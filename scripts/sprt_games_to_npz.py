@@ -1,9 +1,9 @@
-"""rows_mover2.jsonl (ygoai-refeature of the SPRT games) + meta.jsonl + rounds 2+3's npz -> one npz
+"""rows_mover2.jsonl (bot-refeature of the SPRT games) + meta.jsonl + rounds 2+3's npz -> one npz
 for train_eval_mover.py with explicit deck pairs: `pair`, `aseat` (the seat of the pair's first
 deck), `valgame` (games held out within training pairs) and `src` (0: SPRT, 1/2: rounds 2/3).
 
   scripts/sprt_games_to_npz.py ROWS.jsonl META.jsonl ROUNDS23.npz OUT.npz
-(ROWS: ygoai-refeature of scripts/collect_sprt_games.py's GAMES; OUT for scripts/train_eval_mover.py)"""
+(ROWS: bot-refeature of scripts/collect_sprt_games.py's GAMES; OUT for scripts/train_eval_mover.py)"""
 import json, sys, zlib
 import numpy as np
 import multiprocessing as mp

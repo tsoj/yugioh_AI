@@ -1,6 +1,6 @@
 //! The learned deck models (existence and counts): burn code that build.rs generates from their ONNX
 //! export (human_decks/export_deck_models.py), the weights embedded. The inference around
-//! them (the deck completion) is ygoai::belief::neural; this crate offers the two forward passes on
+//! them (the deck completion) is bot::belief::neural; this crate offers the two forward passes on
 //! vocabulary indices, batch 1, on the CPU.
 
 /// Whether the library was built with the models (an export existed).

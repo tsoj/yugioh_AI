@@ -1,7 +1,7 @@
 """Usage: scripts/eval_mover_features.py DATA.jsonl OUT.npz [SET]
 
-The datagen rows' Rust features (the set SET, default `mover2`, from ygoai-datagen or
-ygoai-refeature; data from before 3cf4fbf names it `mover_x`) and their labels into an npz for
+The datagen rows' Rust features (the set SET, default `mover2`, from bot-datagen or
+bot-refeature; data from before 3cf4fbf names it `mover_x`) and their labels into an npz for
 scripts/train_eval_mover.py."""
 import json, sys
 import numpy as np

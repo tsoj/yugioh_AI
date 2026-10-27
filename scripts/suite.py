@@ -50,7 +50,7 @@ RANGES: dict[str, tuple[int, int, list[str]]] = {
     "fresh11000": (1000, 11000, ["--pairs", P]),
     "fresh12000": (1000, 12000, ["--decks", "diverse"]),
     "fresh13000": (1000, 13000, ["--decks", "diverse", "--pairs", P]),
-    # (games of the belief_mc agent take long to play: in parts)
+    # (games of the belief_mc bot take long to play: in parts)
     "mc14000": (100, 14000, ["--decks", "diverse", "--pairs", MC]),
     "mc14100": (100, 14100, ["--decks", "diverse", "--pairs", MC]),
     "mc14200": (100, 14200, ["--decks", "diverse", "--pairs", MC]),
@@ -67,7 +67,7 @@ RANGES: dict[str, tuple[int, int, list[str]]] = {
     "new50000": (1000, 50000, ["--decks", "new"]),
     "neural50000": (200, 50000, ["--decks", "new", "--completion", "neural"]),  # (the learned deck models)
     # (as belief_mc reconstructs: every 3rd decision, inheriting; one result per game and viewer)
-    "agentseq50000": (100, 50000, ["--decks", "new", "--completion", "neural", "--agent-sequence", "3"]),
+    "botseq50000": (100, 50000, ["--decks", "new", "--completion", "neural", "--bot-sequence", "3"]),
     "new51000": (1000, 51000, ["--decks", "new", "--pairs", P]),
     "new52000": (1000, 52000, ["--decks", "new"]),
     "new53000": (1000, 53000, ["--decks", "new", "--pairs", P]),

@@ -1,7 +1,7 @@
 """Candidate openings for a book, screened by the one-sided predictor (train_onesided.py --split
 none --out): random openings (deck pairs from the corpus, seeds), each with its main decks' draw
-order as the game shuffles them (ygoai_rs.new_record), then scored; the KEEP share predicted
-least often decided by the seat goes on to the policy games (ygoai-book-test).
+order as the game shuffles them (bot_py_binding.new_record), then scored; the KEEP share predicted
+least often decided by the seat goes on to the policy games (bot-book-test).
 
     .venv/bin/python scripts/book/onesided_candidates.py generate ALL.jsonl -n N [--seed S]
     .venv/bin/python scripts/book/embed_cards.py EMB.npz ALL.jsonl          (the candidates' cards)
@@ -41,13 +41,13 @@ def random_openings(n: int, seed: int) -> list[tuple[int, list]]:
 
 
 def generate(a):
-    import ygoai_rs
+    import bot_py_binding
 
     with open(a.out, "w") as f:
         for seed, decks in random_openings(a.n, a.seed):
             decks = [d.to_json() for d in decks]
             # (deck_orders: bottom card first; the top cards are drawn first)
-            order = [list(reversed(o)) for o in ygoai_rs.new_record(decks, seed)["deck_orders"]]
+            order = [list(reversed(o)) for o in bot_py_binding.new_record(decks, seed)["deck_orders"]]
             f.write(json.dumps({"seed": seed, "decks": decks, "top": [o[:TOP] for o in order], "order": order}) + "\n")
     print(f"{a.n} candidates -> {a.out}")
 

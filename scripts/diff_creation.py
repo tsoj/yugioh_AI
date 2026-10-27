@@ -36,15 +36,15 @@ def diff(task: tuple, timeout: int = 360) -> list[tuple] | str:
 
 
 def _diff(seed: int, mirror_prob: float, pairs, decks: str, book) -> list[tuple]:
-    import ygoai_rs
+    import bot_py_binding
     record, _ = play_game(seed, mirror_prob, pairs, decks, book)
-    base, error = ygoai_rs.replay_streams(record)
+    base, error = bot_py_binding.replay_streams(record)
     if error:
         raise RuntimeError(error)
     out = []
     for k in (1, 2):
         # (a replay that stops early: the game went differently, the responses no longer fit)
-        other, _ = ygoai_rs.replay_streams(record, record["core_seed"][0] + 7919 * k)
+        other, _ = bot_py_binding.replay_streams(record, record["core_seed"][0] + 7919 * k)
         for viewer in (0, 1):
             a, b = base[viewer], other[viewer]
             for i, (x, y) in enumerate(zip(a, b)):

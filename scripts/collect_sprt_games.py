@@ -1,7 +1,7 @@
 """SPRT match records with search labels from runs started at or after CUTOFF into one games file,
 plus a sidecar (one line per game): run, deck pair key, seat order (1 if seat 0 holds the pair's
 first deck by name), winner deck index. The first step of the eval's data from SPRT games (then
-ygoai-refeature GAMES ROWS --features mover2, then scripts/sprt_games_to_npz.py).
+bot-refeature GAMES ROWS --features mover2, then scripts/sprt_games_to_npz.py).
 
   scripts/collect_sprt_games.py "2026-10-17 23:22" GAMES.jsonl META.jsonl   (run in the repo root)"""
 import json, glob, os, time, sys

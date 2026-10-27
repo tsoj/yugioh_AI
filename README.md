@@ -1,6 +1,6 @@
 # yugioh_AI_2
 
-A testing framework for Yu-Gi-Oh! AIs built on a Rust port of
+A testing framework for Yu-Gi-Oh! bots built on a Rust port of
 [ygopro-core](https://github.com/edo9300/ygopro-core) (the EDOPro rules engine) and of the card
 scripts from [ProjectIgnis/CardScripts](https://github.com/ProjectIgnis/CardScripts): the submodule
 [`ygopro-core-rust/`](https://github.com/tsoj/ygopro-core-rust), which plays message for
@@ -10,28 +10,29 @@ message like the patched C++ core and copies a duel in microseconds. The card da
 It has three parts:
 
 1. **Arbiter and match runner** (the [fastchess](https://github.com/Disservin/fastchess)
-   counterpart): plays games between AIs, gives every AI exactly the information its player is
+   counterpart): plays games between bots, gives every bot exactly the information its player is
    allowed to have, records games, and reports W/D/L, Elo and SPRT results.
-2. **Belief replay**: a library for AIs with imperfect information. From a player's observations
+2. **Belief replay**: a library for bots with imperfect information. From a player's observations
    alone it reconstructs a complete duel that is indistinguishable from the real one from that
    player's point of view, so search algorithms (MCTS, alpha-beta, ...) can simulate ahead on
    copies of it.
-3. **Consistency tests** for the belief replay: random and greedy AIs play thousands of games
+3. **Consistency tests** for the belief replay: random and greedy bots play thousands of games
    with human deck lists; for every game, both players and several cut points, the
    reconstruction must reproduce the player's observation stream exactly.
 
 ## Setup
 
 ```sh
-git submodule update --init external/CardScripts external/BabelCDB external/HiGHS rust
-# the Python binding of the belief checks (crates/ygoai_rs/), into the venv below
-cd crates/ygoai_rs && CARGO_TARGET_DIR=../../ygopro-core-rust/target VIRTUAL_ENV=../../.venv ../../.venv/bin/maturin develop --release
+git submodule update --init external/CardScripts external/BabelCDB external/HiGHS ygopro-core-rust
+# the Python binding of the belief checks (crates/bot-py-binding/), into the venv below
+cd crates/bot-py-binding && CARGO_TARGET_DIR=../../ygopro-core-rust/target VIRTUAL_ENV=../../.venv ../../.venv/bin/maturin develop --release
 ```
 
 Requirements: Rust (stable), cmake (HiGHS is built from `external/HiGHS`), a C++ compiler, Python >=
-3.11 with numpy and maturin. The Rust code is one Cargo workspace (`Cargo.toml`): the ygoai crate
-(`crates/ygoai`: the agents, their search, the belief replay), the binding (`crates/ygoai_rs`) and
-HiGHS (`crates/highs`). The duels, what each player sees, the engine protocol and the arbiter
+3.11 with numpy and maturin. The Rust code is one Cargo workspace (`Cargo.toml`): the bot crate
+(`crates/bot`: its strategies, their search, the belief replay), its Python binding
+(`crates/bot-py-binding`) and HiGHS (`crates/highs`). The duels, what each player sees, the bot
+protocol and the arbiter
 `ygo-arbiter` are in `ygopro-core-rust/ygo-arbiter` (a workspace of its own: `cargo build --release
 --manifest-path ygopro-core-rust/Cargo.toml -p ygo-arbiter`). The C++ core is only the Rust engine's
 test oracle, in `ygopro-core-rust/oracle/` (not fetched by default; see ygopro-core-rust/README.md).
@@ -47,7 +48,7 @@ uv pip install --python .venv/bin/python "torch==2.13.0+rocm7.1" --index-url htt
 ```
 
 and scripts are run with `.venv/bin/python` (inference on the CPU, deterministic; the GPU is for training). The human deck lists
-are expected in `human_decks/decks/*.ydk` (override with `YGOAI_DECKS`), the newer ones (test games
+are expected in `human_decks/decks/*.ydk` (override with `YGO_DECKS`), the newer ones (test games
 only) in `human_decks/decks_new/`. The code that makes them is in `human_decks/` (the data
 and models are not in git):
 
@@ -63,22 +64,22 @@ cd human_decks
 ## Running things
 
 ```sh
-# engine development: a feature on a branch, SPRT against main (both refs built into
-# build/engines/<sha>, the arbiter ygo-arbiter with the book runs/books/match2.jsonl, 10+0.1,
+# bot development: a feature on a branch, SPRT against main (both refs built into
+# build/bots/<sha>, the arbiter ygo-arbiter with the book runs/books/match2.jsonl, 10+0.1,
 # bounds [0, 5]; log, records and a summary line in runs/sprt/); merge if H1
 scripts/sprt_branch.sh my-feature-branch main
 
-# any match of engines (NAME=COMMAND: a process speaking the engine protocol): each book opening
+# any match of bots (NAME=COMMAND: a process speaking the bot protocol): each book opening
 # played with both seats, Fischer clock per decision
-build/engines/<sha>/ygo-arbiter --engine "new=build/engines/<sha>/ygoai-engine alphabeta" \
-    --engine "base=build/engines/<sha>/ygoai-engine random" --book runs/books/match2.jsonl -n 200 --tc 10+0.1 --sprt 0 5
+build/bots/<sha>/ygo-arbiter --bot "new=build/bots/<sha>/bot alphabeta" \
+    --bot "base=build/bots/<sha>/bot random" --book runs/books/match2.jsonl -n 200 --tc 10+0.1 --sprt 0 5
 
 # belief replay consistency test (both players, cut at the end of turns 1, 2 and 3, at 1/3,
 # 2/3 and the full game; turn cuts show as frac -1, -2, -3; --fractions / --turns choose);
 # one task per game (played once, both observation streams recorded while it is played),
 # results are streamed to the JSON lines file
 python3 scripts/check_belief.py -n 1000 --start 1000 -o runs/check.jsonl
-# ... with other agent pairings (seed % number of pairs picks one; agents: random, greedy,
+# ... with other bot pairings (seed % number of pairs picks one; bots: random, greedy,
 # setter = sets cards face-down and responds in chain windows, mixed = greedy with 30% random)
 python3 scripts/check_belief.py -n 1000 --start 4000 --pairs setter-greedy,mixed-setter -o runs/c.jsonl
 # ... with decks chosen for card variety: the corpus without duplicates, ordered so that
@@ -109,19 +110,19 @@ python3 scripts/diff_creation.py -n 1000 --start 5000
 
 # unit and integration tests
 python3 -m unittest discover tests
-cargo test --release -p ygoai                    # (with CARGO_TARGET_DIR=ygopro-core-rust/target)
+cargo test --release -p bot                      # (with CARGO_TARGET_DIR=ygopro-core-rust/target)
 ```
 
-## The engine protocol
+## The bot protocol
 
-An AI is a process speaking JSON lines on stdin/stdout with the arbiter, like a chess engine under
-fastchess: `ygopro-core-rust/ygo-arbiter/PROTOCOL.md`. `ygoai-engine NAME` runs one of our agents as
-such an engine; `ygo-random-engine` is the reference engine.
+A bot is a process speaking JSON lines on stdin/stdout with the arbiter, like a chess engine under
+fastchess: `ygopro-core-rust/ygo-arbiter/PROTOCOL.md`. `bot NAME` runs one of our strategies as
+such a bot; `ygo-random-bot` is the reference bot.
 
-## How the belief replay works (`crates/ygoai/src/belief/`)
+## How the belief replay works (`crates/bot/src/belief/`)
 
 The belief replay is Rust; the belief checks (`check.rs`: `check_belief.py` calls them through
-`ygoai_rs`) play its test games (`games.rs`) and reconstruct each player's view at several cuts.
+`bot_py_binding`) play its test games (`games.rs`) and reconstruct each player's view at several cuts.
 
 * `tracker.rs` follows every card slot of both players through the observation stream,
   mirroring the core's pile semantics exactly. Unknown identities are variables; a shuffle turns
@@ -204,10 +205,10 @@ The belief replay is Rust; the belief checks (`check.rs`: `check_belief.py` call
   tests count what it saves as failures ("read-guided repair needed: ..."; `check_belief.py
   --read-guided-ok` counts them as consistent).
 
-### Using the belief replay in an AI
+### Using the belief replay in a bot
 
-An AI keeps its observation stream as a list of items `("msg", message)`, `("prompt", prompt,
-state)` and `("response", response)`, exactly as the engine protocol delivers them. At a
+A bot keeps its observation stream as a list of items `("msg", message)`, `("prompt", prompt,
+state)` and `("response", response)`, exactly as the bot protocol delivers them. At a
 decision it reconstructs the duel and searches from it on copies (`duel.clone()`, microseconds):
 
 ```rust
@@ -231,11 +232,11 @@ the caller's to change. When no consistent reconstruction exists, `r.approximate
 best effort re-aligned with the stream, its public state re-synchronized with what the player saw
 at each of its Idle/Battle commands (`belief/sync.rs`).
 
-`BeliefMcAgent` (`belief_agents.rs`) is a complete (deliberately simple) example: flat Monte
-Carlo with greedy rollouts on the reconstructed duel; the engine's `BeliefSearchAgent` searches
-it with alpha-beta. `scripts/check_belief.py --agent-sequence K` checks
+`BeliefMcBot` (`belief_bots.rs`) is a complete (deliberately simple) example: flat Monte
+Carlo with greedy rollouts on the reconstructed duel; `BeliefSearchBot` searches it with
+alpha-beta. `scripts/check_belief.py --bot-sequence K` checks
 reconstructions made this way (every K-th decision of each player; suite range
-`agentseq50000`), `--agent-mode` single reconstructions as an agent sees them (with the state
+`botseq50000`), `--bot-mode` single reconstructions as a bot sees them (with the state
 differences of approximate ones).
 
 ## Current results
@@ -246,14 +247,14 @@ the same prefix as another one is skipped); the reconstruction must reproduce ev
 message, every prompt of the viewer and the viewer's state view at every prompt). A run takes
 about 2 minutes on 32 threads (i9-13900K).
 Seeds 1000-4999 use random corpus deck pairs (20% mirror matches); 5000-6999 use the decks
-ordered for card variety (`--decks diverse`). Agents: random and greedy, or (marked "other
-agents") the `setter` and `mixed` agents against each other and the others (`--pairs
+ordered for card variety (`--decks diverse`). Bots: random and greedy, or (marked "other
+bots") the `setter` and `mixed` bots against each other and the others (`--pairs
 setter-greedy,mixed-setter,greedy-mixed,setter-random,mixed-mixed,random-setter`). By now
 all of them have been used while developing (5000-6999 started out fresh, at 99.43% / 99.32%; 7000-7999
 at 99.79%):
 
-| cut      | 1000-1999 | 2000-2999 | 3000-3999 | 4000-4999 (other agents) | 5000-5999 (diverse decks) | 6000-6999 (diverse, other agents) | 7000-7999 (diverse, other agents) |
-|----------|-----------|-----------|-----------|--------------------------|---------------------------|-----------------------------------|-----------------------------------|
+| cut      | 1000-1999 | 2000-2999 | 3000-3999 | 4000-4999 (other bots) | 5000-5999 (diverse decks) | 6000-6999 (diverse, other bots) | 7000-7999 (diverse, other bots) |
+|----------|-----------|-----------|-----------|------------------------|---------------------------|---------------------------------|---------------------------------|
 | turn 1   | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                            | 100.0%                            |
 | turn 2   | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                            | 100.0%                            |
 | turn 3   | 100.0%    | 100.0%    | 100.0%    | 100.0%                   | 100.0%                    | 100.0%                            | 100.0%                            |
@@ -273,7 +274,7 @@ separately by `check_belief.py`; 5 of the ~79,000 reconstructions in the table a
 Fresh seeds are the honest measure: the corpus has ~164k decks, and new decks bring new card
 mechanics (the earlier ranges started between 99.3% and 99.4% when they were fresh, 7000-7999 at
 99.79%). About 97-98% of all reconstructions need no repair restart at all. The latest fresh
-test (seeds never used in development: 10000-13999 with all deck and agent variants, all 381
+test (seeds never used in development: 10000-13999 with all deck and bot variants, all 381
 book openings twice with new shuffles, 300 `belief_mc` games; ~50,000 reconstructions) started
 at 99.92-100% and is at 99.98-100% after the fixes it prompted; what remains is the class below
 (hidden deck contents with a specific property) and one 93-turn game over the time limit.
@@ -286,7 +287,7 @@ opening seed % 381. Three passes (1143 games) show ~90% of the cards in a game a
 Median reconstruction time is about 0.3-0.6s (a few long games take up to the 90s limit because
 of repeated repair restarts). Plain self-play is fast: about 0.2s CPU per game, ~650 decisions per game.
 
-First match of the example search agent (`belief_mc`: belief replay + flat Monte Carlo with
+First match of the example search bot (`belief_mc`: belief replay + flat Monte Carlo with
 greedy rollouts, vanilla deck completion) against `greedy`, 40 openings with swapped seats:
 +52 =0 -28, Elo +107 +/- 67.
 
@@ -355,7 +356,7 @@ whenever something asks (e.g. a hidden card's activation check reading Levels), 
 "becomes 2" before or after a "+2 in the Main Phase" depended on the opponent's hidden cards. The
 patched core checks the conditions at fixed points instead (every adjustment, in id order, see
 `field::refresh_effect_conditions`); only these checks give new timestamps, as the official rules
-do when an effect starts applying anew (`crates/ygoai/tests/core_rules.rs`). And conversely, a card kept revealed in the hand now
+do when an effect starts applying anew (`crates/bot/tests/core_rules.rs`). And conversely, a card kept revealed in the hand now
 stays visible through hand shuffles (the shuffle message marks face-up cards), as it would at the
 table.
 
@@ -403,7 +404,7 @@ against; `ygopro-core-rust/oracle/build.sh`):
   materials and when assigning selected ones to the material slots (Frightfur monsters with
   many Fluffals ran into the Lua budget, 22 s per check); each state is answered once per
   check, with every intermediate group still checked along every order as before.
-  `YGOAI_NO_OVERRIDES=1` loads the original helpers: 780 games compared (seeds 1000-1099,
+  `BOT_NO_OVERRIDES=1` loads the original helpers: 780 games compared (seeds 1000-1099,
   5000-5099, 6000-6099, 6900-6999 and the whole opening book) are identical, except one game
   from the point where the original ran into the budget.
 * `lua_fixes/`: corrected copies of card scripts with bugs, used instead of the CardScripts
@@ -449,14 +450,14 @@ during a run does not affect it.
 
 ## Models
 
-The engine's models (`crates/ygoai/models/`, compiled in) and how to rebuild them:
+The bot's models (`crates/bot/models/`, compiled in) and how to rebuild them:
 
 - the evaluation `eval_mover2_sprt2r23os_64.json`: SPRT records -> `scripts/collect_sprt_games.py`
-  -> `ygoai-refeature --features mover2` -> `scripts/sprt_games_to_npz.py` (with rounds 2 and 3:
-  ygoai-datagen -> `scripts/eval_mover_features.py`, in `runs/data/rounds23/`) ->
+  -> `bot-refeature --features mover2` -> `scripts/sprt_games_to_npz.py` (with rounds 2 and 3:
+  bot-datagen -> `scripts/eval_mover_features.py`, in `runs/data/rounds23/`) ->
   `scripts/train_eval_mover.py --dims 64 --held 400 --drop-onesided --lam 0.5`;
-- the card policy `card_policy_cp4_h16.json`: `ygoai-card-refs --independent` ->
-  `scripts/train_card_policy.py`; the set policy `set_policy_s2_h16.json`: `ygoai-card-refs
+- the card policy `card_policy_cp4_h16.json`: `bot-card-refs --independent` ->
+  `scripts/train_card_policy.py`; the set policy `set_policy_s2_h16.json`: `bot-card-refs
   --independent --decisions` -> `scripts/train_set_policy.py`;
 - the deck models (`crates/deckmodels`, from `human_decks/onnx_export/`):
   human_decks/README.md;
@@ -468,11 +469,11 @@ The SPRT opening book (runs/books/match2.jsonl): scripts/book/README.md.
 
 ```
 ygopro-core-rust/  submodule: the engine (ygo-core), the cards (ygo-cards), the arbiter and the
-                   engine protocol (ygo-arbiter), the differential tester (ygo-diff) and its C++
+                   bot protocol (ygo-arbiter), the differential tester (ygo-diff) and its C++
                    oracle (oracle/)
-crates/ygoai/      the ygoai crate: agents and alpha-beta search, the belief replay, an agent as an
-                   engine (bin ygoai-engine)
-crates/ygoai_rs/   its Python binding (the belief checks' games and checks, replays)
+crates/bot/        the bot: its strategies and alpha-beta search, the belief replay (bin bot)
+crates/bot-py-binding/
+                   its Python binding (the belief checks' games and checks, replays)
 crates/highs/      HiGHS (external/HiGHS) for the belief's flow model
 crates/deckmodels/ the deck completion models (their ONNX export, compiled in)
 human_decks/       the deck corpus, its download and the deck completion models' training
@@ -480,7 +481,7 @@ external/          submodules: CardScripts, BabelCDB, HiGHS
 lua_fixes/         corrected card scripts
 scripts/           command line tools
   common/          what they share: carddb.py (the card database), decks.py (deck lists, the
-                   corpus), games.py (the belief checks' decks and agents), parallel.py (a crash
+                   corpus), games.py (the belief checks' decks and bots), parallel.py (a crash
                    tolerant pool), pretty.py (messages as text), constants.py (the core's)
   book/            the SPRT opening book's pipeline
 tests/             unit and integration tests (baselines/: the belief suite's)

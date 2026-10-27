@@ -2,7 +2,7 @@
 """Index the test games by the mechanics they use.
 
 Plays (regenerates) the games of `check_belief.py` for a range of seeds and
-writes one JSON line per game: decks, agents, length and a set of tags
+writes one JSON line per game: decks, bots, length and a set of tags
 (message and prompt types that occurred, plus derived ones like "xyz" or
 "mirror"). `check_belief.py --index FILE --tags xyz,sort_card` then tests only
 games with those mechanics.
@@ -51,9 +51,9 @@ def message_tags(m: dict) -> set[str]:
 
 
 def index_game(seed: int) -> dict:
-    import ygoai_rs
+    import bot_py_binding
     record, _ = play_game(seed)
-    events, _ = ygoai_rs.replay_events(record)
+    events, _ = bot_py_binding.replay_events(record)
     tags = set()
     for event in events:
         if event[0] == "msg":

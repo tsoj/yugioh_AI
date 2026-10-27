@@ -2,7 +2,7 @@
 
 A suite or exploration run takes an hour or more and its worker processes are
 recycled, importing the code again: an edit during the run would mix versions.
-`reexec` copies the code (scripts/, lua_fixes/, the Rust engine's binding ygoai_rs) to
+`reexec` copies the code (scripts/, lua_fixes/, the bot's Python binding bot_py_binding) to
 build/snapshots/NAME and runs the calling script again from there; the data
 (external/, the decks, tests/, runs/ and the rest of build/) are symlinks to the
 checkout's, so the results land where they always do.
@@ -20,12 +20,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SNAPSHOTS = ROOT / "build" / "snapshots"
 _CODE = ("scripts", "lua_fixes")
-_SHARED = ("external", "tests", "runs")
-_DECKS = "human_decks"  # (shared too: see _decks_name)
+_SHARED = ("external", "human_decks", "tests", "runs")
 _NOT_SHARED = ("snapshots",)
 _ENGINE = "ygopro-core-rust"  # (the engine's submodule)
 _RUST = ("crates", "Cargo.toml", "Cargo.lock")  # (the binding's sources besides the engine)
-_ENV = "YGOAI_SNAPSHOT"  # (set in the snapshot's process: the checkout it was taken from)
+_BINDING = "crates/bot-py-binding"
+_ENV = "YGO_SNAPSHOT"  # (set in the snapshot's process: the checkout it was taken from)
 _KEEP_DAYS = 3
 
 
@@ -40,7 +40,7 @@ def reexec(name: str, ref: str | None = None) -> None:
     print(f"running from the snapshot {dst}", flush=True)
     env = dict(os.environ, **{_ENV: str(ROOT)})
     if ref is not None:
-        env["YGOAI_ROOT"] = str(dst)  # (a ref's own binding: its data paths point to its deleted build tree)
+        env["YGO_ROOT"] = str(dst)  # (a ref's own binding: its data paths point to its deleted build tree)
     os.execve(sys.executable, [sys.executable, str(script), *sys.argv[1:]], env)
 
 
@@ -48,6 +48,9 @@ def make(name: str, ref: str | None = None) -> Path:
     """A snapshot of the code in build/snapshots/NAME: of the checkout, or of a
     git commit `ref` (with its own build of the Rust binding if its Rust sources
     differ from the checkout's)."""
+    if ref is not None and not _tracked(ref, _BINDING):
+        # (older commits name the binding, its environment variables and data otherwise)
+        raise RuntimeError(f"{ref} has no {_BINDING} (from before the bot crate's rename): rebase it onto main")
     SNAPSHOTS.mkdir(parents=True, exist_ok=True)
     for old in SNAPSHOTS.iterdir():
         if old.is_dir() and time.time() - old.stat().st_mtime > _KEEP_DAYS * 86400:
@@ -68,7 +71,6 @@ def make(name: str, ref: str | None = None) -> Path:
     for d in _SHARED:
         if (ROOT / d).exists():
             (dst / d).symlink_to(ROOT / d)
-    (dst / _decks_name(ref)).symlink_to(ROOT / _DECKS)
     (dst / "build").mkdir()
     for p in (ROOT / "build").iterdir():
         if p.name in _NOT_SHARED or p.name.startswith("bisect"):
@@ -78,13 +80,6 @@ def make(name: str, ref: str | None = None) -> Path:
     return dst
 
 
-def _decks_name(ref: str | None) -> str:
-    """The human decks' directory in the code of `ref` (download_human_decks/ before its rename)."""
-    if ref is None or _tracked(ref, _DECKS):
-        return _DECKS
-    return "download_human_decks"
-
-
 def _tracked(ref: str, path: str) -> bool:
     return subprocess.run(["git", "-C", str(ROOT), "cat-file", "-e", f"{ref}:{path}"], capture_output=True).returncode == 0
 
@@ -92,7 +87,7 @@ def _tracked(ref: str, path: str) -> bool:
 def _installed_binding() -> Path | None:
     try:
         import importlib.util
-        spec = importlib.util.find_spec("ygoai_rs")
+        spec = importlib.util.find_spec("bot_py_binding")
     except (ImportError, ValueError):
         return None
     if spec is None or not spec.origin or not spec.origin.endswith("__init__.py"):
@@ -102,19 +97,16 @@ def _installed_binding() -> Path | None:
 
 def _engine_commit(ref: str) -> str:
     """The engine submodule's commit at `ref`."""
-    r = subprocess.run(["git", "-C", str(ROOT), "rev-parse", f"{ref}:{_ENGINE}"], capture_output=True, text=True)
-    if r.returncode:
-        raise RuntimeError(f"{ref} has no {_ENGINE}/ (from before the submodule's rename from rust/): rebase it onto main")
-    return r.stdout.strip()
+    return subprocess.run(["git", "-C", str(ROOT), "rev-parse", f"{ref}:{_ENGINE}"], check=True, capture_output=True, text=True).stdout.strip()
 
 
 def _rust_binding(dst: Path, ref: str | None) -> None:
-    """The Rust engine's binding in the snapshot (python -m from there imports it first): the
+    """The bot's Python binding in the snapshot (python -m from there imports it first): the
     installed one, or for a commit whose Rust sources differ from the checkout's, its own build."""
     installed = _installed_binding()
     if installed is None:
-        raise RuntimeError("ygoai_rs is not installed in this Python (README: maturin develop)")
-    shutil.copytree(installed, dst / "ygoai_rs", ignore=shutil.ignore_patterns("__pycache__"))
+        raise RuntimeError("bot_py_binding is not installed in this Python (README: maturin develop)")
+    shutil.copytree(installed, dst / "bot_py_binding", ignore=shutil.ignore_patterns("__pycache__"))
     if ref is None:
         return
     engine = _engine_commit(ref)
@@ -136,10 +128,10 @@ def _rust_binding(dst: Path, ref: str | None) -> None:
     subprocess.run(["tar", "-x", "-C", str(src / _ENGINE)], input=archive, check=True)
     (src / "external").symlink_to(ROOT / "external")  # (HiGHS, for the crates/highs build)
     target = ROOT / "build" / "rust-snapshot-target"
-    cargo = ["cargo", "build", "--release", "-q", "-p", "ygoai_rs"]
+    cargo = ["cargo", "build", "--release", "-q", "-p", "bot-py-binding"]
     if shutil.which("systemd-run"):
         cargo = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=20G", "-p", "MemorySwapMax=0", *cargo]
     subprocess.run(cargo, cwd=src, check=True, env={**os.environ, "CARGO_TARGET_DIR": str(target), "CARGO_BUILD_JOBS": "8",
-                                         "YGOAI_DECK_MODELS_ONNX": str(ROOT / _DECKS / "onnx_export")})
-    shutil.copy2(target / "release" / "libygoai_rs.so", dst / "ygoai_rs" / "ygoai_rs.abi3.so")
+                                         "YGO_DECK_MODELS_ONNX": str(ROOT / _DECKS / "onnx_export")})
+    shutil.copy2(target / "release" / "libbot_py_binding.so", dst / "bot_py_binding" / "bot_py_binding.abi3.so")
     shutil.rmtree(src)

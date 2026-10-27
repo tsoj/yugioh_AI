@@ -1,8 +1,8 @@
-# The Rust side of ygoai: crates/ygoai, its Python binding crates/ygoai_rs, HiGHS and the deck
+# The bot (crates/bot), its Python binding (crates/bot-py-binding), HiGHS and the deck
 # models. The duel engine (ygopro-core-rust/) is a workspace of its own.
 [workspace]
 resolver = "2"
-members = ["crates/ygoai", "crates/ygoai_rs", "crates/highs", "crates/deckmodels"]
+members = ["crates/bot", "crates/bot-py-binding", "crates/highs", "crates/deckmodels"]
 exclude = ["ygopro-core-rust"]
 
 [workspace.package]

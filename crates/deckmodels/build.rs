@@ -1,5 +1,5 @@
 //! Generates the models' burn code from their ONNX export (human_decks/export_deck_models.py;
-//! $YGOAI_DECK_MODELS_ONNX for another directory), with the weights and the vocabulary
+//! $YGO_DECK_MODELS_ONNX for another directory), with the weights and the vocabulary
 //! (deck_models.json) embedded in the library. Without
 //! an export the crate builds without the models (`available()` is false).
 
@@ -11,8 +11,8 @@ const MODELS: [&str; 2] = ["deck_existence", "deck_counts"];
 
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(deck_models)");
-    println!("cargo:rerun-if-env-changed=YGOAI_DECK_MODELS_ONNX");
-    let dir = std::env::var("YGOAI_DECK_MODELS_ONNX").map(PathBuf::from).unwrap_or_else(|_| {
+    println!("cargo:rerun-if-env-changed=YGO_DECK_MODELS_ONNX");
+    let dir = std::env::var("YGO_DECK_MODELS_ONNX").map(PathBuf::from).unwrap_or_else(|_| {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../human_decks/onnx_export")
     });
     let mut files: Vec<PathBuf> = MODELS.iter().map(|m| dir.join(format!("{m}.onnx"))).collect();

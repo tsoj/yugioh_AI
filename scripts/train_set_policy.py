@@ -1,7 +1,7 @@
-"""Trains a set policy: the card policy's MLP (crates/ygoai/src/search/cardpolicy.rs) scoring each
+"""Trains a set policy: the card policy's MLP (crates/bot/src/search/cardpolicy.rs) scoring each
 card of a card selection whose candidates are sets of cards (several cards, a sum, tributes; one
 at a time with finishing as the empty set), a set's score the sum of its cards' plus a weight per
-card in it (and one for finishing), on `ygoai-card-refs --decisions` rows with "features" and
+card in it (and one for finishing), on `bot-card-refs --decisions` rows with "features" and
 "sets". Loss: the cross-entropy of the sets' softmax against softmax(value / T) (values clamped
 to CLAMP LP below the best). Held out: every HELD-th game. Reports, held out and per type, for
 the policy, the candidates' order (the rules' cards first) and the rules' answer: how often the

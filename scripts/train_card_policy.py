@@ -1,5 +1,5 @@
-"""Trains the card policy (crates/ygoai/src/search/cardpolicy.rs): an MLP scoring each card of a
-one-card selection from its features, on ygoai-card-refs' exact values of every card. Loss: the
+"""Trains the card policy (crates/bot/src/search/cardpolicy.rs): an MLP scoring each card of a
+one-card selection from its features, on bot-card-refs' exact values of every card. Loss: the
 cross-entropy of the cards' softmax against softmax(value / T) (values clamped to CLAMP LP below
 the best). Held out: every HELD-th game. Reports, held out, for the policy and the rules' order:
 how often the best card is first / in the first 3 (the search's width) / in the first 5 (the

@@ -209,9 +209,9 @@ if args.output:
                "w2": (st[f"{2 * args.layers}.weight"][0] * K).tolist(), "b2": float(st[f"{2 * args.layers}.bias"][0] * K),
                "k": float(K), "lam": args.lam, "hidden": hidden[0], "dims": hidden, "n_layers": args.layers}, open(args.output, "w"))
     print("saved", args.output)
-    # the LP anchor (ygoai-anchor) on the held-out pairs' rows, so that the engine's values are in LP
+    # the LP anchor (bot-anchor) on the held-out pairs' rows, so that the bot's values are in LP
     import os, subprocess, tempfile
-    anchor = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "target", "release", "ygoai-anchor")
+    anchor = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "target", "release", "bot-anchor")
     if os.path.exists(anchor):
         with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
             for row in d["x"][is_hp][:, :n]:
@@ -219,4 +219,4 @@ if args.output:
         subprocess.run([anchor, args.output, f.name, "--write"], check=True)
         os.unlink(f.name)
     else:
-        print(f"warning: {anchor} not built: {args.output} has no LP anchor, the engine refuses it until ygoai-anchor MODEL ROWS --write")
+        print(f"warning: {anchor} not built: {args.output} has no LP anchor, the bot refuses it until bot-anchor MODEL ROWS --write")

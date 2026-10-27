@@ -174,7 +174,7 @@ def _action(prompt: dict, resp: dict) -> tuple[list[int], list[tuple]]:
 
 
 def _decisions(events: list[tuple], keep: float, rng: random.Random) -> list[list]:
-    """The prompts of a replay's god view (ygoai_rs.replay_events), each [prompt, core response,
+    """The prompts of a replay's god view (bot_py_binding.replay_events), each [prompt, core response,
     state rows, scalars, the messages after the response, kept]; the state only at the kept prompts
     and the ones after them."""
     items: list[list] = []
@@ -197,10 +197,10 @@ def _decisions(events: list[tuple], keep: float, rng: random.Random) -> list[lis
 
 
 def samples(task):
-    import ygoai_rs
+    import bot_py_binding
     line, keep, seed = task
     record = json.loads(line)
-    events, _ = ygoai_rs.replay_events(record, None, True)
+    events, _ = bot_py_binding.replay_events(record, None, True)
     items = _decisions(events, keep, random.Random(seed))
     out = []
     for a, b in zip(items, items[1:]):

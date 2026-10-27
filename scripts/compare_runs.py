@@ -65,7 +65,7 @@ def main() -> int:
     args = ap.parse_args()
     old, new = load(args.old), load(args.new)
     shared = set(old) & set(new)
-    # (only the same games: e.g. agents that use the belief play other games when it changes)
+    # (only the same games: e.g. bots that use the belief play other games when it changes)
     def same_game(a: dict, b: dict) -> bool:
         if "game" in a and "game" in b:
             return a["game"] == b["game"]
