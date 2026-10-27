@@ -3,15 +3,15 @@ name = "ygoai_rs"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "Python binding of the Rust duel engine (rust/, ygopro-core-rust) with the interface of ygoai.core.Duel"
+description = "Python binding of the Rust duel engine (ygopro-core-rust/) with the interface of ygoai.core.Duel"
 
 [lib]
 name = "ygoai_rs"
 crate-type = ["cdylib"]
 
 [dependencies]
-ygo-core = { path = "../rust/ygo-core" }
-ygo-cards = { path = "../rust/ygo-cards" }
+ygo-core = { path = "../ygopro-core-rust/ygo-core" }
+ygo-cards = { path = "../ygopro-core-rust/ygo-cards" }
 ygoai = { path = "../crates/ygoai" }
 pythonize = "0.27"
 serde_json = "1"

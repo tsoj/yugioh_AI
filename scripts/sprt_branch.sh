@@ -47,10 +47,11 @@ TARGET=$ROOT/build/bench-target
 # and fetched from the checkout's submodules (url.*.insteadOf: nothing is downloaded): an ordinary
 # checkout, nothing to commit there.
 submodules() {
-    local args=(-c protocol.file.allow=always) name url
-    while read -r name url; do
-        args+=(-c "url.$ROOT/${name}.insteadOf=$url")
-    done < <(git config -f "$ROOT/.gitmodules" --get-regexp '^submodule\..*\.url$' | sed -E 's/^submodule\.(.*)\.url /\1 /')
+    local args=(-c protocol.file.allow=always) key path url
+    while read -r key path; do
+        url=$(git config -f "$ROOT/.gitmodules" "${key%.path}.url")
+        args+=(-c "url.$ROOT/$path.insteadOf=$url")
+    done < <(git config -f "$ROOT/.gitmodules" --get-regexp '^submodule\..*\.path$')
     git -C "$TREE" "${args[@]}" submodule update --init -q
 }
 
@@ -90,7 +91,7 @@ build() {
 
 # (NEW must contain BASE's engine, its last commit to the code: a branch from before a merge into
 # BASE would also be tested without that merge's gain; ALLOW_DIVERGED=1 to compare anyway)
-base_code=$(git log -1 --format=%H "$BASE" -- crates lua_fixes Cargo.toml Cargo.lock rust external)
+base_code=$(git log -1 --format=%H "$BASE" -- crates lua_fixes Cargo.toml Cargo.lock ygopro-core-rust external)
 if [ "${ALLOW_DIVERGED:-0}" != 1 ] && ! git merge-base --is-ancestor "$base_code" "$NEW"; then
     echo "$NEW lacks $BASE's code ($base_code): rebase it first (or ALLOW_DIVERGED=1)" >&2
     exit 1

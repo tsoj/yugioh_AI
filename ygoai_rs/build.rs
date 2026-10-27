@@ -38,7 +38,7 @@ fn hash(base: &Path, paths: &[PathBuf]) -> u64 {
 fn main() {
     let here = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let root = here.parent().unwrap().to_path_buf();
-    let dirs = [root.join("rust/ygo-core"), root.join("rust/ygo-cards"), root.join("crates/ygoai"), here.clone()];
+    let dirs = [root.join("ygopro-core-rust/ygo-core"), root.join("ygopro-core-rust/ygo-cards"), root.join("crates/ygoai"), here.clone()];
     let belief = [root.join("crates/ygoai/src/belief"), here.join("src/belief.rs")];
     let mut all = Vec::new();
     for d in &dirs {

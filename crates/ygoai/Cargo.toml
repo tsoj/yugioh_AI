@@ -6,8 +6,8 @@ license.workspace = true
 description = "The ygoai package in Rust: core messages, per-player observations, responses, state views"
 
 [dependencies]
-ygo-core = { path = "../../rust/ygo-core" }
-ygo-cards = { path = "../../rust/ygo-cards" }
+ygo-core = { path = "../../ygopro-core-rust/ygo-core" }
+ygo-cards = { path = "../../ygopro-core-rust/ygo-cards" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 indexmap = "2"

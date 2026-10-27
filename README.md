@@ -3,7 +3,7 @@
 A testing framework for Yu-Gi-Oh! AIs built on a Rust port of
 [ygopro-core](https://github.com/edo9300/ygopro-core) (the EDOPro rules engine) and of the card
 scripts from [ProjectIgnis/CardScripts](https://github.com/ProjectIgnis/CardScripts): the submodule
-`rust/` ([ygopro-core-rust](https://github.com/tsoj/ygopro-core-rust)), which plays message for
+[`ygopro-core-rust/`](https://github.com/tsoj/ygopro-core-rust), which plays message for
 message like the patched C++ core and copies a duel in microseconds. The card database comes from
 [ProjectIgnis/BabelCDB](https://github.com/ProjectIgnis/BabelCDB).
 
@@ -25,14 +25,14 @@ It has three parts:
 ```sh
 git submodule update --init external/CardScripts external/BabelCDB external/HiGHS rust
 # the Python binding of the engine and the belief replay (ygoai_rs/), into the venv below
-cd ygoai_rs && CARGO_TARGET_DIR=../rust/target VIRTUAL_ENV=../.venv ../.venv/bin/maturin develop --release
+cd ygoai_rs && CARGO_TARGET_DIR=../ygopro-core-rust/target VIRTUAL_ENV=../.venv ../.venv/bin/maturin develop --release
 ```
 
 Requirements: Rust (stable), cmake (HiGHS is built from `external/HiGHS`), a C++ compiler, Python >=
 3.11 with numpy and maturin. The Rust code is one Cargo workspace (`Cargo.toml`): the ygoai crate
 (`crates/ygoai`: messages, observations, the arbiter `ygoai-match`, the agents' search, the belief
 replay), the binding (`ygoai_rs`) and HiGHS (`crates/highs`). The C++ core is only the Rust engine's
-test oracle, in `rust/oracle/` (not fetched by default; see rust/README.md). The learned deck
+test oracle, in `ygopro-core-rust/oracle/` (not fetched by default; see ygopro-core-rust/README.md). The learned deck
 completion (`--completion neural`, ygoai/belief/neural_completion.py) also needs PyTorch and the models in
 `download_human_decks/` (`deck_existence.pt`, `deck_counts.pt`); the project environment is made with uv:
 
@@ -105,7 +105,7 @@ python3 scripts/diff_creation.py -n 1000 --start 5000
 
 # unit and integration tests
 python3 -m unittest discover tests
-cargo test --release -p ygoai                    # (with CARGO_TARGET_DIR=rust/target)
+cargo test --release -p ygoai                    # (with CARGO_TARGET_DIR=ygopro-core-rust/target)
 ```
 
 ## The engine protocol
@@ -166,7 +166,7 @@ completions stay Python where they need PyTorch (the neural one is called from R
   then fixed by matching claims to members per shuffle (copies nothing tells apart are
   interchangeable), and the duel is built by card id (deck order and every shuffle result).
 * `replay/` creates a duel from that hypothesis and replays it in lockstep with the stream,
-  using the engine's extension hooks (`rust/ygo-core/src/ext.rs`) to force shuffle results,
+  using the engine's extension hooks (`ygopro-core-rust/ygo-core/src/ext.rs`) to force shuffle results,
   coin/dice results and random selections. The viewer's prompts are answered with the recorded
   responses; the opponent's hidden decisions are inferred from what the viewer saw next
   (`infer.rs`), and ambiguous ones are verified by probing candidates on copies of the replay and
@@ -398,8 +398,8 @@ that order); these single events are raised in location order now too.
 ## Changes to ygopro-core
 
 The Rust engine reproduces ygopro-core with these changes, which were made to the C++ core first:
-`rust/oracle/ocgcore.patch` and `rust/oracle/ocgext.cpp` (the oracle the Rust engine is tested
-against; `rust/oracle/build.sh`):
+`ygopro-core-rust/oracle/ocgcore.patch` and `ygopro-core-rust/oracle/ocgext.cpp` (the oracle the Rust engine is tested
+against; `ygopro-core-rust/oracle/build.sh`):
 
 * Hooks for forcing outcomes, all no-ops unless the `OCG_Ext*` API is used: shuffle results
   (deck, hand, extra, `Duel.ShuffleSetCard` and the zone assignment of a group SSet), coin and
@@ -412,7 +412,7 @@ against; `rust/oracle/build.sh`):
 * Extra API: reorder a pile (by code or by card id), force shuffle results by card id, swap two
   cards within a pile, read card ids per location (or of every location of both players in
   one call: `OCG_ExtGetAllCards`), clear the forced activations.
-* (in the oracle) `rust/oracle/ygoai_overrides.lua`, loaded after `utility.lua`: script helpers
+* (in the oracle) `ygopro-core-rust/oracle/ygoai_overrides.lua`, loaded after `utility.lua`: script helpers
   with exactly the same results, but faster (the Rust engine has its own faster versions, e.g. a
   memoized Fusion material search). `aux.SelectUnselectGroup`'s search visited every group of k
   cards in up to k! orders (Rainbow Dark Dragon's check of 7 DARK monsters with different
@@ -469,17 +469,17 @@ during a run does not affect it.
 ## Layout
 
 ```
-rust/          submodule: the engine (ygo-core), the cards (ygo-cards), the differential tester
-               (ygo-diff) and its C++ oracle (oracle/)
-crates/ygoai/  the ygoai crate: messages, observations, actions, state views, games and records,
-               the arbiter (bin ygoai-match), agents and alpha-beta search, the belief replay
-crates/highs/  HiGHS (external/HiGHS) for the belief's flow model
-ygoai_rs/      the Python binding (engine, belief replay, search)
-external/      submodules: CardScripts, BabelCDB, HiGHS
-lua_fixes/     corrected card scripts
-scripts/       command line tools
-tests/         unit and integration tests (baselines/: the belief suite's)
-ygoai/         the Python package
+ygopro-core-rust/  submodule: the engine (ygo-core), the cards (ygo-cards), the differential
+                   tester (ygo-diff) and its C++ oracle (oracle/)
+crates/ygoai/      the ygoai crate: messages, observations, actions, state views, games and records,
+                   the arbiter (bin ygoai-match), agents and alpha-beta search, the belief replay
+crates/highs/      HiGHS (external/HiGHS) for the belief's flow model
+ygoai_rs/          the Python binding (engine, belief replay, search)
+external/          submodules: CardScripts, BabelCDB, HiGHS
+lua_fixes/         corrected card scripts
+scripts/           command line tools
+tests/             unit and integration tests (baselines/: the belief suite's)
+ygoai/             the Python package
   core.py        the engine (ygoai_rs)  messages.py   message parser
   actions.py     responses              observe.py    per-player filtering
   state.py       state snapshots        game.py       arbiter, records, replays

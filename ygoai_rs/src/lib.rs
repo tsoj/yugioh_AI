@@ -1,4 +1,4 @@
-//! Python binding of the Rust duel engine (`rust/`, ygopro-core-rust): `RustDuel` has the methods of
+//! Python binding of the Rust duel engine (`ygopro-core-rust/`): `RustDuel` has the methods of
 //! `ygoai.core.Duel` (the ctypes wrapper of the patched C++ core) with the same arguments and
 //! results, plus `clone()`. `ygoai/core_rust.py` wraps it into a drop-in `Duel`.
 

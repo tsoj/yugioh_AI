@@ -24,7 +24,8 @@ SNAPSHOTS = ROOT / "build" / "snapshots"
 _CODE = ("ygoai", "scripts", "lua_fixes")
 _SHARED = ("external", "download_human_decks", "tests", "runs")
 _NOT_SHARED = ("snapshots",)
-_RUST = ("crates", "ygoai_rs", "Cargo.toml", "Cargo.lock")  # (the binding's sources besides the rust/ submodule)
+_ENGINE = "ygopro-core-rust"  # (the engine's submodule)
+_RUST = ("crates", "ygoai_rs", "Cargo.toml", "Cargo.lock")  # (the binding's sources besides the engine)
 _ENV = "YGOAI_SNAPSHOT"  # (set in the snapshot's process: the checkout it was taken from)
 _KEEP_DAYS = 3
 
@@ -89,20 +90,27 @@ def _installed_binding() -> Path | None:
     return Path(spec.origin).parent
 
 
+def _engine_commit(ref: str) -> str:
+    """The engine submodule's commit at `ref`."""
+    r = subprocess.run(["git", "-C", str(ROOT), "rev-parse", f"{ref}:{_ENGINE}"], capture_output=True, text=True)
+    if r.returncode:
+        raise RuntimeError(f"{ref} has no {_ENGINE}/ (from before the submodule's rename from rust/): rebase it onto main")
+    return r.stdout.strip()
+
+
 def _rust_binding(dst: Path, ref: str | None) -> None:
     """The Rust engine's binding in the snapshot (python -m from there imports it first): the
     installed one, or for a commit whose Rust sources differ from the checkout's, its own build."""
     installed = _installed_binding()
     if installed is None:
-        return
+        raise RuntimeError("ygoai_rs is not installed in this Python (README: maturin develop)")
     shutil.copytree(installed, dst / "ygoai_rs", ignore=shutil.ignore_patterns("__pycache__"))
     if ref is None:
         return
-    sub = lambda r: subprocess.run(["git", "-C", str(ROOT), "rev-parse", f"{r}:rust"], capture_output=True,  # noqa: E731
-                                   text=True).stdout.strip()
-    same = sub(ref) == sub("HEAD") and not subprocess.run(
+    engine = _engine_commit(ref)
+    same = engine == _engine_commit("HEAD") and not subprocess.run(
         ["git", "-C", str(ROOT), "diff", "--quiet", ref, "--", *_RUST]).returncode
-    if same or not sub(ref):
+    if same:
         return
     # (its own: the sources of the commit, the engine at its submodule commit, built in a capped scope)
     # (always the same directory: build scripts keep the source path they were built with, and the
@@ -113,9 +121,9 @@ def _rust_binding(dst: Path, ref: str | None) -> None:
     src.mkdir()
     archive = subprocess.run(["git", "-C", str(ROOT), "archive", ref, *_RUST], check=True, capture_output=True).stdout
     subprocess.run(["tar", "-x", "-C", str(src)], input=archive, check=True)
-    (src / "rust").mkdir()
-    archive = subprocess.run(["git", "-C", str(ROOT / "rust"), "archive", sub(ref)], check=True, capture_output=True).stdout
-    subprocess.run(["tar", "-x", "-C", str(src / "rust")], input=archive, check=True)
+    (src / _ENGINE).mkdir()
+    archive = subprocess.run(["git", "-C", str(ROOT / _ENGINE), "archive", engine], check=True, capture_output=True).stdout
+    subprocess.run(["tar", "-x", "-C", str(src / _ENGINE)], input=archive, check=True)
     (src / "external").symlink_to(ROOT / "external")  # (HiGHS, for the crates/highs build)
     target = ROOT / "build" / "rust-snapshot-target"
     cargo = ["cargo", "build", "--release", "-q", "-p", "ygoai_rs"]

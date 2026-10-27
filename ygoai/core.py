@@ -1,9 +1,9 @@
-"""The duel engine: the Rust port of ygopro-core and its card scripts (rust/, ygopro-core-rust),
+"""The duel engine: the Rust port of ygopro-core and its card scripts (ygopro-core-rust/),
 through the ygoai_rs binding.
 
-The Rust engine reproduces the (patched) C++ core message for message (rust/ygo-diff, with the C++
-core as the oracle in rust/oracle/), including the extension hooks the belief replay uses
-(rust/ygo-core/src/ext.rs). Duel.clone() copies a duel cheaply, for searches.
+The Rust engine reproduces the (patched) C++ core message for message (ygopro-core-rust/ygo-diff, with the C++
+core as the oracle in ygopro-core-rust/oracle/), including the extension hooks the belief replay uses
+(ygopro-core-rust/ygo-core/src/ext.rs). Duel.clone() copies a duel cheaply, for searches.
 """
 
 from __future__ import annotations
