@@ -42,7 +42,7 @@ the rerun: longest game 941 decisions).
 
 ## Running now
 
-- Nothing. For review: branch `py-cleanup` (the legacy Python removed).
+- Nothing.
 - `tidy` (2026-10-25, the code cleanup after Nalwald's style: same search, bench checksums
   unchanged; the belief regression set equal to a fresh build of main) regression SPRT vs main
   [-10, 0]: H1 at 3546 games, +1.3 +/- 8.9, LLR +3.03. Merged (fast-forward to 61f0965).
@@ -815,15 +815,16 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
 
 ## Housekeeping
 
-- [ ] Repo cleanup: what is still needed of `ygoai/` (Python), `ygoai_rs/` and the other folders.
-  - Branch `py-cleanup` (fd916cf + 82e70a4, 2026-10-25, for the user's review, not merged): the
-    Python play stack the Rust engine replaced removed (-3934 lines: the Python alpha-beta, MCTS,
-    PUCT, policy and heuristic agents, the Python engine process and protocol, match play,
-    scripts/match.py, sprt.py, make_match_book.py, the RL self-play scripts and nets, the Python
-    deck completions, tests/test_integration.py; README and doc comments updated). Kept: the
-    belief checks' agents (random, greedy, setter, mixed, belief_mc) and modules, suite.py and
-    its tools, the data and training scripts. Every module and the scripts' imports load; the
-    unit tests pass; check_belief.py 36/36 on the suite's setter/mixed pairs.
+- [x] Repo cleanup (branch `py-cleanup`, merged 2026-10-27, fast-forward): the Python play stack
+  removed; the engine submodule renamed rust/ -> ygopro-core-rust/; scripts only what rebuilds the
+  engine's models (README "Models"), the SPRT book's pipeline in scripts/book/ (the RL nets given),
+  scripts/build_deck_index.py restored; the belief checks' test games played and checked in Rust
+  (setter, mixed, belief_mc agents ported; belief::games, belief::check::check_game), the Python game
+  stack and the game cache removed, the binding only what the tools use (Python 15252 -> 6715 lines).
+  All 38924 distinct test games of the suite identical in Python and Rust; the baselines' game hashes
+  rewritten (game_hash: CRC-32 of the stream's JSON with sorted keys); regression suite: nothing
+  broke. belief_mc games without their 120 s time limit (mc baselines remade); no silent neural ->
+  corpus completion fallback.
   - Eval data tools were only in a temporary directory: now scripts/collect_sprt_games.py and
     scripts/sprt_games_to_npz.py, the rounds 2+3 npz in runs/data/rounds23/ (done on main).
 - [x] Remove the worktrees `wt-old` (main repo) and `wt-old-rust` (rust repo) in the scratchpad (gone).
