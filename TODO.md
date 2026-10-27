@@ -833,6 +833,12 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
   test's tools fixed (rust/ paths); recorded games -> ygo-diff replays now in Rust
   (game::diff_replay, bin ygoai-diff-replays; the Python core it used is gone). All 3546 games of
   the tidy SPRT identical on both engines (with a89378b, oracle rebuilt).
+  Then (user, 2026-10-27): the arbiter, the games and the engine protocol moved to
+  ygopro-core-rust/ygo-arbiter (any engine speaking the protocol plays; bin ygo-arbiter, was
+  ygoai-match, no built-in agents); protocol version 1 with a handshake (identity, UCI-like options,
+  engines ignore unknown messages and members), PROTOCOL.md; reference engine ygo-random-engine.
+  sprt_branch.sh refuses refs from before. A fixed-node match's records identical before/after.
+  - [ ] Which of ygoai-engine's YGOAI_* environment knobs become protocol options (user's call).
   - Eval data tools were only in a temporary directory: now scripts/collect_sprt_games.py and
     scripts/sprt_games_to_npz.py, the rounds 2+3 npz in runs/data/rounds23/ (done on main).
 - [x] Remove the worktrees `wt-old` (main repo) and `wt-old-rust` (rust repo) in the scratchpad (gone).
