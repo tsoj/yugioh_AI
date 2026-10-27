@@ -1,4 +1,4 @@
-//! Where the data is (ygoai/paths.py): the same environment variables and defaults.
+//! Where the data is (scripts/common/paths.py): the same environment variables and defaults.
 
 use std::path::PathBuf;
 
@@ -20,16 +20,6 @@ pub fn card_scripts_dir() -> PathBuf {
 /// The project's corrected card scripts.
 pub fn fixed_card_scripts_dir() -> PathBuf {
     root().join("lua_fixes")
-}
-
-/// The deck corpus ($YGOAI_DECKS, else download_human_decks/decks).
-pub fn decks_dir() -> PathBuf {
-    env_or("YGOAI_DECKS", root().join("download_human_decks").join("decks"))
-}
-
-/// The newer deck corpus ($YGOAI_NEW_DECKS, else download_human_decks/decks_new).
-pub fn new_decks_dir() -> PathBuf {
-    env_or("YGOAI_NEW_DECKS", root().join("download_human_decks").join("decks_new"))
 }
 
 /// build/ of the repository.

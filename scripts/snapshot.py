@@ -20,7 +20,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SNAPSHOTS = ROOT / "build" / "snapshots"
 _CODE = ("scripts", "lua_fixes")
-_SHARED = ("external", "download_human_decks", "tests", "runs")
+_SHARED = ("external", "tests", "runs")
+_DECKS = "human_decks"  # (shared too: see _decks_name)
 _NOT_SHARED = ("snapshots",)
 _ENGINE = "ygopro-core-rust"  # (the engine's submodule)
 _RUST = ("crates", "Cargo.toml", "Cargo.lock")  # (the binding's sources besides the engine)
@@ -60,14 +61,14 @@ def make(name: str, ref: str | None = None) -> Path:
         for d in _CODE:
             shutil.copytree(ROOT / d, dst / d, ignore=ignore, symlinks=True)
     else:
-        code = [d for d in _CODE if subprocess.run(["git", "-C", str(ROOT), "cat-file", "-e", f"{ref}:{d}"],
-                                                     capture_output=True).returncode == 0]
+        code = [d for d in _CODE if _tracked(ref, d)]
         archive = subprocess.run(["git", "-C", str(ROOT), "archive", ref, *code], check=True,
                                  capture_output=True).stdout
         subprocess.run(["tar", "-x", "-C", str(dst)], input=archive, check=True)
     for d in _SHARED:
         if (ROOT / d).exists():
             (dst / d).symlink_to(ROOT / d)
+    (dst / _decks_name(ref)).symlink_to(ROOT / _DECKS)
     (dst / "build").mkdir()
     for p in (ROOT / "build").iterdir():
         if p.name in _NOT_SHARED or p.name.startswith("bisect"):
@@ -75,6 +76,17 @@ def make(name: str, ref: str | None = None) -> Path:
         (dst / "build" / p.name).symlink_to(p)
     _rust_binding(dst, ref)
     return dst
+
+
+def _decks_name(ref: str | None) -> str:
+    """The human decks' directory in the code of `ref` (download_human_decks/ before its rename)."""
+    if ref is None or _tracked(ref, _DECKS):
+        return _DECKS
+    return "download_human_decks"
+
+
+def _tracked(ref: str, path: str) -> bool:
+    return subprocess.run(["git", "-C", str(ROOT), "cat-file", "-e", f"{ref}:{path}"], capture_output=True).returncode == 0
 
 
 def _installed_binding() -> Path | None:
@@ -128,6 +140,6 @@ def _rust_binding(dst: Path, ref: str | None) -> None:
     if shutil.which("systemd-run"):
         cargo = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=20G", "-p", "MemorySwapMax=0", *cargo]
     subprocess.run(cargo, cwd=src, check=True, env={**os.environ, "CARGO_TARGET_DIR": str(target), "CARGO_BUILD_JOBS": "8",
-                                         "YGOAI_DECK_MODELS_ONNX": str(ROOT / "download_human_decks" / "onnx_export")})
+                                         "YGOAI_DECK_MODELS_ONNX": str(ROOT / _DECKS / "onnx_export")})
     shutil.copy2(target / "release" / "libygoai_rs.so", dst / "ygoai_rs" / "ygoai_rs.abi3.so")
     shutil.rmtree(src)

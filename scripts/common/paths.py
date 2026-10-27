@@ -10,6 +10,6 @@ CARD_SCRIPTS_DIR = Path(os.environ.get("YGOAI_SCRIPTS", EXTERNAL / "CardScripts"
 # translated from them; the belief's script scans read them)
 FIXED_CARD_SCRIPTS_DIR = ROOT / "lua_fixes"
 BABEL_CDB_DIR = Path(os.environ.get("YGOAI_CDB_DIR", EXTERNAL / "BabelCDB"))
-DECKS_DIR = Path(os.environ.get("YGOAI_DECKS", ROOT / "download_human_decks" / "decks"))
+DECKS_DIR = Path(os.environ.get("YGOAI_DECKS", ROOT / "human_decks" / "decks"))
 # decks downloaded later (newer than the corpus): test games only, the corpus stays as is
-NEW_DECKS_DIR = Path(os.environ.get("YGOAI_NEW_DECKS", ROOT / "download_human_decks" / "decks_new"))
+NEW_DECKS_DIR = Path(os.environ.get("YGOAI_NEW_DECKS", ROOT / "human_decks" / "decks_new"))

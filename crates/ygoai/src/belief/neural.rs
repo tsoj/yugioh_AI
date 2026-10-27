@@ -1,4 +1,4 @@
-//! Deck completion by the learned deck models (the inference of download_human_decks/complete_deck.py),
+//! Deck completion by the learned deck models (the inference of human_decks/complete_deck.py),
 //! on burn code generated from their ONNX export (crates/deckmodels).
 //!
 //! An existence model predicts which cards a deck holds given the ones seen so far, a count model

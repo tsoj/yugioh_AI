@@ -34,7 +34,7 @@ Requirements: Rust (stable), cmake (HiGHS is built from `external/HiGHS`), a C++
 replay), the binding (`crates/ygoai_rs`) and HiGHS (`crates/highs`). The C++ core is only the Rust engine's
 test oracle, in `ygopro-core-rust/oracle/` (not fetched by default; see ygopro-core-rust/README.md).
 The learned deck completion (`--completion neural`) is compiled from the deck models' ONNX export
-(`download_human_decks/onnx_export/`, from `export_deck_models.py`; PyTorch only trains them), the
+(`human_decks/onnx_export/`, from `export_deck_models.py`; PyTorch only trains them), the
 corpus completion reads `build/deck_index.npz` (`scripts/build_deck_index.py`). The project
 environment is made with uv:
 
@@ -45,12 +45,12 @@ uv pip install --python .venv/bin/python "torch==2.13.0+rocm7.1" --index-url htt
 ```
 
 and scripts are run with `.venv/bin/python` (inference on the CPU, deterministic; the GPU is for training). The human deck lists
-are expected in `download_human_decks/decks/*.ydk` (override with `YGOAI_DECKS`), the newer ones (test games
-only) in `download_human_decks/decks_new/`. The code that makes them is in `download_human_decks/` (the data
+are expected in `human_decks/decks/*.ydk` (override with `YGOAI_DECKS`), the newer ones (test games
+only) in `human_decks/decks_new/`. The code that makes them is in `human_decks/` (the data
 and models are not in git):
 
 ```sh
-cd download_human_decks
+cd human_decks
 ../.venv/bin/python download_decks.py --out decks       # all public decks of ygoprodeck.com
 ../.venv/bin/python filter_decks.py --decks-dir decks   # moves invalid ones to decks_invalid/
 ../.venv/bin/python train_deck_existence.py --epochs 200 --fixed-k-eval-min-gap 10
@@ -472,8 +472,8 @@ The engine's models (`crates/ygoai/models/`, compiled in) and how to rebuild the
 - the card policy `card_policy_cp4_h16.json`: `ygoai-card-refs --independent` ->
   `scripts/train_card_policy.py`; the set policy `set_policy_s2_h16.json`: `ygoai-card-refs
   --independent --decisions` -> `scripts/train_set_policy.py`;
-- the deck models (`crates/deckmodels`, from `download_human_decks/onnx_export/`):
-  download_human_decks/README.md;
+- the deck models (`crates/deckmodels`, from `human_decks/onnx_export/`):
+  human_decks/README.md;
 - the corpus completion's index `build/deck_index.npz`: `scripts/build_deck_index.py`.
 
 The SPRT opening book (runs/books/match2.jsonl): scripts/book/README.md.
@@ -488,7 +488,7 @@ crates/ygoai/      the ygoai crate: messages, observations, actions, state views
 crates/ygoai_rs/   its Python binding (the belief checks' games and checks, replays)
 crates/highs/      HiGHS (external/HiGHS) for the belief's flow model
 crates/deckmodels/ the deck completion models (their ONNX export, compiled in)
-download_human_decks/  the deck corpus, its download and the deck completion models' training
+human_decks/       the deck corpus, its download and the deck completion models' training
 external/          submodules: CardScripts, BabelCDB, HiGHS
 lua_fixes/         corrected card scripts
 scripts/           command line tools

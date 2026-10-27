@@ -1,5 +1,5 @@
 //! The learned deck models (existence and counts): burn code that build.rs generates from their ONNX
-//! export (download_human_decks/export_deck_models.py), the weights embedded. The inference around
+//! export (human_decks/export_deck_models.py), the weights embedded. The inference around
 //! them (the deck completion) is ygoai::belief::neural; this crate offers the two forward passes on
 //! vocabulary indices, batch 1, on the CPU.
 
@@ -79,7 +79,7 @@ impl Models {
 #[cfg(not(deck_models))]
 impl Models {
     pub fn load() -> Result<Models, String> {
-        Err("the deck models were not exported when this was built (download_human_decks/export_deck_models.py)".into())
+        Err("the deck models were not exported when this was built (human_decks/export_deck_models.py)".into())
     }
     pub fn existence_logits(&self, _cards: &[(usize, i64)], _slots: f32) -> Vec<f32> {
         unreachable!()

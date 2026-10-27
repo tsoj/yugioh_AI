@@ -1,6 +1,6 @@
 """Builds the corpus completion's index (crates/ygoai/src/belief/completion.rs: CorpusCompletion,
 the neural completion's source for what its models cannot supply): the human deck lists
-(download_human_decks/decks/*.ydk) as numpy arrays in build/deck_index.npz, one row per (deck, card).
+(human_decks/decks/*.ydk) as numpy arrays in build/deck_index.npz, one row per (deck, card).
 
 Only the "train" split is indexed, so that games played with "test" split decks cannot look up the
 exact opponent deck list.

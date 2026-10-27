@@ -75,14 +75,14 @@ build() {
         submodules
         echo "$(date) building $1 ($sha)" >&2
         systemd-run --user --scope -q -p MemoryMax=28G -p MemorySwapMax=0 nice -n 10 \
-            env CARGO_TARGET_DIR="$TARGET" CARGO_BUILD_JOBS=6 YGOAI_DECK_MODELS_ONNX="$ROOT/download_human_decks/onnx_export" \
+            env CARGO_TARGET_DIR="$TARGET" CARGO_BUILD_JOBS=6 YGOAI_DECK_MODELS_ONNX="$ROOT/human_decks/onnx_export" \
             cargo build --release --manifest-path "$TREE/Cargo.toml" -p ygoai --bin ygoai-engine --bin ygoai-match --bin ygoai-bench-search >&2 \
             || { echo "build of $1 failed" >&2; exit 1; }
         mkdir -p "$dir/root"
         cp "$TARGET/release/ygoai-engine" "$TARGET/release/ygoai-match" "$TARGET/release/ygoai-bench-search" "$dir/"
         # (the ref's corrected scripts; the data is the checkout's)
         git archive "$sha" lua_fixes | tar -x -C "$dir/root"
-        for d in external download_human_decks build; do
+        for d in external build; do
             [ -e "$dir/root/$d" ] || ln -s "$ROOT/$d" "$dir/root/$d"
         done
     fi
