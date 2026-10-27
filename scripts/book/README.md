@@ -12,7 +12,9 @@ does not decide too often. Each step's usage is in its script's docstring.
    - the predictor: `build_onesided_data.py` (per opening of the SPRT records, how often the seat
      decided it) -> `train_onesided.py`;
    - `onesided_candidates.py score` keeps the less one-sided candidates.
-3. Test games: `bot-book-test CANDIDATES OUT --policies ...` plays each candidate with the RL
-   policy nets (runs/nn/rl1-rl4, boot1: given, their training was removed with the Python play
-   stack) and writes the wins of each seat. The match loads the rows where each seat won at least
-   `--book-min` games.
+3. Test games: `bot-book-test CANDIDATES runs/books/match2_tested.jsonl --policies ...` plays each
+   candidate with the RL policy nets (runs/nn/rl1-rl4, boot1: given, their training was removed
+   with the Python play stack) and writes the wins of each seat.
+4. The book: `select_openings.py runs/books/match2_tested.jsonl runs/books/match2.jsonl` keeps the
+   openings in which each seat won at least 2 test games (54,590 of 64,998), without the test
+   results. SPRTs draw from its first 42,049 openings (`scripts/sprt_branch.sh`: POOL).

@@ -54,7 +54,7 @@ fn main() {
     let n_guesses: usize = args.get(5).map_or(3, |s| s.parse().unwrap());
     let every: usize = args.get(6).map_or(3, |s| s.parse().unwrap());
     let skip: usize = std::env::var("BOT_SKIP").map_or(0, |s| s.parse().unwrap());
-    let book = load_book(args[1].as_ref(), 0, usize::MAX, n).expect("book");
+    let book = load_book(args[1].as_ref(), usize::MAX, n).expect("book");
     init(None).unwrap();
     let comp = completion("neural").unwrap();
     let mut out = std::env::var("BOT_SCALING").ok().map(|p| std::io::BufWriter::new(std::fs::File::create(p).expect("output file")));

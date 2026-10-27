@@ -14,7 +14,8 @@
 # Environment: ALLOW_DIVERGED=1 (NEW need not contain BASE); TC (default 10+0.1); NODES=N for fixed-node searches (BOT_SEARCH_NODES, --tc
 # 60+1); CONC (16 games at once); OPENINGS (10000: 20000 games); ELO ("0 5"; "none": all OPENINGS, no SPRT);
 # NAME (default NEW); SHUF (the book's shuffle seed, random by default); BOOK (runs/books/match2.jsonl)
-# and POOL (50000: the openings drawn from are the book's first POOL); BUILD_ONLY=1 builds and stops;
+# and POOL (42049: the openings drawn from are the book's first POOL, those of match2_tested.jsonl's
+# first 50000 lines; the later ones are kept for the evaluation's data and tests); BUILD_ONLY=1 builds and stops;
 # RESUME=runs/sprt/<name>_<time>.jsonl continues that stopped run (its finished pairs count, its
 # shuffle seed; ygo-arbiter --resume): under the same conditions, or knowingly not.
 # (all in one function, read whole before it runs, and the call and exit on one line: editing the
@@ -32,7 +33,7 @@ CONC=${CONC:-16}
 OPENINGS=${OPENINGS:-10000}
 ELO=${ELO:-0 5}
 BOOK=${BOOK:-runs/books/match2.jsonl}
-POOL=${POOL:-50000}
+POOL=${POOL:-42049}
 NAME=${NAME:-$(echo "$NEW" | tr '/' '-')}
 RESUME=${RESUME:-}
 if [ -n "$RESUME" ]; then

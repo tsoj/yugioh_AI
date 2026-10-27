@@ -843,6 +843,10 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
   as LLMs): crates/bot (was ygoai), crates/bot-py-binding (import bot_py_binding; was ygoai_rs),
   bins bot, bot-*; env BOT_* and YGO_*; build/bots. Records/baselines keep their JSON keys. SPRTs
   and snapshots refuse commits from before. Fixed-node match records identical.
+  Then (user, 2026-10-28): books hold only the openings to play (no "wins", no --book-min): the
+  tested book is runs/books/match2_tested.jsonl, scripts/book/select_openings.py writes match2.jsonl
+  (min wins 2: 54590 openings); sprt_branch.sh POOL 42049 = the old first 50000 lines' openings
+  (same openings for the same shuffle seed, checked).
   - Eval data tools were only in a temporary directory: now scripts/collect_sprt_games.py and
     scripts/sprt_games_to_npz.py, the rounds 2+3 npz in runs/data/rounds23/ (done on main).
 - [x] Remove the worktrees `wt-old` (main repo) and `wt-old-rust` (rust repo) in the scratchpad (gone).

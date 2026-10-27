@@ -32,7 +32,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let n: usize = args.get(2).map_or(2, |s| s.parse().unwrap());
-    let book = load_book(args[1].as_ref(), 0, usize::MAX, n).expect("book");
+    let book = load_book(args[1].as_ref(), usize::MAX, n).expect("book");
     let budget = args.get(3).map_or("0.5", |s| s.as_str());
     let (budget, max_nodes, depth) = match (budget.strip_suffix('n'), budget.strip_suffix('d')) {
         (Some(k), _) => (None, Some(k.parse::<u64>().unwrap()), None),
