@@ -10,9 +10,9 @@ use crate::belief::agent::AgentBelief;
 use crate::belief::completion::Completion;
 use crate::belief::games::play_with_streams;
 use crate::belief::replay::{BeliefReplay, RErr};
-use crate::game::{Deck, GameError, GameRecord, InitInfo, ObsItem, init_info};
-use crate::messages::Msg;
-use crate::state::{Snapshot, viewer_view};
+use ygo_arbiter::game::{Deck, GameError, GameRecord, InitInfo, ObsItem, init_info};
+use ygo_arbiter::messages::Msg;
+use ygo_arbiter::state::{Snapshot, viewer_view};
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct CheckResult {

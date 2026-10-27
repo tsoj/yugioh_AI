@@ -7,9 +7,9 @@ use ygo_core::api::{card as cd, duel as du, effect as ef};
 use ygo_core::constants::*;
 use ygo_core::duel::Duel;
 use ygo_core::types::{CardId, LuaFn, Value};
-use ygoai::actions::{Command, Response, encode};
-use ygoai::game::{DuelConfig, new_duel, run_until_prompt};
-use ygoai::messages::Msg;
+use ygo_arbiter::actions::{Command, Response, encode};
+use ygo_arbiter::game::{DuelConfig, new_duel, run_until_prompt};
+use ygo_arbiter::messages::Msg;
 
 const MYSTICAL_ELF: u32 = 15025844; // (a Level 4 Normal Monster)
 const COND: (u32, u64) = (0, 1); // (the test's condition flag, a script variable)

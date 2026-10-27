@@ -6,7 +6,7 @@ use pyo3::prelude::*;
 
 use ygoai::belief::check::{self, Mode};
 use ygoai::belief::completion::{Completion, by_name};
-use ygoai::game::{Deck, GameError, GameRecord};
+use ygo_arbiter::game::{Deck, GameError, GameRecord};
 
 use crate::convert::{de, items_of, py, py_items};
 
@@ -77,7 +77,7 @@ fn check_prefix<'py>(
     if cut > items.len() {
         return Err(PyValueError::new_err("cut past the stream"));
     }
-    let init = ygoai::game::init_info(&record, &record.setup(None).map_err(err)?, viewer);
+    let init = ygo_arbiter::game::init_info(&record, &record.setup(None).map_err(err)?, viewer);
     let completion = completion(completion_name)?;
     let timeout = timeout.map(std::time::Duration::from_secs_f64);
     let res = p.detach(|| check::check_prefix(&init, &items, cut, check::stopped(&record), completion, timeout));

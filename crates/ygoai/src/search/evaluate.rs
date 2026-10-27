@@ -6,8 +6,8 @@ use ygo_core::constants::*;
 use ygo_core::duel::Duel;
 use ygo_core::types::CardId;
 
-use crate::messages::Msg;
-use crate::state::parse_location_query;
+use ygo_arbiter::messages::Msg;
+use ygo_arbiter::state::parse_location_query;
 
 
 const MZONE_QUERY: u32 = QUERY_POSITION | QUERY_ATTACK | QUERY_DEFENSE;

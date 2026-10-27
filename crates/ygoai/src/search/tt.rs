@@ -4,7 +4,7 @@ use ygo_core::duel::Duel;
 use ygo_core::types::CardId;
 
 use super::params::TT_BITS;
-use crate::messages::Msg;
+use ygo_arbiter::messages::Msg;
 
 /// What a node's value is: exact (a PV node: a move raised alpha without reaching beta), a lower
 /// bound (a cut node: a move reached beta) or an upper bound (an all node: no move raised alpha).

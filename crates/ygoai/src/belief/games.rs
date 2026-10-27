@@ -2,8 +2,8 @@
 //! observation streams recorded while it is played.
 
 use crate::belief_agents::make_agent;
-use crate::game::{Deck, DuelConfig, GameError, GameRecord, ObsItem, ObservationLog, PlayOptions, new_record, play};
-use crate::messages::Msg;
+use ygo_arbiter::game::{Deck, DuelConfig, GameError, GameRecord, ObsItem, ObservationLog, PlayOptions, new_record, play};
+use ygo_arbiter::messages::Msg;
 
 /// The test game `seed` of the decks and the agents named (seeded 2 seed and 2 seed + 1), and each
 /// player's observation stream with the state views, up to the WIN message (a replay stops there;

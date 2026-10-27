@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 [dependencies]
 ygo-core = { path = "../../ygopro-core-rust/ygo-core" }
 ygoai = { path = "../ygoai" }
+ygo-arbiter = { path = "../../ygopro-core-rust/ygo-arbiter" }
 pythonize = "0.27"
 serde = "1"
 mimalloc = { version = "0.1", default-features = false }

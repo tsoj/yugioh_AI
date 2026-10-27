@@ -1,5 +1,5 @@
 //! How many choices each kind of decision has in the real game (not as the search caps them):
-//! replays recorded games (ygoai-datagen's OUT.games.jsonl or ygoai-match's records) and, per
+//! replays recorded games (ygoai-datagen's OUT.games.jsonl or ygo-arbiter's records) and, per
 //! prompt type, prints the count, mean, min, percentiles and max of the number of legal responses.
 //!
 //!   ygoai-prompt-stats GAMES.jsonl [JOBS] [MAX_GAMES]
@@ -16,12 +16,12 @@ use std::io::BufRead;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use ygoai::actions::{available_places, battle_options, check_sum, encode, idle_options};
+use ygo_arbiter::actions::{available_places, battle_options, check_sum, encode, idle_options};
 use ygoai::agents::declarable_codes;
 use ygoai::datarow::GameData;
-use ygoai::game::{GameRecord, init, run_until_prompt};
-use ygoai::messages::Msg;
-use ygoai::observe::{is_hidden_prompt, to_core_response};
+use ygo_arbiter::game::{GameRecord, init, run_until_prompt};
+use ygo_arbiter::messages::Msg;
+use ygo_arbiter::observe::{is_hidden_prompt, to_core_response};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;

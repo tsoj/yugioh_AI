@@ -8,11 +8,11 @@ use ygo_core::constants::*;
 
 use super::util::{V, jv};
 use super::*;
-use crate::actions::{Response, encode};
+use ygo_arbiter::actions::{Response, encode};
 use crate::belief::infer::{self, LocMap};
-use crate::messages::Msg;
-use crate::observe::{auto_response, filter_message, filter_prompt, is_hidden_prompt, to_core_response};
-use crate::state::{parse_location_query, viewer_view};
+use ygo_arbiter::messages::Msg;
+use ygo_arbiter::observe::{auto_response, filter_message, filter_prompt, is_hidden_prompt, to_core_response};
+use ygo_arbiter::state::{parse_location_query, viewer_view};
 
 /// messages that leave every card where it was (the rolling snapshot stays valid)
 fn no_moves(t: &str) -> bool {
@@ -222,7 +222,7 @@ impl BeliefReplay {
         let sig = prompt_sig(prompt);
         let mut k = 0;
         while self.lenient_rejected.contains(&(sig.clone(), resp_sig(&resp))) && k < 50 {
-            let mut rng = crate::pyrandom::PyRandom::new((self.pos * 131 + k) as i128);
+            let mut rng = ygo_arbiter::pyrandom::PyRandom::new((self.pos * 131 + k) as i128);
             if let Ok(r) = crate::agents::random_response(prompt, &mut rng, 0.05) {
                 resp = r;
             }
@@ -239,7 +239,7 @@ impl BeliefReplay {
             }
         }
         for k in 0..20 {
-            let mut rng = crate::pyrandom::PyRandom::new((self.pos * 31 + k) as i128);
+            let mut rng = ygo_arbiter::pyrandom::PyRandom::new((self.pos * 31 + k) as i128);
             if let Ok(c) = crate::agents::random_response(prompt, &mut rng, 0.05)
                 && encode(prompt, &c).is_ok()
             {

@@ -16,11 +16,11 @@ use std::io::Write;
 use ygoai::belief::guesses::{Guesses, resample};
 use ygoai::belief::tracker::Guess;
 use ygoai::belief_agents::{completion, naive_hidden_cards};
-use ygoai::game::{DuelConfig, init, new_record, run_until_prompt};
+use ygo_arbiter::game::{DuelConfig, init, new_record, run_until_prompt};
 use ygoai::heuristic::Heuristic;
-use ygoai::matchrun::load_book_head;
-use ygoai::observe::{auto_response, is_hidden_prompt};
-use ygoai::pyrandom::PyRandom;
+use ygo_arbiter::matchrun::load_book_head;
+use ygo_arbiter::observe::{auto_response, is_hidden_prompt};
+use ygo_arbiter::pyrandom::PyRandom;
 use ygoai::rduel::RDuel;
 use ygoai::search::{AlphaBeta, SearchParams, candidates, is_searched};
 use ygo_core::duel::Duel;
@@ -39,7 +39,7 @@ fn is_hidden(d: &ygo_core::duel::Duel, cid: u32) -> bool {
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// (best move, completed depth)
-fn search(duel: &Duel, prompt: &ygoai::messages::Msg, cands: &[ygoai::actions::Response], nodes: u64) -> (usize, i32) {
+fn search(duel: &Duel, prompt: &ygo_arbiter::messages::Msg, cands: &[ygo_arbiter::actions::Response], nodes: u64) -> (usize, i32) {
     let mut ab = AlphaBeta::default();
     ab.prepare();
     let params = SearchParams { budget: None, elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2], max_nodes: Some(nodes), depth: None, exact_root: false };
@@ -72,7 +72,7 @@ fn main() {
         let (mut prompt, mut si) = (None, 0usize);
         for _ in 0..400 {
             let step = run_until_prompt(&mut duel, prompt.as_ref()).unwrap();
-            if step.messages.iter().any(|m| matches!(m, ygoai::messages::Msg::Win { .. })) || step.ended {
+            if step.messages.iter().any(|m| matches!(m, ygo_arbiter::messages::Msg::Win { .. })) || step.ended {
                 break;
             }
             for m in &step.messages {
@@ -141,7 +141,7 @@ fn main() {
                 }
             }
             let resp = if is_hidden_prompt(&p) { auto_response() } else { players[player as usize].respond_to(&p, None).unwrap() };
-            duel.ocg_set_response(&ygoai::actions::encode(&p, &resp).unwrap());
+            duel.ocg_set_response(&ygo_arbiter::actions::encode(&p, &resp).unwrap());
             prompt = Some(p);
         }
     }

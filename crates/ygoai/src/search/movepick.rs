@@ -2,9 +2,9 @@
 
 use super::movegen::{candidates, card_sets};
 use super::params::HIST_BITS;
-use crate::actions::{Command, Response};
+use ygo_arbiter::actions::{Command, Response};
 use crate::heuristic::db_attack;
-use crate::messages::Msg;
+use ygo_arbiter::messages::Msg;
 
 /// The rules' preference among an idle command's commands (the lowest first).
 fn idle_rank(command: Command) -> i32 {
@@ -139,7 +139,7 @@ fn slot(identity: u128) -> usize {
 pub fn move_identity(m: &Msg, c: &Response, ctx: &KeyContext) -> u128 {
     let (mut kind, mut code, mut desc) = (0u128, 0u128, 0u128);
     let me = m.player().unwrap_or(0);
-    let entry = |list: &[crate::messages::Card], i: i64| {
+    let entry = |list: &[ygo_arbiter::messages::Card], i: i64| {
         list.get(i as usize).map(|e| (e.code as u128, (e.desc.unwrap_or(0) as u128) * 64 + e.loc as u128))
     };
     if let Some(command) = c.kind {

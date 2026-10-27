@@ -14,9 +14,9 @@ use ygo_core::types::CardData;
 
 use crate::belief::script_index::{GlobalKey, global_keys, win_condition_codes};
 use crate::belief::tracker::Need;
-use crate::game::card_db;
+use ygo_arbiter::game::card_db;
 use crate::paths::{build_dir, card_scripts_dir};
-use crate::pyrandom::PyRandom;
+use ygo_arbiter::pyrandom::PyRandom;
 
 /// Levels a monster Set (or Normal Summoned) with that many Tributes can have at all: effects
 /// can lower the Tributes a monster needs, so only a lower bound.

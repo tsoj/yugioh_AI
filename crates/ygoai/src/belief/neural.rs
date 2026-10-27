@@ -13,7 +13,7 @@ use std::sync::{Mutex, OnceLock};
 use crate::belief::completion::{Completion, CorpusCompletion, VanillaCompletion, canonical_code, card, fits_need};
 use crate::belief::script_index::{GlobalKey, global_keys, win_condition_codes};
 use crate::belief::tracker::Need;
-use crate::pyrandom::PyRandom;
+use ygo_arbiter::pyrandom::PyRandom;
 
 /// The temperature of `sample_deck`'s draws (the weights to the power 1 / T: towards
 /// `complete_deck`'s likeliest deck below 1), $YGOAI_RESAMPLE_T to override

@@ -12,10 +12,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
 use ygoai::belief_agents::BeliefSearchAgent;
-use ygoai::game::{Agent, AgentError, GameRecord, InitInfo, Observer, PlayOptions, play};
-use ygoai::actions::Response;
-use ygoai::messages::Msg;
-use ygoai::state::Snapshot;
+use ygo_arbiter::game::{Agent, AgentError, GameRecord, InitInfo, Observer, PlayOptions, play};
+use ygo_arbiter::actions::Response;
+use ygo_arbiter::messages::Msg;
+use ygo_arbiter::state::Snapshot;
 
 /// The recorded responses and the next one's index (hidden prompts' answers included).
 type Cursor = Rc<Cell<usize>>;
@@ -97,7 +97,7 @@ fn main() {
     let player: u32 = a[3].parse().unwrap();
     let (last, seeds): (usize, i64) = (a[4].parse().unwrap(), a[5].parse().unwrap());
     let name = a.get(6).map_or("alphabeta", |s| s.as_str());
-    ygoai::game::init(None).unwrap();
+    ygo_arbiter::game::init(None).unwrap();
     let base: GameRecord = serde_json::from_str(line).unwrap();
     let all: Vec<Response> = base.responses.iter().map(|r| r.response.clone()).collect();
     // (the search starts at PLAYER's LAST-th last decision)

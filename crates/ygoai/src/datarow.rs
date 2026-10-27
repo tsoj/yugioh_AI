@@ -14,12 +14,12 @@ use ygo_core::api::QueryInfo;
 use ygo_core::constants::*;
 use ygo_core::duel::Duel;
 
-use crate::actions::encode;
-use crate::game::{GameRecord, run_until_prompt};
-use crate::messages::Msg;
-use crate::observe::to_core_response;
+use ygo_arbiter::actions::encode;
+use ygo_arbiter::game::{GameRecord, run_until_prompt};
+use ygo_arbiter::messages::Msg;
+use ygo_arbiter::observe::to_core_response;
 use crate::search::{eval_features, evaluate_at, mover_features, mover_features2, mover_features3, mover_features4, rich_features};
-use crate::state::parse_location_query;
+use ygo_arbiter::state::parse_location_query;
 
 /// The feature sets a row can carry:
 /// - `mover3`: the 104 features of the `mover3` evaluation (`search::mover_features3`)
@@ -32,7 +32,7 @@ use crate::state::parse_location_query;
 ///   included: not for features as they are)
 pub const FEATURE_SETS: [&str; 8] = ["mover4", "mover3", "mover2", "mover", "eval", "rich", "static", "state"];
 
-pub use crate::game::Label;
+pub use ygo_arbiter::game::Label;
 
 /// A game of the data: its number (the line of its opening in the book), the record and the labels.
 #[derive(Debug, Clone, Serialize, Deserialize)]

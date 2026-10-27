@@ -8,12 +8,12 @@ use std::cmp::Ordering;
 use ygo_core::constants::*;
 use ygo_core::types::CardData;
 
-use crate::actions::{Command, Response, available_places, battle_options, idle_options};
+use ygo_arbiter::actions::{Command, Response, available_places, battle_options, idle_options};
 use crate::agents::{ActivationCaps, random_response};
-use crate::game::{Agent, AgentError, card_db};
-use crate::messages::{Card, Msg};
-use crate::pyrandom::PyRandom;
-use crate::state::Snapshot;
+use ygo_arbiter::game::{Agent, AgentError, card_db};
+use ygo_arbiter::messages::{Card, Msg};
+use ygo_arbiter::pyrandom::PyRandom;
+use ygo_arbiter::state::Snapshot;
 
 pub const CHAIN_MIN_LP: i32 = 2000;
 const UNKNOWN_VALUE: f64 = 1500.0;
@@ -364,7 +364,7 @@ impl Agent for HeuristicAgent {
     fn wants_state(&self) -> bool {
         true
     }
-    fn start(&mut self, player: u32, _init: &crate::game::InitInfo) -> Result<(), AgentError> {
+    fn start(&mut self, player: u32, _init: &ygo_arbiter::game::InitInfo) -> Result<(), AgentError> {
         self.0.player = player;
         Ok(())
     }

@@ -1,17 +1,17 @@
 //! Built-in agents: random, greedy, setter and mixed (the heuristic player: crate::heuristic). They
 //! make the choices of the former Python agents with the same seeds (Python's random numbers:
-//! crate::pyrandom), so that the belief checks' games stay the games of their baselines.
+//! ygo_arbiter::pyrandom), so that the belief checks' games stay the games of their baselines.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use ygo_core::constants::*;
 
-use crate::actions::{Command, DeclCard, Response, available_places, battle_options, check_sum, idle_options, is_declarable};
-use crate::game::{Agent, AgentError, card_db};
-use crate::messages::Msg;
-use crate::pyrandom::PyRandom;
-use crate::state::Snapshot;
+use ygo_arbiter::actions::{Command, DeclCard, Response, available_places, battle_options, check_sum, idle_options, is_declarable};
+use ygo_arbiter::game::{Agent, AgentError, card_db};
+use ygo_arbiter::messages::Msg;
+use ygo_arbiter::pyrandom::PyRandom;
+use ygo_arbiter::state::Snapshot;
 
 /// The codes an ANNOUNCE_CARD filter allows, in the card database's order.
 pub fn declarable_codes(opcodes: &[u64]) -> Vec<u32> {
@@ -229,15 +229,15 @@ pub const MAX_SAME_ACTIVATION_PER_TURN: u32 = 3;
 pub struct ActivationCaps(HashMap<(u32, u32, u32, Option<u64>), u32>);
 
 impl ActivationCaps {
-    fn key(e: &crate::messages::Card) -> (u32, u32, u32, Option<u64>) {
+    fn key(e: &ygo_arbiter::messages::Card) -> (u32, u32, u32, Option<u64>) {
         (e.code, e.loc, e.seq, e.desc)
     }
 
-    pub fn allowed(&self, e: &crate::messages::Card) -> bool {
+    pub fn allowed(&self, e: &ygo_arbiter::messages::Card) -> bool {
         self.0.get(&Self::key(e)).copied().unwrap_or(0) < MAX_SAME_ACTIVATION_PER_TURN
     }
 
-    pub fn note(&mut self, e: &crate::messages::Card) {
+    pub fn note(&mut self, e: &ygo_arbiter::messages::Card) {
         *self.0.entry(Self::key(e)).or_insert(0) += 1;
     }
 

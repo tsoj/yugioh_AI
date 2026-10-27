@@ -4,7 +4,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::messages::{Loc, Msg};
+use ygo_arbiter::messages::{Loc, Msg};
 
 pub static NULL: Value = Value::Null;
 

@@ -12,9 +12,9 @@ use ygo_core::duel::Duel;
 
 use crate::belief::completion::{Completion, VanillaCompletion, canonical_code, card, fits_need};
 use crate::belief::tracker::{Guess, Need};
-use crate::pyrandom::PyRandom;
+use ygo_arbiter::pyrandom::PyRandom;
 use crate::rduel::recreate_card;
-use crate::state::{LOCATIONS, viewer_view};
+use ygo_arbiter::state::{LOCATIONS, viewer_view};
 
 /// Stand-ins a hidden card of a known kind draws from when the drawn deck has no fitting card
 const STAND_IN_CHOICES: usize = 4;

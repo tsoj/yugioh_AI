@@ -1,4 +1,4 @@
-//! An agent as an engine process for an arbiter (match.py, ygoai-match):
+//! An agent as an engine process for the arbiter (ygo-arbiter; ygopro-core-rust/ygo-arbiter/PROTOCOL.md):
 //!
 //!   ygoai-engine NAME [SEED]
 //!
@@ -14,7 +14,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let name = args.get(1).cloned().unwrap_or_else(|| "random".into());
     let seed: Option<i64> = args.get(2).map(|s| s.parse().expect("SEED: an integer"));
-    if let Err(e) = ygoai::game::init(None) {
+    if let Err(e) = ygo_arbiter::game::init(None) {
         eprintln!("ygoai-engine: {e:?}");
         std::process::exit(1);
     }
@@ -24,7 +24,7 @@ fn main() {
         n += 1;
         ygoai::belief_agents::make_agent(&name, s)
     };
-    if let Err(e) = ygoai::engine::serve(factory) {
+    if let Err(e) = ygo_arbiter::engine::serve(factory) {
         eprintln!("ygoai-engine {name}: {e}");
         std::process::exit(1);
     }

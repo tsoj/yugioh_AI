@@ -13,7 +13,7 @@ use std::sync::{Mutex, OnceLock};
 
 use regex::Regex;
 
-use crate::game::card_db;
+use ygo_arbiter::game::card_db;
 use crate::paths::{card_scripts_dir, fixed_card_scripts_dir};
 
 fn re(s: &str) -> Regex {

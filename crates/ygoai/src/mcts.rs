@@ -17,13 +17,13 @@ use std::time::Instant;
 use ygo_core::constants::HINT_SELECTMSG;
 use ygo_core::duel::Duel;
 
-use crate::actions::{Response, encode};
+use ygo_arbiter::actions::{Response, encode};
 use crate::agents::random_response;
-use crate::game::run_until_prompt;
+use ygo_arbiter::game::run_until_prompt;
 use crate::heuristic::Heuristic;
-use crate::messages::Msg;
-use crate::observe::{auto_response, is_hidden_prompt};
-use crate::pyrandom::PyRandom;
+use ygo_arbiter::messages::Msg;
+use ygo_arbiter::observe::{auto_response, is_hidden_prompt};
+use ygo_arbiter::pyrandom::PyRandom;
 use crate::search::{MAX_AUTO_STEPS, candidates, is_searched};
 
 /// UCB1's exploration constant by default (results in [0, 1]; MctsParams::c to tune it)

@@ -30,8 +30,10 @@ cd crates/ygoai_rs && CARGO_TARGET_DIR=../../ygopro-core-rust/target VIRTUAL_ENV
 
 Requirements: Rust (stable), cmake (HiGHS is built from `external/HiGHS`), a C++ compiler, Python >=
 3.11 with numpy and maturin. The Rust code is one Cargo workspace (`Cargo.toml`): the ygoai crate
-(`crates/ygoai`: messages, observations, the arbiter `ygoai-match`, the agents' search, the belief
-replay), the binding (`crates/ygoai_rs`) and HiGHS (`crates/highs`). The C++ core is only the Rust engine's
+(`crates/ygoai`: the agents, their search, the belief replay), the binding (`crates/ygoai_rs`) and
+HiGHS (`crates/highs`). The duels, what each player sees, the engine protocol and the arbiter
+`ygo-arbiter` are in `ygopro-core-rust/ygo-arbiter` (a workspace of its own: `cargo build --release
+--manifest-path ygopro-core-rust/Cargo.toml -p ygo-arbiter`). The C++ core is only the Rust engine's
 test oracle, in `ygopro-core-rust/oracle/` (not fetched by default; see ygopro-core-rust/README.md).
 The learned deck completion (`--completion neural`) is compiled from the deck models' ONNX export
 (`human_decks/onnx_export/`, from `export_deck_models.py`; PyTorch only trains them), the
@@ -62,14 +64,14 @@ cd human_decks
 
 ```sh
 # engine development: a feature on a branch, SPRT against main (both refs built into
-# build/engines/<sha>, the Rust arbiter ygoai-match with the book runs/books/match2.jsonl, 10+0.1,
+# build/engines/<sha>, the arbiter ygo-arbiter with the book runs/books/match2.jsonl, 10+0.1,
 # bounds [0, 5]; log, records and a summary line in runs/sprt/); merge if H1
 scripts/sprt_branch.sh my-feature-branch main
 
-# any match of Rust engines (NAME=COMMAND; builtin:<agent> or an engine process speaking
-# crates/ygoai/src/protocol.rs): each book opening played with both seats, Fischer clock per decision
-build/engines/<sha>/ygoai-match --engine "new=build/engines/<sha>/ygoai-engine alphabeta" \
-    --engine base=builtin:random --book runs/books/match2.jsonl -n 200 --tc 10+0.1 --sprt 0 5
+# any match of engines (NAME=COMMAND: a process speaking the engine protocol): each book opening
+# played with both seats, Fischer clock per decision
+build/engines/<sha>/ygo-arbiter --engine "new=build/engines/<sha>/ygoai-engine alphabeta" \
+    --engine "base=build/engines/<sha>/ygoai-engine random" --book runs/books/match2.jsonl -n 200 --tc 10+0.1 --sprt 0 5
 
 # belief replay consistency test (both players, cut at the end of turns 1, 2 and 3, at 1/3,
 # 2/3 and the full game; turn cuts show as frac -1, -2, -3; --fractions / --turns choose);
@@ -481,10 +483,11 @@ The SPRT opening book (runs/books/match2.jsonl): scripts/book/README.md.
 ## Layout
 
 ```
-ygopro-core-rust/  submodule: the engine (ygo-core), the cards (ygo-cards), the differential
-                   tester (ygo-diff) and its C++ oracle (oracle/)
-crates/ygoai/      the ygoai crate: messages, observations, actions, state views, games and records,
-                   the arbiter (bin ygoai-match), agents and alpha-beta search, the belief replay
+ygopro-core-rust/  submodule: the engine (ygo-core), the cards (ygo-cards), the arbiter and the
+                   engine protocol (ygo-arbiter), the differential tester (ygo-diff) and its C++
+                   oracle (oracle/)
+crates/ygoai/      the ygoai crate: agents and alpha-beta search, the belief replay, an agent as an
+                   engine (bin ygoai-engine)
 crates/ygoai_rs/   its Python binding (the belief checks' games and checks, replays)
 crates/highs/      HiGHS (external/HiGHS) for the belief's flow model
 crates/deckmodels/ the deck completion models (their ONNX export, compiled in)

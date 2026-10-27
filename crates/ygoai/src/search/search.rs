@@ -24,11 +24,11 @@ use super::movepick::{KeyContext, move_key, ordered};
 use super::params::*;
 use super::stats::{Extension, NodeStats, NodeSummary, TtEntry};
 use super::tt::{NodeType, TranspositionTable, hash_key};
-use crate::actions::{Response, encode};
-use crate::game::run_until_prompt;
+use ygo_arbiter::actions::{Response, encode};
+use ygo_arbiter::game::run_until_prompt;
 use crate::heuristic::Heuristic;
-use crate::messages::Msg;
-use crate::observe::{auto_response, is_hidden_prompt};
+use ygo_arbiter::messages::Msg;
+use ygo_arbiter::observe::{auto_response, is_hidden_prompt};
 
 /// Why a line was not valued: out of time (the iteration is abandoned) or broken (the engine
 /// failed on it: the player to move avoids it).
@@ -679,7 +679,7 @@ fn inside_move(m: &Msg) -> bool {
 /// code that fails on a rare situation, as the C++ core would crash, e.g. Last Turn's forced
 /// attack during an attack, which leaves the outer attack without an attacker) is broken: the
 /// search avoids it, and the duel (a copy, or the last use of a position) is not used again.
-fn run_core(duel: &mut Duel, prompt: &Msg) -> Result<crate::game::Step, Stop> {
+fn run_core(duel: &mut Duel, prompt: &Msg) -> Result<ygo_arbiter::game::Step, Stop> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_until_prompt(duel, Some(prompt)))) {
         Ok(Ok(step)) => Ok(step),
         _ => Err(Stop::Broken),

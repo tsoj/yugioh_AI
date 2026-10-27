@@ -13,9 +13,9 @@ use super::*;
 use crate::belief::completion::{card, is_extra_deck};
 use crate::belief::infer::{self, Li};
 use crate::belief::tracker::Kind;
-use crate::actions::Command;
-use crate::messages::Msg;
-use crate::state::{LOCATIONS, parse_location_query};
+use ygo_arbiter::actions::Command;
+use ygo_arbiter::messages::Msg;
+use ygo_arbiter::state::{LOCATIONS, parse_location_query};
 
 fn li(con: u32, loc: u32, seq: u32) -> Li {
     Li { con, loc, seq, pos: 0 }
@@ -919,7 +919,7 @@ impl BeliefReplay {
             (is_extra_deck(d), d.lscale, d.level)
         };
         let race = si::races(code);
-        let db = crate::game::card_db();
+        let db = ygo_arbiter::game::card_db();
         let mut refs = si::candidates(code);
         if race != 0 {
             let mut extra: Vec<u32> = db.cards.values().filter(|c| c.race & race != 0 && c.alias == 0 && db.ots.get(&c.code).copied().unwrap_or(0) & 0x3 != 0).map(|c| c.code).collect();
@@ -2245,7 +2245,7 @@ impl BeliefReplay {
                 *seen_races.entry(d.race).or_default() += 1;
             }
         }
-        let db = crate::game::card_db();
+        let db = ygo_arbiter::game::card_db();
         let mut pool: Vec<u32> = db
             .cards
             .values()
@@ -2532,7 +2532,7 @@ impl BeliefReplay {
     }
 
     /// Whether a card with `code` can be put face-down where `to` says.
-    pub fn fits_destination(code: u32, to: &crate::messages::Loc) -> bool {
+    pub fn fits_destination(code: u32, to: &ygo_arbiter::messages::Loc) -> bool {
         let Some(c) = card(code) else { return true };
         if to.loc != LOCATION_SZONE || to.pos & POS_FACEDOWN == 0 {
             return true;

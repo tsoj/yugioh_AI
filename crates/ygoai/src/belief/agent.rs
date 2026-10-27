@@ -19,8 +19,8 @@ use std::collections::HashMap;
 use crate::belief::completion::Completion;
 use crate::belief::guesses::Guesses;
 use crate::belief::replay::BeliefReplay;
-use crate::game::{InitInfo, ObsItem};
-use crate::messages::Msg;
+use ygo_arbiter::game::{InitInfo, ObsItem};
+use ygo_arbiter::messages::Msg;
 use crate::rduel::RDuel;
 
 pub struct AgentBelief {
@@ -131,7 +131,7 @@ impl AgentBelief {
                 ObsItem::Prompt(_, Some(state)) => {
                     let mut here: HashMap<u32, usize> = HashMap::new();
                     for p in &state.players {
-                        for (_, loc) in crate::state::LOCATIONS {
+                        for (_, loc) in ygo_arbiter::state::LOCATIONS {
                             for c in p.pile(loc).iter().flatten() {
                                 if let Some(code) = c.code.filter(|&x| x != 0)
                                     && c.owner == Some(opp)

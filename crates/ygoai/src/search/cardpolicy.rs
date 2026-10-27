@@ -10,7 +10,7 @@ use ygo_core::constants::*;
 use ygo_core::duel::Duel;
 
 use crate::heuristic::RULED;
-use crate::messages::Msg;
+use ygo_arbiter::messages::Msg;
 
 const TYPES: [u32; 18] = [
     TYPE_MONSTER, TYPE_SPELL, TYPE_TRAP, TYPE_NORMAL, TYPE_EFFECT, TYPE_FUSION, TYPE_RITUAL, TYPE_SYNCHRO, TYPE_XYZ, TYPE_LINK, TYPE_PENDULUM, TYPE_TUNER,
@@ -30,7 +30,7 @@ pub const CARD_FEATURES: usize = TYPES.len() + 7 + 5 + LOCATIONS.len() + 2 + 1 +
 
 /// The cards to choose from of a card selection (several cards, one at a time, a sum, tributes)
 /// and its player.
-pub fn selection_cards(prompt: &Msg) -> Option<(&[crate::messages::Card], &u32)> {
+pub fn selection_cards(prompt: &Msg) -> Option<(&[ygo_arbiter::messages::Card], &u32)> {
     match prompt {
         Msg::SelectCard { cards, player, .. } | Msg::SelectSum { cards, player, .. } | Msg::SelectTribute { cards, player, .. } => Some((cards, player)),
         Msg::SelectUnselectCard { select_cards, player, .. } => Some((select_cards, player)),
@@ -250,7 +250,7 @@ impl CardPolicy {
 
     /// The indices of `sets` (responses choosing cards of the selection `prompt`, `set_policy_applies`) by
     /// score, the best first (ties: as given).
-    pub fn order_sets(&self, d: &Duel, prompt: &Msg, hint: Option<u64>, rules: &[usize], sets: &[crate::actions::Response]) -> Vec<usize> {
+    pub fn order_sets(&self, d: &Duel, prompt: &Msg, hint: Option<u64>, rules: &[usize], sets: &[ygo_arbiter::actions::Response]) -> Vec<usize> {
         let scores: Vec<f32> = card_features(d, prompt, hint, rules).iter().map(|x| self.score(x)).collect();
         let set_score: Vec<f32> = sets
             .iter()

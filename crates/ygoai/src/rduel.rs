@@ -8,8 +8,8 @@ use ygo_core::duel::Duel;
 use ygo_core::ext::{FORCED_COIN, FORCED_DICE, ForcedLoc};
 
 use crate::belief::infer::PlanEntry;
-use crate::game::{DuelConfig, new_duel};
-use crate::messages::{Msg, ParseError, parse, split_messages};
+use ygo_arbiter::game::{DuelConfig, new_duel};
+use ygo_arbiter::messages::{Msg, ParseError, parse, split_messages};
 
 /// A candidate's properties for `eligible_as`/`settable_as`: code, type, Level, attribute, race,
 /// ATK, DEF (ATK/DEF not below 0).

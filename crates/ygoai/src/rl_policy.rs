@@ -19,13 +19,13 @@ use std::sync::Arc;
 use ygo_core::constants::*;
 use ygo_core::types::CardData;
 
-use crate::actions::{Response, battle_options, idle_options};
+use ygo_arbiter::actions::{Response, battle_options, idle_options};
 use crate::belief::completion::npy_array;
-use crate::game::{Agent, AgentError, InitInfo};
+use ygo_arbiter::game::{Agent, AgentError, InitInfo};
 use crate::heuristic::{Heuristic, card};
-use crate::messages::{Card, Msg};
-use crate::pyrandom::PyRandom;
-use crate::state::{CardQuery, Snapshot};
+use ygo_arbiter::messages::{Card, Msg};
+use ygo_arbiter::pyrandom::PyRandom;
+use ygo_arbiter::state::{CardQuery, Snapshot};
 
 // -- cards: what they are (features.static_features) --------------------------------------------
 
@@ -279,7 +279,7 @@ fn actions(prompt: &Msg, cands: &[Response], snap: &Snapshot, me: u32, hint: Opt
                 Some(e) => {
                     let loc = e.loc & !LOCATION_OVERLAY;
                     // (the view's card there, else what the prompt says)
-                    let here = crate::state::LOCATIONS
+                    let here = ygo_arbiter::state::LOCATIONS
                         .iter()
                         .any(|&(_, l)| l == loc)
                         .then(|| snap.players[e.con as usize].pile(loc).get(e.seq as usize).and_then(|c| c.as_ref()))

@@ -6,7 +6,7 @@ use std::ops::{AddAssign, Sub};
 
 use super::movepick::prompt_label;
 use super::tt::NodeType;
-use crate::messages::Msg;
+use ygo_arbiter::messages::Msg;
 
 /// Declares a struct of named counters that add up and subtract (for totals and differences).
 macro_rules! counters {

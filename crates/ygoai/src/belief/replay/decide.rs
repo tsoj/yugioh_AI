@@ -8,13 +8,13 @@ use ygo_core::constants::*;
 
 use super::util::jv;
 use super::*;
-use crate::actions::{Command, Response, battle_options, encode, idle_options};
+use ygo_arbiter::actions::{Command, Response, battle_options, encode, idle_options};
 use crate::belief::completion::{card, fits_need, is_extra_deck, monster_sset_codes};
 use crate::belief::infer::{self, Certain, Li};
 use crate::belief::script_index as si;
 use crate::belief::tracker::{Kind, Need, leaves_field};
-use crate::messages::{Card, Msg};
-use crate::state::capture;
+use ygo_arbiter::messages::{Card, Msg};
+use ygo_arbiter::state::capture;
 
 const SUMMON_TYPE_NORMAL: u32 = 0x10000000;
 const SUMMON_TYPE_TRIBUTE: u32 = 0x11000000;
@@ -281,7 +281,7 @@ impl BeliefReplay {
     fn check_assumption(&mut self, duel: &RDuel, prompt: &Msg, up: &[Msg], ids: &[Option<u32>]) -> R<()> {
         let cards = prompt_cards(prompt, false);
         let mut lm = LocMap::new(&duel.all_cards(), &[]); // (past a shuffle, the moves belong to other selections)
-        let mut earlier: Vec<(crate::messages::Loc, crate::messages::Loc)> = Vec::new();
+        let mut earlier: Vec<(ygo_arbiter::messages::Loc, ygo_arbiter::messages::Loc)> = Vec::new();
         let opp = self.opponent;
         for (mi, m) in up.iter().enumerate() {
             if selection_end(m.name()) {
@@ -529,7 +529,7 @@ impl BeliefReplay {
     /// Main deck monsters of a race that fit (the lowest codes), when no filler has it.
     fn race_stand_ins(&mut self, race: u64, fits: &dyn Fn(u32) -> bool) -> Vec<u32> {
         let list = self.race_cache.entry(race).or_insert_with(|| {
-            let db = crate::game::card_db();
+            let db = ygo_arbiter::game::card_db();
             let mut v: Vec<u32> = db
                 .cards
                 .values()
@@ -717,7 +717,7 @@ impl BeliefReplay {
             if !entries.is_empty() && entries.iter().all(|e| fits(e.code) && usual_fit(e.code)) && tribute_ok {
                 return Ok(());
             }
-            let hand_now = |d: &mut RDuel| -> Option<crate::state::CardQuery> {
+            let hand_now = |d: &mut RDuel| -> Option<ygo_arbiter::state::CardQuery> {
                 let snap = capture(&mut d.d);
                 snap.players[src.con as usize].hand.get(src.seq as usize).cloned().flatten()
             };
@@ -816,7 +816,7 @@ impl BeliefReplay {
                             *seen_races.entry(x.race).or_default() += 1;
                         }
                     }
-                    let db = crate::game::card_db();
+                    let db = ygo_arbiter::game::card_db();
                     let mut pool: Vec<u32> = db
                         .cards
                         .values()

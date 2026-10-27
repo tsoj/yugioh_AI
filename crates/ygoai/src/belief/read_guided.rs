@@ -13,7 +13,7 @@ use ygo_core::constants::*;
 use crate::belief::completion::card;
 use crate::belief::replay::util::{V, jv};
 use crate::belief::replay::{Asm, BeliefReplay, Cp, RErr, ReadStep, Swaps, Where};
-use crate::game::ObsItem;
+use ygo_arbiter::game::ObsItem;
 use crate::rduel::RDuel;
 
 /// code, type, Level, Rank, attribute, race, ATK, DEF, archetypes, Link (see OCG_ExtReadLog)

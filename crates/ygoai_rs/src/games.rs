@@ -5,11 +5,11 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use ygo_core::duel::Duel;
-use ygoai::actions::Response;
-use ygoai::game::{Deck, DuelConfig, GameError, GameRecord, ObservationLog, Observer, replay};
-use ygoai::messages::Msg;
-use ygoai::observe::to_core_response;
-use ygoai::state::{Snapshot, capture};
+use ygo_arbiter::actions::Response;
+use ygo_arbiter::game::{Deck, DuelConfig, GameError, GameRecord, ObservationLog, Observer, replay};
+use ygo_arbiter::messages::Msg;
+use ygo_arbiter::observe::to_core_response;
+use ygo_arbiter::state::{Snapshot, capture};
 
 use crate::convert::{de, py, py_items};
 
@@ -22,7 +22,7 @@ fn err(e: GameError) -> PyErr {
 #[pyfunction]
 fn new_record<'py>(p: Python<'py>, decks: &Bound<'py, PyAny>, seed: i64) -> PyResult<Bound<'py, PyAny>> {
     let decks: Vec<Deck> = de(decks)?;
-    py(p, &ygoai::game::new_record(&decks, seed, &DuelConfig::default()))
+    py(p, &ygo_arbiter::game::new_record(&decks, seed, &DuelConfig::default()))
 }
 
 /// What `player` knows before the duel of `record` starts (game::init_info).
@@ -30,7 +30,7 @@ fn new_record<'py>(p: Python<'py>, decks: &Bound<'py, PyAny>, seed: i64) -> PyRe
 fn init_info<'py>(p: Python<'py>, record: &Bound<'py, PyAny>, player: u32) -> PyResult<Bound<'py, PyAny>> {
     let record: GameRecord = de(record)?;
     let duel = record.setup(None).map_err(err)?;
-    py(p, &ygoai::game::init_info(&record, &duel, player))
+    py(p, &ygo_arbiter::game::init_info(&record, &duel, player))
 }
 
 /// Both players' observation streams of a recorded game, replayed with the card creation order

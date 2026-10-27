@@ -1,5 +1,5 @@
 //! Training rows from recorded games, by replaying them (no search): ygoai-datagen's
-//! OUT.games.jsonl, or ygoai-match's records (--records; the engines' searches are their labels,
+//! OUT.games.jsonl, or ygo-arbiter's records (--records; the engines' searches are their labels,
 //! the game number its line), in; a row per labeled decision with the feature sets FEATURES out
 //! (`ygoai::datarow`).
 //!
@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ygoai::datarow::{FEATURE_SETS, GameData, replay_rows};
-use ygoai::game::{GameRecord, init};
+use ygo_arbiter::game::{GameRecord, init};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;

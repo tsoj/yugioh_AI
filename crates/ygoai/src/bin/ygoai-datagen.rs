@@ -16,11 +16,11 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
 use ygoai::datarow::{GameData, Label, row, set_results};
-use ygoai::game::{DuelConfig, RecordedResponse, init, new_record, run_until_prompt};
+use ygo_arbiter::game::{DuelConfig, RecordedResponse, init, new_record, run_until_prompt};
 use ygoai::heuristic::Heuristic;
-use ygoai::matchrun::load_book_head;
-use ygoai::messages::Msg;
-use ygoai::observe::{auto_response, is_hidden_prompt};
+use ygo_arbiter::matchrun::load_book_head;
+use ygo_arbiter::messages::Msg;
+use ygo_arbiter::observe::{auto_response, is_hidden_prompt};
 use ygoai::search::{AlphaBeta, SearchParams, candidates, is_searched};
 
 #[global_allocator]
@@ -28,7 +28,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 const MAX_DECISIONS: usize = 3000;
 
-fn play(book: &ygoai::matchrun::Opening, game: usize, nodes: u64, sets: &[String]) -> (Vec<Value>, GameData) {
+fn play(book: &ygo_arbiter::matchrun::Opening, game: usize, nodes: u64, sets: &[String]) -> (Vec<Value>, GameData) {
     let mut record = new_record(&book.decks, book.seed, &DuelConfig::default());
     let eval = std::env::var("YGOAI_EVAL").unwrap_or_else(|_| "built-in".into());
     record.agents = vec![format!("alphabeta {nodes} nodes, eval {eval}"); 2];
@@ -74,7 +74,7 @@ fn play(book: &ygoai::matchrun::Opening, game: usize, nodes: u64, sets: &[String
         } else {
             players[player as usize].respond_to(&p, None).unwrap()
         };
-        let Ok(r) = ygoai::actions::encode(&p, &resp) else { break };
+        let Ok(r) = ygo_arbiter::actions::encode(&p, &resp) else { break };
         duel.ocg_set_response(&r);
         record.responses.push(RecordedResponse { player, response: resp });
         prompt = Some(p);

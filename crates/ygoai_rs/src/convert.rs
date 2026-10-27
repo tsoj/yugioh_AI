@@ -5,7 +5,7 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-use ygoai::game::ObsItem;
+use ygo_arbiter::game::ObsItem;
 
 pub fn de<T: serde::de::DeserializeOwned>(v: &Bound<'_, PyAny>) -> PyResult<T> {
     pythonize::depythonize(v).map_err(|e| PyValueError::new_err(e.to_string()))

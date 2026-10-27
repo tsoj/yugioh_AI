@@ -19,10 +19,10 @@ use std::io::Write;
 use std::ops::AddAssign;
 use std::time::Instant;
 
-use ygoai::game::{DuelConfig, init, new_record, run_until_prompt};
+use ygo_arbiter::game::{DuelConfig, init, new_record, run_until_prompt};
 use ygoai::heuristic::Heuristic;
-use ygoai::matchrun::load_book_head;
-use ygoai::observe::{auto_response, is_hidden_prompt};
+use ygo_arbiter::matchrun::load_book_head;
+use ygo_arbiter::observe::{auto_response, is_hidden_prompt};
 use ygoai::search::stats::{Extension, Reductions, Subtree, TtEntry, Width};
 use ygoai::search::{AlphaBeta, NodeStats, SearchParams, candidates, is_searched};
 
@@ -70,7 +70,7 @@ fn main() {
         let mut prompt = None;
         for _ in 0..400 {
             let step = run_until_prompt(&mut duel, prompt.as_ref()).unwrap();
-            if step.messages.iter().any(|m| matches!(m, ygoai::messages::Msg::Win { .. })) || step.ended {
+            if step.messages.iter().any(|m| matches!(m, ygo_arbiter::messages::Msg::Win { .. })) || step.ended {
                 break;
             }
             for m in &step.messages {
@@ -122,7 +122,7 @@ fn main() {
                 }
             }
             let resp = if is_hidden_prompt(&p) { auto_response() } else { players[player as usize].respond_to(&p, None).unwrap() };
-            duel.ocg_set_response(&ygoai::actions::encode(&p, &resp).unwrap());
+            duel.ocg_set_response(&ygo_arbiter::actions::encode(&p, &resp).unwrap());
             prompt = Some(p);
         }
         if let Some(st) = ab.stats.take() {

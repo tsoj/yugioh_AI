@@ -4,10 +4,10 @@
 use ygo_core::constants::*;
 
 use super::params::{ROOT_COMBO_CARDS, ROOT_COMBO_WIDTH, SUM_STEPS};
-use crate::actions::{Command, Response, available_places, battle_options, check_sum, idle_options};
+use ygo_arbiter::actions::{Command, Response, available_places, battle_options, check_sum, idle_options};
 use crate::heuristic::{Heuristic, card, card_value};
-use crate::messages::Msg;
-use crate::state::Snapshot;
+use ygo_arbiter::messages::Msg;
+use ygo_arbiter::state::Snapshot;
 
 /// The prompts searched over (belief_mc.SEARCHED) when they have more than one candidate.
 pub fn is_searched(m: &Msg) -> bool {

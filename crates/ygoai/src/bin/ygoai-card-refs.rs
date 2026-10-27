@@ -6,7 +6,7 @@
 //!   ygoai-card-refs OUT.jsonl --games FILE [--games FILE ...] [--independent] [--positions N]
 //!       [--per-game N] [--ref-nodes N] [--jobs N] [--seed N]
 //!
-//! FILE: ygoai-datagen's OUT.games.jsonl or ygoai-match's records; the games shuffled, up to
+//! FILE: ygoai-datagen's OUT.games.jsonl or ygo-arbiter's records; the games shuffled, up to
 //! --per-game selections of each at random. A row: {"file", "line", "k": the decision's index,
 //! "hint", "player", "values": each card's (LP, for the selecting player), "rules": the rules'
 //! order, "depth", "features": each card's `cardpolicy::card_features`}.
@@ -35,16 +35,16 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use serde_json::json;
 use ygo_core::constants::HINT_SELECTMSG;
 use ygo_core::duel::Duel;
-use ygoai::actions::encode;
+use ygo_arbiter::actions::encode;
 use ygoai::datarow::GameData;
-use ygoai::game::{GameRecord, init, run_until_prompt};
+use ygo_arbiter::game::{GameRecord, init, run_until_prompt};
 use ygoai::heuristic::Heuristic;
-use ygoai::messages::Msg;
-use ygoai::observe::to_core_response;
-use ygoai::pyrandom::PyRandom;
+use ygo_arbiter::messages::Msg;
+use ygo_arbiter::observe::to_core_response;
+use ygo_arbiter::pyrandom::PyRandom;
 use ygoai::search::cardpolicy::{card_features, card_policy_applies, selection_cards};
-use ygoai::actions::Response;
-use ygoai::actions::available_places;
+use ygo_arbiter::actions::Response;
+use ygo_arbiter::actions::available_places;
 use ygoai::search::movegen::{is_searched, root_candidates};
 use ygoai::search::placepolicy::place_features;
 use ygoai::search::{AlphaBeta, SearchParams, Tune, candidates};

@@ -10,10 +10,10 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use ygo_core::constants::*;
 
-use crate::actions::{Command, Response, available_places, battle_options, check_sum, idle_options};
+use ygo_arbiter::actions::{Command, Response, available_places, battle_options, check_sum, idle_options};
 use crate::agents::{random_response, random_sum_selection};
-use crate::messages::{Card, Loc, Msg};
-use crate::pyrandom::PyRandom;
+use ygo_arbiter::messages::{Card, Loc, Msg};
+use ygo_arbiter::pyrandom::PyRandom;
 
 pub const LIST_LOCS: [u32; 5] = [LOCATION_DECK, LOCATION_HAND, LOCATION_GRAVE, LOCATION_REMOVED, LOCATION_EXTRA];
 

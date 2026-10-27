@@ -1,34 +1,20 @@
-//! The ygoai package in Rust: the parts of the Python package `ygoai` that the arbiter and the
-//! engines need, ported module by module and checked against the Python modules
-//! (scripts/rs_diff.py).
+//! The AI: agents and their search, the belief (what a player can deduce of the hidden cards),
+//! the learned evaluation's features. The duels, what each player sees of them, the engine
+//! protocol and matches are the arbiter's (ygopro-core-rust/ygo-arbiter); `ygoai-engine` runs an
+//! agent as an engine for it.
 //!
-//! * [`messages`]: parsing of the core's binary messages
-//! * [`observe`]: what each player may see of them, prompts in canonical order
-//! * [`actions`]: responses to prompts and their binary form
-//! * [`state`]: god view snapshots of a duel and each player's view
-//! * [`game`]: setting up, playing and replaying games, game records
-//! * [`agents`], [`heuristic`]: built-in agents
-//! * [`search`]: alpha-beta search on a duel
-//! * [`pyrandom`]: Python's random.Random, for the same games and choices as the Python package
-//!
-//! Every type serializes (serde) to the dicts of the Python modules, under the same keys.
+//! * [`agents`], [`heuristic`], [`belief_agents`]: agents
+//! * [`search`], [`mcts`]: searches on a duel
+//! * [`belief`]: the belief replay and deck completion
+//! * [`datarow`], [`rl_policy`]: training data, the learned policy
 
-pub mod actions;
 pub mod belief;
 pub mod belief_agents;
 pub mod datarow;
-pub mod engine;
 pub mod agents;
-pub mod game;
 pub mod heuristic;
-pub mod matchrun;
 pub mod mcts;
-pub mod messages;
-pub mod observe;
 pub mod rl_policy;
 pub mod paths;
-pub mod protocol;
 pub mod rduel;
-pub mod pyrandom;
 pub mod search;
-pub mod state;

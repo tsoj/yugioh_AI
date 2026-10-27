@@ -17,14 +17,14 @@ use std::rc::Rc;
 
 use ygo_core::constants::*;
 
-use crate::actions::Response;
+use ygo_arbiter::actions::Response;
 use crate::belief::completion::{Completion, VanillaCompletion};
 use crate::belief::infer::LocMap;
 use crate::belief::tracker::{Guess, Hypothesis, PoolLoc, Tracker, TrackerError, VarId};
-use crate::game::{Deck, DuelConfig, InitInfo, ObsItem, setup_duel};
-use crate::messages::Msg;
+use ygo_arbiter::game::{Deck, DuelConfig, InitInfo, ObsItem, setup_duel};
+use ygo_arbiter::messages::Msg;
 use crate::rduel::RDuel;
-use crate::state::Snapshot;
+use ygo_arbiter::state::Snapshot;
 
 pub const STATUS_END: i32 = 0;
 pub const STATUS_AWAITING: i32 = 1;
@@ -1168,7 +1168,7 @@ impl BeliefReplay {
         self.jit_from = Some(self.jit_from.unwrap_or(n));
         let ObsItem::Response(resp) = self.items[self.pos].clone() else { return div(Divergence::new(self.pos, "expected the viewer's response")) };
         self.advance()?;
-        let core = crate::observe::to_core_response(&prompt, self.viewer, &resp).map_err(|e| RErr::Other(format!("InvalidResponse: {e}")))?;
+        let core = ygo_arbiter::observe::to_core_response(&prompt, self.viewer, &resp).map_err(|e| RErr::Other(format!("InvalidResponse: {e}")))?;
         self.run_loop(duel, Some(prompt), Some(core), Some(resp))?;
         if self.final_prompt.is_none() {
             return div(Divergence::new(self.pos, "the replay did not reach the viewer's decision"));

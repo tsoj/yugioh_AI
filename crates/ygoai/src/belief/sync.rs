@@ -13,7 +13,7 @@ use ygo_core::constants::*;
 
 use crate::belief::completion::card;
 use crate::rduel::RDuel;
-use crate::state::{CardQuery, LOCATIONS, PRIVATE_STATUS, Snapshot};
+use ygo_arbiter::state::{CardQuery, LOCATIONS, PRIVATE_STATUS, Snapshot};
 
 const ZONES: u32 = LOCATION_MZONE | LOCATION_SZONE;
 const EXTRA_TYPES: u32 = TYPE_FUSION | TYPE_SYNCHRO | TYPE_XYZ | TYPE_LINK;

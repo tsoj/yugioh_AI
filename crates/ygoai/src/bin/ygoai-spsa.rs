@@ -17,7 +17,7 @@
 //!       [--params name,name,...] [--spec FILE] [--value-weight X] [--clamp LP]
 //!       [--alpha X] [--gamma X] [--a-ratio X] [--every N] [--compare NAME=VALUE,...]
 //!
-//! FILE: ygoai-datagen's OUT.games.jsonl or ygoai-match's records. --spec: lines "name, int|float,
+//! FILE: ygoai-datagen's OUT.games.jsonl or ygo-arbiter's records. --spec: lines "name, int|float,
 //! min, max, c_end, r_end" (the start is the current default). OUT_DIR gets refs.jsonl (the
 //! positions and their references, reused by a later run with the same files, seed, reference
 //! nodes and default parameters; --compare: only the defaults vs the given parameters on all the
@@ -30,12 +30,12 @@ use std::sync::mpsc;
 
 use serde_json::{Value, json};
 use ygo_core::duel::Duel;
-use ygoai::actions::{Response, encode};
+use ygo_arbiter::actions::{Response, encode};
 use ygoai::datarow::GameData;
-use ygoai::game::{GameRecord, init, run_until_prompt};
-use ygoai::messages::Msg;
-use ygoai::observe::{is_hidden_prompt, to_core_response};
-use ygoai::pyrandom::PyRandom;
+use ygo_arbiter::game::{GameRecord, init, run_until_prompt};
+use ygo_arbiter::messages::Msg;
+use ygo_arbiter::observe::{is_hidden_prompt, to_core_response};
+use ygo_arbiter::pyrandom::PyRandom;
 use ygoai::search::{AlphaBeta, SearchParams, Tune, candidates, is_searched};
 
 #[global_allocator]

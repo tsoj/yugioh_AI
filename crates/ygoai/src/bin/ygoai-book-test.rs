@@ -21,9 +21,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use serde_json::{Value, json};
-use ygoai::game::{Deck, DuelConfig, PlayOptions, init, new_record, play};
+use ygo_arbiter::game::{Deck, DuelConfig, PlayOptions, init, new_record, play};
 use ygoai::rl_policy::{RlPolicyAgent, RlPolicyNet};
-use ygoai::pyrandom::PyRandom;
+use ygo_arbiter::pyrandom::PyRandom;
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;

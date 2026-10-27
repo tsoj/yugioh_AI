@@ -9,21 +9,21 @@ use std::time::Instant;
 use serde_json::Value;
 use ygo_core::constants::*;
 
-use crate::actions::{Response, battle_options, encode, idle_options};
+use ygo_arbiter::actions::{Response, battle_options, encode, idle_options};
 use crate::agents::GreedyAgent;
 use crate::belief::agent::AgentBelief;
 use crate::belief::check::state_diffs;
 use crate::belief::completion::{Completion, CorpusCompletion, VanillaCompletion, by_name, card};
 use crate::belief::tracker::Need;
 use crate::belief::script_index::zone_sensitive;
-use crate::game::{Agent, AgentError, InitInfo, ObsItem, run_until_prompt};
+use ygo_arbiter::game::{Agent, AgentError, InitInfo, ObsItem, run_until_prompt};
 use crate::heuristic::Heuristic;
-use crate::messages::Msg;
-use crate::observe::to_core_response;
-use crate::pyrandom::PyRandom;
+use ygo_arbiter::messages::Msg;
+use ygo_arbiter::observe::to_core_response;
+use ygo_arbiter::pyrandom::PyRandom;
 use crate::rduel::RDuel;
 use crate::search::{AlphaBeta, SearchParams, TIME_BUFFER, hard_limit, root_candidates};
-use crate::state::{LOCATIONS, PlayerCards, Snapshot, capture, viewer_view};
+use ygo_arbiter::state::{LOCATIONS, PlayerCards, Snapshot, capture, viewer_view};
 use ygo_core::duel::Duel;
 
 /// public facts an approximate reconstruction may get wrong to be searched on
@@ -93,7 +93,7 @@ pub struct BeliefSearchAgent {
     items: Vec<ObsItem>,
     belief: Option<AgentBelief>,
     /// (the last response's search, `Agent::search_info`)
-    info: Option<crate::game::SearchInfo>,
+    info: Option<ygo_arbiter::game::SearchInfo>,
     /// (the arbiter's node limit per decision, before $YGOAI_SEARCH_NODES)
     node_limit: Option<u64>,
     /// (the clock's gains between searches: their sum and number; the clock after the last
@@ -233,7 +233,7 @@ impl BeliefSearchAgent {
                 self.nodes += ab.nodes - before;
                 let (nodes, secs) = (ab.nodes - before, t_search.elapsed().as_secs_f64());
                 self.root_values = ab.last_root_values.clone();
-                self.info = ab.last_value.is_finite().then_some(crate::game::SearchInfo { value: ab.last_value, depth: depth as u32, nodes, secs });
+                self.info = ab.last_value.is_finite().then_some(ygo_arbiter::game::SearchInfo { value: ab.last_value, depth: depth as u32, nodes, secs });
                 best
             }
             Search::Mcts { max_sims, c, rollout_turns, cutoff_eval } => {
@@ -309,7 +309,7 @@ impl Agent for BeliefSearchAgent {
         self.items.push(ObsItem::Response(resp.clone()));
         Ok(resp)
     }
-    fn search_info(&mut self) -> Option<crate::game::SearchInfo> {
+    fn search_info(&mut self) -> Option<ygo_arbiter::game::SearchInfo> {
         self.info.take()
     }
     fn set_node_limit(&mut self, nodes: Option<u64>) {

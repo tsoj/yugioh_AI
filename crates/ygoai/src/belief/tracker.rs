@@ -20,11 +20,11 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use ygo_core::constants::*;
 
-use crate::actions::{Command, Response};
-use crate::game::{InitInfo, ObsItem};
-use crate::messages::{Card, Msg};
-use crate::observe::loc_visible;
-use crate::state::{LOCATIONS, Snapshot};
+use ygo_arbiter::actions::{Command, Response};
+use ygo_arbiter::game::{InitInfo, ObsItem};
+use ygo_arbiter::messages::{Card, Msg};
+use ygo_arbiter::observe::loc_visible;
+use ygo_arbiter::state::{LOCATIONS, Snapshot};
 
 pub type VarId = usize;
 pub type PoolId = usize;
@@ -1319,7 +1319,7 @@ impl Tracker {
         want.iter().all(|(k, n)| have.get(k).copied().unwrap_or(0) >= *n)
     }
 
-    fn on_move(&mut self, code: u32, from: &crate::messages::Loc, to: &crate::messages::Loc, reason: u32) -> Result<()> {
+    fn on_move(&mut self, code: u32, from: &ygo_arbiter::messages::Loc, to: &ygo_arbiter::messages::Loc, reason: u32) -> Result<()> {
         if from.loc == LOCATION_DECK && from.pos & POS_FACEUP != 0 {
             self.faceup_leaves(from.con, from.loc, from.seq, code);
         }
@@ -1765,8 +1765,8 @@ impl Tracker {
                     if cards.len() != lst.len() {
                         return err(format!("size mismatch P{pl_idx} {name}: {} vs {}", cards.len(), lst.len()));
                     }
-                    let code = |c: &Option<crate::state::CardQuery>| c.as_ref().and_then(|c| c.code).unwrap_or(0);
-                    let position = |c: &Option<crate::state::CardQuery>| c.as_ref().and_then(|c| c.position).unwrap_or(0);
+                    let code = |c: &Option<ygo_arbiter::state::CardQuery>| c.as_ref().and_then(|c| c.code).unwrap_or(0);
+                    let position = |c: &Option<ygo_arbiter::state::CardQuery>| c.as_ref().and_then(|c| c.position).unwrap_or(0);
                     // (the owners of deck cards show too: they tell apart only where a card of the
                     // other player is in the deck)
                     let foreign = loc == LOCATION_DECK && cards.iter().any(|c| c.as_ref().and_then(|c| c.owner).unwrap_or(pi) != pi);
