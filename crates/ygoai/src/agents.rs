@@ -222,25 +222,26 @@ impl Agent for RandomAgent {
 
 pub const MAX_SAME_ACTIVATION_PER_TURN: u32 = 3;
 
-/// How often each effect was activated this turn, capped at `MAX_SAME_ACTIVATION_PER_TURN` (so
-/// that unlimited effects cannot loop forever); reset by NEW_TURN.
-#[derive(Default)]
-struct ActivationCaps(HashMap<(u32, u32, u32, Option<u64>), u32>);
+/// How often each effect was activated this turn, by (code, location, sequence, description),
+/// capped at `MAX_SAME_ACTIVATION_PER_TURN` (so that unlimited effects cannot loop forever); reset
+/// by NEW_TURN.
+#[derive(Clone, Default)]
+pub struct ActivationCaps(HashMap<(u32, u32, u32, Option<u64>), u32>);
 
 impl ActivationCaps {
     fn key(e: &crate::messages::Card) -> (u32, u32, u32, Option<u64>) {
         (e.code, e.loc, e.seq, e.desc)
     }
 
-    fn allowed(&self, e: &crate::messages::Card) -> bool {
+    pub fn allowed(&self, e: &crate::messages::Card) -> bool {
         self.0.get(&Self::key(e)).copied().unwrap_or(0) < MAX_SAME_ACTIVATION_PER_TURN
     }
 
-    fn note(&mut self, e: &crate::messages::Card) {
+    pub fn note(&mut self, e: &crate::messages::Card) {
         *self.0.entry(Self::key(e)).or_insert(0) += 1;
     }
 
-    fn observe(&mut self, msg: &Msg) {
+    pub fn observe(&mut self, msg: &Msg) {
         if let Msg::NewTurn { .. } = msg {
             self.0.clear();
         }

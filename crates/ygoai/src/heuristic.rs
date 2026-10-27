@@ -1,23 +1,20 @@
-//! The heuristic player: a fixed order of priorities
-//! in the Main Phase and in battle, chains above 2000 LP, yes to optional effects in its own turn,
-//! cards chosen by what the selection is for (the core's select hint before it). Repeated
-//! activations of the same effect are capped per turn. It makes the same choices as the Python
-//! one with the same seed (the search's rules: crate::search).
+//! The heuristic player: a fixed order of priorities in the Main Phase and in battle, chains above
+//! 2000 LP, yes to optional effects in its own turn, cards chosen by what the selection is for (the
+//! core's select hint before it). Repeated activations of the same effect are capped per turn
+//! (`ActivationCaps`). It is the search's rules (crate::search).
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
 
 use ygo_core::constants::*;
 use ygo_core::types::CardData;
 
 use crate::actions::{Command, Response, available_places, battle_options, idle_options};
-use crate::agents::random_response;
+use crate::agents::{ActivationCaps, random_response};
 use crate::game::{Agent, AgentError, card_db};
 use crate::messages::{Card, Msg};
 use crate::pyrandom::PyRandom;
 use crate::state::Snapshot;
 
-pub const MAX_SAME_ACTIVATION_PER_TURN: u32 = 3;
 pub const CHAIN_MIN_LP: i32 = 2000;
 const UNKNOWN_VALUE: f64 = 1500.0;
 
@@ -97,33 +94,18 @@ fn battle_value(entry: &Card, c: Option<&CardData>) -> f64 {
     (if pos & POS_DEFENSE != 0 { c.defense } else { c.attack }) as f64
 }
 
-type ActKey = (u32, u32, u32, Option<u64>);
-
 #[derive(Clone)]
 pub struct Heuristic {
     pub player: u32,
     pub rng: PyRandom,
-    /// activations per turn, by (code, location, sequence, description)
-    pub activations: HashMap<ActKey, u32>,
+    pub caps: ActivationCaps,
     /// the core's last select hint to this player
     pub hint: Option<u64>,
 }
 
 impl Heuristic {
     pub fn new(seed: i128, player: u32) -> Heuristic {
-        Heuristic { player, rng: PyRandom::new(seed), activations: HashMap::new(), hint: None }
-    }
-
-    fn key(e: &Card) -> ActKey {
-        (e.code, e.loc, e.seq, e.desc)
-    }
-
-    fn allowed(&self, e: &Card) -> bool {
-        self.activations.get(&Self::key(e)).copied().unwrap_or(0) < MAX_SAME_ACTIVATION_PER_TURN
-    }
-
-    fn note(&mut self, e: &Card) {
-        *self.activations.entry(Self::key(e)).or_insert(0) += 1;
+        Heuristic { player, rng: PyRandom::new(seed), caps: ActivationCaps::default(), hint: None }
     }
 
     /// The effect (or card) that `r` activates or Special Summons at `prompt` (an idle, battle or
@@ -140,19 +122,19 @@ impl Heuristic {
     /// Whether `r` at `prompt` stays within the uses per turn (MAX_SAME_ACTIVATION_PER_TURN) of
     /// what it activates; another player's (a search's) choices are capped like the rules' own.
     pub fn within_cap(&self, prompt: &Msg, r: &Response) -> bool {
-        Self::capped_use(prompt, r).is_none_or(|e| self.allowed(e))
+        Self::capped_use(prompt, r).is_none_or(|e| self.caps.allowed(e))
     }
 
     /// Counts `r` at `prompt` (chosen by someone else, e.g. the search) towards the cap.
     pub fn note_choice(&mut self, prompt: &Msg, r: &Response) {
         if let Some(e) = Self::capped_use(prompt, r) {
-            self.note(e);
+            self.caps.note(e);
         }
     }
 
     pub fn observe_msg(&mut self, m: &Msg) {
+        self.caps.observe(m);
         match m {
-            Msg::NewTurn { .. } => self.activations.clear(),
             Msg::Hint { hint_type, player, data } if *hint_type == HINT_SELECTMSG && *player == self.player => self.hint = Some(*data),
             _ => {}
         }
@@ -174,8 +156,8 @@ impl Heuristic {
                 for o in &opts {
                     if o.kind == Some(Command::Activate) {
                         let e = &activatable[o.index.unwrap() as usize];
-                        if self.allowed(e) {
-                            self.note(e);
+                        if self.caps.allowed(e) {
+                            self.caps.note(e);
                             return Ok(o.clone());
                         }
                     }
@@ -193,8 +175,8 @@ impl Heuristic {
                 }
                 if state.is_some_and(|s| s.lp[me as usize] > CHAIN_MIN_LP) {
                     for (i, c) in chains.iter().enumerate() {
-                        if self.allowed(c) {
-                            self.note(c);
+                        if self.caps.allowed(c) {
+                            self.caps.note(c);
                             return Ok(Response::index(i));
                         }
                     }
@@ -246,16 +228,16 @@ impl Heuristic {
         // a. activate a card or effect
         for o in by_kind(Command::Activate) {
             let e = &activatable[o.index.unwrap() as usize];
-            if self.allowed(e) {
-                self.note(e);
+            if self.caps.allowed(e) {
+                self.caps.note(e);
                 return o.clone();
             }
         }
         // b. Special Summon
         for o in by_kind(Command::Spsummon) {
             let e = &spsummonable[o.index.unwrap() as usize];
-            if self.allowed(e) {
-                self.note(e);
+            if self.caps.allowed(e) {
+                self.caps.note(e);
                 return o.clone();
             }
         }

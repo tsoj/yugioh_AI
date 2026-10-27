@@ -564,10 +564,10 @@ impl SearchState<'_> {
             return self.make_and_search(duel, prompt, mv, child);
         }
         let mut new_duel = duel.clone();
-        let saved: Vec<_> = self.policies.iter().map(|p| (p.activations.clone(), p.hint)).collect();
+        let saved: Vec<_> = self.policies.iter().map(|p| (p.caps.clone(), p.hint)).collect();
         let result = self.make_and_search(&mut new_duel, prompt, mv, child);
-        for (p, (activations, hint)) in self.policies.iter_mut().zip(saved) {
-            (p.activations, p.hint) = (activations, hint);
+        for (p, (caps, hint)) in self.policies.iter_mut().zip(saved) {
+            (p.caps, p.hint) = (caps, hint);
         }
         match result {
             Err(Stop::Broken) if !self.should_stop() => {
