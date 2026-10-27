@@ -827,6 +827,8 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
   corpus completion fallback.
   Then (user, 2026-10-27): the binding moved to crates/ygoai_rs, the Python package ygoai/ to
   scripts/common/ (f4b526f).
+  And download_human_decks/ to human_decks/ (snapshots of older commits link it under the old
+  name; engine builds no longer link it: the engines never read the decks).
   - Eval data tools were only in a temporary directory: now scripts/collect_sprt_games.py and
     scripts/sprt_games_to_npz.py, the rounds 2+3 npz in runs/data/rounds23/ (done on main).
 - [x] Remove the worktrees `wt-old` (main repo) and `wt-old-rust` (rust repo) in the scratchpad (gone).
