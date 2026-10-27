@@ -28,14 +28,18 @@ class Crash:
 
 def _init_worker(initializer, initargs, parent: int | None = None):
     faulthandler.enable(file=sys.stderr, all_threads=False)
-    # (end with the parent, however it ends: the workers are started by a forkserver,
-    # outside its process group, and would otherwise live on, holding their memory)
+    # (end with the parent, however it ends: the workers are started by it or by a
+    # forkserver (which ends with it), outside its process group, and would otherwise
+    # live on, holding their memory)
     try:
         ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
     except (OSError, AttributeError):
         pass
-    if parent is not None and os.getppid() != parent:
-        os._exit(0)  # (it died before the line above)
+    if parent is not None:
+        try:
+            os.kill(parent, 0)
+        except ProcessLookupError:
+            os._exit(0)  # (it died before the line above)
     if initializer is not None:
         initializer(*initargs)
 
