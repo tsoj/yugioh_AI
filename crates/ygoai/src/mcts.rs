@@ -18,7 +18,7 @@ use ygo_core::constants::HINT_SELECTMSG;
 use ygo_core::duel::Duel;
 
 use ygo_arbiter::actions::{Response, encode};
-use crate::agents::random_response;
+use ygo_arbiter::random::random_response;
 use ygo_arbiter::game::run_until_prompt;
 use crate::heuristic::Heuristic;
 use ygo_arbiter::messages::Msg;

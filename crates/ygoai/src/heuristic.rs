@@ -9,7 +9,8 @@ use ygo_core::constants::*;
 use ygo_core::types::CardData;
 
 use ygo_arbiter::actions::{Command, Response, available_places, battle_options, idle_options};
-use crate::agents::{ActivationCaps, random_response};
+use crate::agents::ActivationCaps;
+use ygo_arbiter::random::random_response;
 use ygo_arbiter::game::{Agent, AgentError, card_db};
 use ygo_arbiter::messages::{Card, Msg};
 use ygo_arbiter::pyrandom::PyRandom;

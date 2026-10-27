@@ -11,7 +11,7 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use ygo_core::constants::*;
 
 use ygo_arbiter::actions::{Command, Response, available_places, battle_options, check_sum, idle_options};
-use crate::agents::{random_response, random_sum_selection};
+use ygo_arbiter::random::{random_response, random_sum_selection};
 use ygo_arbiter::messages::{Card, Loc, Msg};
 use ygo_arbiter::pyrandom::PyRandom;
 

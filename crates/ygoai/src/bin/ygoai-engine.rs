@@ -6,6 +6,8 @@
 //! alphabeta_naive, mcts (options by environment: YGOAI_SEARCH_NODES, YGOAI_MCTS_*, YGOAI_COMPLETION).
 //! Game n of the process plays with seed SEED + n (without SEED: unseeded).
 
+use ygo_arbiter::protocol::Identity;
+
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
@@ -19,12 +21,13 @@ fn main() {
         std::process::exit(1);
     }
     let mut n = 0;
-    let factory = || {
+    let factory = |_: &serde_json::Map<String, serde_json::Value>| {
         let s = seed.map(|s| s + n);
         n += 1;
         ygoai::belief_agents::make_agent(&name, s)
     };
-    if let Err(e) = ygo_arbiter::engine::serve(factory) {
+    let id = Identity { name: format!("ygoai {name}"), more: serde_json::Map::new() };
+    if let Err(e) = ygo_arbiter::engine::serve(id, Vec::new(), factory) {
         eprintln!("ygoai-engine {name}: {e}");
         std::process::exit(1);
     }

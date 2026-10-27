@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ygo_arbiter::actions::{available_places, battle_options, check_sum, encode, idle_options};
-use ygoai::agents::declarable_codes;
+use ygo_arbiter::random::declarable_codes;
 use ygoai::datarow::GameData;
 use ygo_arbiter::game::{GameRecord, init, run_until_prompt};
 use ygo_arbiter::messages::Msg;

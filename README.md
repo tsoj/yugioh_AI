@@ -114,25 +114,9 @@ cargo test --release -p ygoai                    # (with CARGO_TARGET_DIR=ygopro
 
 ## The engine protocol
 
-An AI is a process speaking JSON lines on stdin/stdout (see `crates/ygoai/src/protocol.rs`):
-
-```
--> {"type": "init", "player": 0, "deck": {"main": [...], "extra": [...]}, "extra_order": [...],
-    "opponent_deck_size": 40, "opponent_extra_size": 15, "config": {...}}
--> {"type": "prompt", "obs": [...messages since the last prompt...], "prompt": {...}, "state": {...},
-    "clock": {"remaining": 41.3, "increment": 0.3}}
-<- {"response": {...}}
--> {"type": "end", "obs": [...], "result": {"winner": 1, "reason": 1, ...}}
-```
-
-`obs` are the core's messages as parsed by `messages.rs`, filtered for the player by `observe.rs`
-(in `crates/ygoai/src/`): the player sees what an EDOPro client would show, minus several leaks that
-EDOPro has (hidden-card effect descriptions in card hints, stale "reason" fields, deck positions
-that distinguish returned cards, ...). A `prompt` is a core selection message, and the response
-format for each kind is documented in `actions.rs`. `state` is the player's view of the
-whole field. `clock` (only under a time control, `ygoai-match --tc BASE+INC`: Fischer, per decision)
-is the time the player has left; the time the response takes is subtracted, then the increment
-added, and below zero the player loses on time.
+An AI is a process speaking JSON lines on stdin/stdout with the arbiter, like a chess engine under
+fastchess: `ygopro-core-rust/ygo-arbiter/PROTOCOL.md`. `ygoai-engine NAME` runs one of our agents as
+such an engine; `ygo-random-engine` is the reference engine.
 
 ## How the belief replay works (`crates/ygoai/src/belief/`)
 

@@ -223,7 +223,7 @@ impl BeliefReplay {
         let mut k = 0;
         while self.lenient_rejected.contains(&(sig.clone(), resp_sig(&resp))) && k < 50 {
             let mut rng = ygo_arbiter::pyrandom::PyRandom::new((self.pos * 131 + k) as i128);
-            if let Ok(r) = crate::agents::random_response(prompt, &mut rng, 0.05) {
+            if let Ok(r) = ygo_arbiter::random::random_response(prompt, &mut rng, 0.05) {
                 resp = r;
             }
             k += 1;
@@ -240,7 +240,7 @@ impl BeliefReplay {
         }
         for k in 0..20 {
             let mut rng = ygo_arbiter::pyrandom::PyRandom::new((self.pos * 31 + k) as i128);
-            if let Ok(c) = crate::agents::random_response(prompt, &mut rng, 0.05)
+            if let Ok(c) = ygo_arbiter::random::random_response(prompt, &mut rng, 0.05)
                 && encode(prompt, &c).is_ok()
             {
                 return Ok(c);
