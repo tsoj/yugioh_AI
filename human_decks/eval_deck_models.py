@@ -67,14 +67,15 @@ def stored(model, bits):
     return len(zstd.compress(b"".join(parts), level=19))
 
 
-def decks_of(dataset_type, paths, vocab, split, n, min_cards=0):
+def decks_of(dataset_type, paths, vocab, split, n, min_cards=0, size=len):
+    """The set's decks as the dataset type makes them; `size`: a deck's number of cards."""
     ds = dataset_type(paths, vocab)
     decks = ds.decks
     if split:
         n_val = max(1, len(ds) // 50)
         _, val = random_split(ds, [len(ds) - n_val, n_val], generator=torch.Generator().manual_seed(0))
         decks = [ds.decks[i] for i in val.indices][:n]
-    return [d for d in decks if len(d) >= min_cards]
+    return [d for d in decks if size(d) >= min_cards]
 
 
 def main():
@@ -82,7 +83,7 @@ def main():
     ap.add_argument("checkpoints", nargs="+")
     ap.add_argument("--decks", type=int, default=2000, help="decks per set")
     ap.add_argument("--min-cards", type=int, default=0,
-                    help="only decks with at least this many cards in the vocabulary (existence: the "
+                    help="only decks with at least this many cards in the vocabulary (the "
                          "bot's decks have 40 or more)")
     ap.add_argument("--bits", type=int, default=32, choices=[32, 16, 8, 6, 4])
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -109,7 +110,8 @@ def main():
                         losses.append(r["loss"])
                     cells.append(f"{name} loss {1e3 * sum(losses) / len(losses):.3f}e-3")
                 else:
-                    decks = decks_of(tc.DeckCountsDataset, paths, ck["vocab"], split, args.decks)
+                    decks = decks_of(tc.DeckCountsDataset, paths, ck["vocab"], split, args.decks, args.min_cards,
+                                     size=lambda d: sum(d[1]))
                     random.seed(0)
                     a = tc.eval_accuracy(model, DataLoader(decks, batch_size=256, collate_fn=tc.collate_counts), args.device)
                     cells.append(f"{name} {a['overall']:.3f}")
