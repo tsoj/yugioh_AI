@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Evaluates deck model checkpoints on held-out decks, with the trainers' own metrics: for the
-existence model the recall@20 of the unseen cards with K cards visible, for the counts model the
-accuracy of the copies. The deck sets:
+existence model the recall@20 of the unseen cards with K cards visible and the loss (binary cross
+entropy, mean over the K: it measures the calibration too), for the counts model the accuracy of the
+copies. The deck sets:
 
   val   the training's validation split of decks/ (random_split, seed 0, as the trainers make it)
   new   decks_new/ (downloaded later, never trained on)
@@ -66,19 +67,23 @@ def stored(model, bits):
     return len(zstd.compress(b"".join(parts), level=19))
 
 
-def decks_of(dataset_type, paths, vocab, split, n):
+def decks_of(dataset_type, paths, vocab, split, n, min_cards=0):
     ds = dataset_type(paths, vocab)
-    if not split:
-        return ds.decks
-    n_val = max(1, len(ds) // 50)
-    _, val = random_split(ds, [len(ds) - n_val, n_val], generator=torch.Generator().manual_seed(0))
-    return [ds.decks[i] for i in val.indices][:n]
+    decks = ds.decks
+    if split:
+        n_val = max(1, len(ds) // 50)
+        _, val = random_split(ds, [len(ds) - n_val, n_val], generator=torch.Generator().manual_seed(0))
+        decks = [ds.decks[i] for i in val.indices][:n]
+    return [d for d in decks if len(d) >= min_cards]
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("checkpoints", nargs="+")
     ap.add_argument("--decks", type=int, default=2000, help="decks per set")
+    ap.add_argument("--min-cards", type=int, default=0,
+                    help="only decks with at least this many cards in the vocabulary (existence: the "
+                         "bot's decks have 40 or more)")
     ap.add_argument("--bits", type=int, default=32, choices=[32, 16, 8, 6, 4])
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
@@ -95,11 +100,14 @@ def main():
         with torch.no_grad():
             for name, paths, split in sets:
                 if existence:
-                    decks = decks_of(te.DeckDataset, paths, ck["vocab"], split, args.decks)
+                    decks = decks_of(te.DeckDataset, paths, ck["vocab"], split, args.decks, args.min_cards)
+                    losses = []
                     for k in KS:
                         random.seed(0)
                         r = te.eval_at_k(model, decks, len(ck["vocab"]), args.device, k, batch_size=256)
                         cells.append(f"{name} k{k} {r['r@20']:.3f}")
+                        losses.append(r["loss"])
+                    cells.append(f"{name} loss {1e3 * sum(losses) / len(losses):.3f}e-3")
                 else:
                     decks = decks_of(tc.DeckCountsDataset, paths, ck["vocab"], split, args.decks)
                     random.seed(0)
