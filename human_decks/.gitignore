@@ -8,4 +8,3 @@ vocab.pkl
 sweep_results*/
 *.onnx
 onnx_export/
-deck_models.bin

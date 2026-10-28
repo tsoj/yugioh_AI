@@ -6,7 +6,7 @@
 #
 # Each ref is built once into build/bots/<sha>/ (bot, bot-bench-search and its engine's arbiter
 # ygo-arbiter), in a worktree of its own (build/bench-tree, target build/bench-target; its
-# submodules at the ref's commits, the deck models the checkout's): the checkout itself is never
+# submodules at the ref's commits, the deck models the ref's, older refs' the checkout's ONNX export): the checkout itself is never
 # switched. Each build's bots run with YGO_ROOT=build/bots/<sha>/root: the ref's lua_fixes/, the
 # checkout's data. The match uses BASE's ygo-arbiter. Log and records go to runs/sprt/<name>_<time>.*, a summary line to
 # runs/sprt/results.jsonl.
@@ -76,10 +76,10 @@ build() {
         git -C "$TREE" checkout -q --detach "$sha"
         submodules
         echo "$(date) building $1 ($sha)" >&2
-        # (the deck models' export; commits before deck_models.bin read the ONNX export)
+        # (the deck models: the ref's human_decks/deck_models.bin; refs before it read the
+        # checkout's ONNX export)
         systemd-run --user --scope -q -p MemoryMax=28G -p MemorySwapMax=0 nice -n 10 \
-            env CARGO_TARGET_DIR="$TARGET" CARGO_BUILD_JOBS=6 YGO_DECK_MODELS="$ROOT/human_decks/deck_models.bin" \
-                YGO_DECK_MODELS_ONNX="$ROOT/human_decks/onnx_export" \
+            env CARGO_TARGET_DIR="$TARGET" CARGO_BUILD_JOBS=6 YGO_DECK_MODELS_ONNX="$ROOT/human_decks/onnx_export" \
             cargo build --release --manifest-path "$TREE/Cargo.toml" -p bot --bin bot --bin bot-bench-search >&2 \
             || { echo "build of $1 failed" >&2; exit 1; }
         systemd-run --user --scope -q -p MemoryMax=28G -p MemorySwapMax=0 nice -n 10 \

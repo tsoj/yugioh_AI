@@ -71,8 +71,6 @@ Data that is not in git:
 
 - The human deck lists, in `human_decks/decks/` and `human_decks/decks_new/`.
   `human_decks/README.md` tells how to download them and train the deck models.
-- The deck models' export, `human_decks/deck_models.bin`. The build embeds it in the bot. Without
-  it, the bot builds without the `neural` completion; then set `BOT_COMPLETION=corpus`.
 - The index of the `corpus` completion, `build/deck_index.npz`: `scripts/build_deck_index.py`.
 
 ## Development
