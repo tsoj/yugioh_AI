@@ -12,7 +12,9 @@ Cards outside a model's vocabulary are left out of its decks, as in training.
 
 The size is that of the weights as stored, compressed with zstd -19. With --bits N (16, 8, 6, 4),
 each matrix is stored as N-bit integers with a 16-bit scale per row, the other weights as 16-bit
-floats, and the model is evaluated with the weights it would get back from that.
+floats, and the model is evaluated with the weights it would get back from that. A counts model on an
+existence model's card embeddings (--shared-table) gets them from that model, stored the same way;
+their bytes count for the existence model.
 
     ../.venv/bin/python eval_deck_models.py CHECKPOINT.pt [...] [--decks 2000] [--bits 8] [--device cuda]
 """
@@ -94,6 +96,14 @@ def main():
         existence = "slots_scale" in ck["config"]
         model = (te.ExistenceModel if existence else tc.CountModel)(**ck["config"])
         model.load_state_dict(ck["state_dict"])
+        if hasattr(model, "shared_table") and args.bits < 32:
+            # the existence model's card embeddings as the bot would have them: from its stored weights
+            ex_ck = torch.load(ck["shared_table"], map_location="cpu", weights_only=False)
+            ex = te.ExistenceModel(**ex_ck["config"])
+            ex.load_state_dict(ex_ck["state_dict"])
+            stored(ex, args.bits)
+            with torch.no_grad():
+                model.shared_table.copy_(ex.card_emb.weight if hasattr(ex, "card_emb") else ex.card_table())
         model.to(args.device).eval()
         params = sum(p.numel() for p in model.parameters())
         size = stored(model, args.bits)
