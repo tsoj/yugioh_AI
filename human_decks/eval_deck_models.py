@@ -46,21 +46,23 @@ def deck_sets(n):
     return sets
 
 
-def stored(model, bits):
-    """Quantizes the model's weights in place (bits < 32) and returns their compressed size."""
+def stored(model, bits, bits_for=None):
+    """Quantizes the model's weights in place (bits < 32) and returns their compressed size.
+    `bits_for`: other bits for some matrices, {name: bits}."""
     parts = []
     with torch.no_grad():
         for name, w in model.state_dict().items():
             if name.endswith("feat_ids") or name == "shared_table":
                 continue  # (from the card database at load time; the existence model's)
-            if bits >= 32:
+            bits_w = (bits_for or {}).get(name, bits) if bits < 32 and w.dim() == 2 else bits
+            if bits_w >= 32:
                 parts.append(w.cpu().numpy().astype(np.float32).tobytes())
-            elif bits == 16 or w.dim() != 2:
+            elif bits_w == 16 or w.dim() != 2:
                 h = w.half()
                 parts.append(h.cpu().numpy().tobytes())
                 w.copy_(h.float())
             else:
-                top = 2 ** (bits - 1) - 1
+                top = 2 ** (bits_w - 1) - 1
                 # (clamped after the conversion: a row of zeros would get a scale of 0 in 16 bits)
                 scale = (w.abs().amax(dim=1, keepdim=True) / top).half().float().clamp(min=1e-7)
                 q = (w / scale).round().clamp(-top, top)
@@ -88,8 +90,12 @@ def main():
                     help="only decks with at least this many cards in the vocabulary (the "
                          "bot's decks have 40 or more)")
     ap.add_argument("--bits", type=int, default=32, choices=[32, 16, 8, 6, 4])
+    ap.add_argument("--bits-for", action="append", default=[], metavar="NAME=BITS",
+                    help="other bits for a matrix (with --bits < 32), e.g. "
+                         "card_table.parts.2.weight=4 for the rarest cards' embeddings")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
+    bits_for = {n: int(b) for n, b in (x.split("=") for x in args.bits_for)}
     sets = deck_sets(args.decks)
     for path in args.checkpoints:
         ck = torch.load(path, map_location="cpu", weights_only=False)
@@ -101,12 +107,12 @@ def main():
             ex_ck = torch.load(ck["shared_table"], map_location="cpu", weights_only=False)
             ex = te.ExistenceModel(**ex_ck["config"])
             ex.load_state_dict(ex_ck["state_dict"])
-            stored(ex, args.bits)
+            stored(ex, args.bits, bits_for)
             with torch.no_grad():
                 model.shared_table.copy_(ex.card_emb.weight if hasattr(ex, "card_emb") else ex.card_table())
         model.to(args.device).eval()
         params = sum(p.numel() for p in model.parameters())
-        size = stored(model, args.bits)
+        size = stored(model, args.bits, bits_for)
         cells = []
         with torch.no_grad():
             for name, paths, split in sets:
