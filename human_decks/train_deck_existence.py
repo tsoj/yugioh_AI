@@ -26,6 +26,7 @@ identifies the deck early-game vs. late-game.
 
 import argparse
 import json
+import math
 import random
 import sys
 import time
@@ -232,7 +233,7 @@ def presence_loss(logits, c_vis, c_unseen):
 # ---------------------------------------------------------------------------
 
 def run_epoch(model, loader, device, opt=None,
-              log_losses=None, mid_callbacks=None):
+              log_losses=None, mid_callbacks=None, sched=None):
     """Run one epoch.
 
     log_losses     : if a list, per-batch BCE losses are appended.
@@ -263,6 +264,8 @@ def run_epoch(model, loader, device, opt=None,
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 opt.step()
+                if sched is not None:
+                    sched.step()
             bs = c_vis.shape[0]
             l = loss.item()
             total += l * bs
@@ -366,6 +369,8 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--lr-schedule", choices=["constant", "cosine"], default="constant",
                     help="cosine: decays the learning rate to 0 over --epochs (per epoch)")
+    ap.add_argument("--warmup-steps", type=int, default=0,
+                    help="raise the learning rate linearly from 0 over this many steps")
     ap.add_argument("--d-model", type=int, default=384)
     ap.add_argument("--hidden", type=int, default=512)
     ap.add_argument("--n-trunk-layers", type=int, default=3)
@@ -441,7 +446,14 @@ def main():
     if args.qat_bits:
         quantize_aware(model, args.qat_bits)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs) if args.lr_schedule == "cosine" else None
+    steps_per_epoch = len(train_loader)
+
+    def lr_factor(step):
+        f = min(1.0, (step + 1) / args.warmup_steps) if args.warmup_steps else 1.0
+        if args.lr_schedule == "cosine":
+            f *= 0.5 * (1 + math.cos(math.pi * (step // steps_per_epoch) / args.epochs))
+        return f
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_factor)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"params = {n_params:,}")
 
@@ -484,6 +496,7 @@ def main():
         "config": {
             "lr": args.lr,
             "lr_schedule": args.lr_schedule,
+            "warmup_steps": args.warmup_steps,
             "d_model": args.d_model,
             "hidden": args.hidden,
             "n_trunk_layers": args.n_trunk_layers,
@@ -521,9 +534,7 @@ def main():
                 callbacks[step] = _make_cb(step)
 
         train_loss = run_epoch(model, train_loader, args.device, opt,
-                               log_losses=loss_traj, mid_callbacks=callbacks)
-        if sched is not None:
-            sched.step()
+                               log_losses=loss_traj, mid_callbacks=callbacks, sched=sched)
         val_loss = run_epoch(model, val_loader, args.device, None)
         marker = ""
         improved = val_loss < best_val

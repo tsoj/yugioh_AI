@@ -48,8 +48,8 @@ def stored(model, bits):
     parts = []
     with torch.no_grad():
         for name, w in model.state_dict().items():
-            if name.endswith("feat_ids"):
-                continue  # (from the card database at load time)
+            if name.endswith("feat_ids") or name == "shared_table":
+                continue  # (from the card database at load time; the existence model's)
             if bits >= 32:
                 parts.append(w.cpu().numpy().astype(np.float32).tobytes())
             elif bits == 16 or w.dim() != 2:

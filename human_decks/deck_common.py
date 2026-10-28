@@ -178,9 +178,9 @@ def baked_state(model):
 
 class CardTable(nn.Module):
     """The card embeddings (V, d), computed: the vocabulary (indices by frequency) in buckets with a
-    dimension of their own, projected to d (`buckets`: [(n, dim)], n 0 for the rest), plus with
-    `features` ((V, S) ids from `card_feature_ids`, their number) the sum of the features'
-    embeddings."""
+    dimension of their own, projected to d (`buckets`: [(n, dim)], n 0 for the rest; dim 0: no
+    embedding of their own), plus with `features` ((V, S) ids from `card_feature_ids`, their number)
+    the sum of the features' embeddings."""
 
     def __init__(self, V, d, buckets, features=None):
         super().__init__()
@@ -191,8 +191,12 @@ class CardTable(nn.Module):
             left -= n
         if left:
             raise ValueError(f"the buckets leave {left} cards without an embedding")
-        self.parts = nn.ModuleList(nn.Embedding(n, dim) for n, dim in sizes)
-        self.projs = nn.ModuleList(nn.Identity() if dim == d else nn.Linear(dim, d, bias=False) for _, dim in sizes)
+        if features is None and any(dim == 0 for _, dim in sizes):
+            raise ValueError("cards without an embedding of their own need --card-features")
+        self.d = d
+        self.sizes = sizes
+        self.parts = nn.ModuleList(nn.Embedding(n, dim) for n, dim in sizes if dim)
+        self.projs = nn.ModuleList(nn.Identity() if dim == d else nn.Linear(dim, d, bias=False) for _, dim in sizes if dim)
         self.feat_emb = None
         if features is not None:
             ids, n = features
@@ -203,7 +207,15 @@ class CardTable(nn.Module):
                 self.feat_emb.weight[n].zero_()
 
     def forward(self):
-        t = torch.cat([proj(e.weight) for e, proj in zip(self.parts, self.projs)])
+        own = iter(zip(self.parts, self.projs))
+        rows = []
+        for n, dim in self.sizes:
+            if dim:
+                e, proj = next(own)
+                rows.append(proj(e.weight))
+            else:
+                rows.append(self.feat_emb.weight.new_zeros(n, self.d))
+        t = torch.cat(rows)
         if self.feat_emb is not None:
             t = t + self.feat_emb(self.feat_ids).sum(1)
         return t

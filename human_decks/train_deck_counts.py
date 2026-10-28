@@ -38,6 +38,7 @@ from torch.utils.data import DataLoader, Dataset, random_split
 
 from tqdm import tqdm
 
+import train_deck_existence as te
 from deck_common import (
     ContextRefiner,
     build_extra_flags,
@@ -108,11 +109,22 @@ def collate_counts(batch):
 # ---------------------------------------------------------------------------
 
 class CountModel(nn.Module):
-    def __init__(self, vocab_size, d_model=128, hidden=512, n_trunk_layers=2):
+    """With `table_dim`, the card embeddings are another model's (the buffer `shared_table`,
+    (V, table_dim), not trained), mapped to d_model by a linear layer. With `count_bias`, each card
+    has a learned bias for each count."""
+
+    def __init__(self, vocab_size, d_model=128, hidden=512, n_trunk_layers=2, table_dim=None, count_bias=False):
         super().__init__()
         self.V = vocab_size
         self.d_model = d_model
-        self.card_emb = nn.Embedding(vocab_size, d_model)
+        if table_dim:
+            self.register_buffer("shared_table", torch.zeros(vocab_size, table_dim))
+            self.card_in = nn.Linear(table_dim, d_model)
+        else:
+            self.card_emb = nn.Embedding(vocab_size, d_model)
+        self.count_bias = nn.Embedding(vocab_size, 3) if count_bias else None
+        if count_bias:
+            nn.init.zeros_(self.count_bias.weight)
         self.refiner = ContextRefiner(d_model)
 
         # Per-token head: concat(card_emb, deck_rep) → MLP → 3-class logits.
@@ -131,7 +143,10 @@ class CountModel(nn.Module):
         Returns logits (B, L, 3) — one logit per count class {1, 2, 3}.
         """
         B, L = card_ids.shape
-        tok = self.card_emb(card_ids)                          # (B, L, d)
+        if hasattr(self, "shared_table"):
+            tok = self.card_in(F.embedding(card_ids, self.shared_table))
+        else:
+            tok = self.card_emb(card_ids)                      # (B, L, d)
         valid = (~key_padding_mask).float()                    # (B, L)
         pooled, _ = self.refiner(tok, valid)                   # (B, d)
 
@@ -139,7 +154,10 @@ class CountModel(nn.Module):
         deck_rep = pooled.unsqueeze(1).expand(-1, L, -1)       # (B, L, d)
         z = torch.cat([tok, deck_rep], dim=-1)                 # (B, L, 2d)
         h = self.trunk(z)                                      # (B, L, hidden)
-        return self.head(h)                                    # (B, L, 3)
+        out = self.head(h)                                     # (B, L, 3)
+        if self.count_bias is not None:
+            out = out + self.count_bias(card_ids)
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +262,11 @@ def main():
     ap.add_argument("--d-model", type=int, default=384)
     ap.add_argument("--hidden", type=int, default=512)
     ap.add_argument("--n-trunk-layers", type=int, default=3)
+    ap.add_argument("--shared-table", default="",
+                    help="an existence model checkpoint: use its card embeddings (not trained) "
+                         "instead of a table of our own")
+    ap.add_argument("--count-bias", action="store_true",
+                    help="a learned bias for each card and count")
     ap.add_argument("--num-workers", type=int, default=8)
     ap.add_argument("--metrics-out", default="",
                     help="path to write per-epoch metrics as JSON")
@@ -282,12 +305,27 @@ def main():
     val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False,
                             collate_fn=collate_counts, num_workers=args.num_workers)
 
+    table = None
+    if args.shared_table:
+        ck = torch.load(args.shared_table, map_location="cpu", weights_only=False)
+        if ck["vocab"] != vocab:
+            sys.exit(f"error: {args.shared_table} has another vocabulary")
+        existence = te.ExistenceModel(**ck["config"])
+        existence.load_state_dict(ck["state_dict"])
+        with torch.no_grad():
+            table = existence.card_emb.weight if hasattr(existence, "card_emb") else existence.card_table()
+        table = table.detach().clone()
     model = CountModel(
         V,
         d_model=args.d_model,
         hidden=args.hidden,
         n_trunk_layers=args.n_trunk_layers,
-    ).to(args.device)
+        table_dim=table.shape[1] if table is not None else None,
+        count_bias=args.count_bias,
+    )
+    if table is not None:
+        model.shared_table.copy_(table)
+    model.to(args.device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs) if args.lr_schedule == "cosine" else None
     n_params = sum(p.numel() for p in model.parameters())
@@ -310,7 +348,10 @@ def main():
                 "d_model": args.d_model,
                 "hidden": args.hidden,
                 "n_trunk_layers": args.n_trunk_layers,
+                "table_dim": table.shape[1] if table is not None else None,
+                "count_bias": args.count_bias,
             },
+            "shared_table": args.shared_table,
             "vocab": vocab,
             "is_extra": is_extra,
             "val_loss": val,
@@ -326,6 +367,8 @@ def main():
             "d_model": args.d_model,
             "hidden": args.hidden,
             "n_trunk_layers": args.n_trunk_layers,
+            "shared_table": str(args.shared_table),
+            "count_bias": args.count_bias,
             "batch_size": args.batch_size,
             "epochs": args.epochs,
             "mid_epoch_vals": args.mid_epoch_vals,
