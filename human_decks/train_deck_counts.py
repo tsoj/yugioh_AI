@@ -41,9 +41,11 @@ from tqdm import tqdm
 import train_deck_existence as te
 from deck_common import (
     ContextRefiner,
+    baked_state,
     build_extra_flags,
     load_or_build_vocab,
     parse_ydk_deck,
+    quantize_aware,
 )
 
 
@@ -267,6 +269,8 @@ def main():
                          "instead of a table of our own")
     ap.add_argument("--count-bias", action="store_true",
                     help="a learned bias for each card and count")
+    ap.add_argument("--qat-bits", type=int, default=0,
+                    help="train with the matrices rounded to this many bits (as eval_deck_models.py --bits stores them)")
     ap.add_argument("--num-workers", type=int, default=8)
     ap.add_argument("--metrics-out", default="",
                     help="path to write per-epoch metrics as JSON")
@@ -326,6 +330,8 @@ def main():
     if table is not None:
         model.shared_table.copy_(table)
     model.to(args.device)
+    if args.qat_bits:
+        quantize_aware(model, args.qat_bits)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs) if args.lr_schedule == "cosine" else None
     n_params = sum(p.numel() for p in model.parameters())
@@ -342,7 +348,8 @@ def main():
         if not args.save_path:
             return
         torch.save({
-            "state_dict": best_state,
+            "state_dict": baked_state(model) if args.qat_bits else best_state,
+            "qat_bits": args.qat_bits,
             "config": {
                 "vocab_size": V,
                 "d_model": args.d_model,
@@ -369,6 +376,7 @@ def main():
             "n_trunk_layers": args.n_trunk_layers,
             "shared_table": str(args.shared_table),
             "count_bias": args.count_bias,
+            "qat_bits": args.qat_bits,
             "batch_size": args.batch_size,
             "epochs": args.epochs,
             "mid_epoch_vals": args.mid_epoch_vals,

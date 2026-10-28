@@ -213,16 +213,20 @@ class ExistenceModel(nn.Module):
 # Loss
 # ---------------------------------------------------------------------------
 
-def presence_loss(logits, c_vis, c_unseen):
+def presence_loss(logits, c_vis, c_unseen, soft=None, soft_weight=0.0):
     """Binary cross-entropy: is each card present in the full deck?
 
     logits : (B, V)  — per-card presence logit
     target : (B, V)  — 1 iff (c_vis + c_unseen) > 0
+    soft   : (B, V)  — a teacher's presence probabilities, mixed into the
+                       target with soft_weight (distillation)
 
     Cards with c_vis > 0 are excluded from the loss — their presence is
     a trivial given, so training on them is wasted signal.
     """
     target = ((c_vis + c_unseen) > 0).float()
+    if soft is not None:
+        target = (1 - soft_weight) * target + soft_weight * soft
     mask = (c_vis == 0).float()
     bce = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
     return (bce * mask).sum() / mask.sum().clamp(min=1.0)
@@ -233,7 +237,7 @@ def presence_loss(logits, c_vis, c_unseen):
 # ---------------------------------------------------------------------------
 
 def run_epoch(model, loader, device, opt=None,
-              log_losses=None, mid_callbacks=None, sched=None):
+              log_losses=None, mid_callbacks=None, sched=None, teacher=None, soft_weight=0.0):
     """Run one epoch.
 
     log_losses     : if a list, per-batch BCE losses are appended.
@@ -258,7 +262,11 @@ def run_epoch(model, loader, device, opt=None,
             c_unseen = dense_counts(unseen_ids.to(device), unseen_counts.to(device), model.V)
             slots_in_deck = slots_in_deck.to(device)
             logits = model(card_ids, card_counts, kpm, slots_in_deck)
-            loss = presence_loss(logits, c_vis, c_unseen)
+            soft = None
+            if train and teacher is not None:
+                with torch.no_grad():
+                    soft = torch.sigmoid(teacher(card_ids, card_counts, kpm, slots_in_deck))
+            loss = presence_loss(logits, c_vis, c_unseen, soft, soft_weight)
             if train:
                 opt.zero_grad()
                 loss.backward()
@@ -378,6 +386,10 @@ def main():
                     help="card embedding dimensions by frequency, e.g. 2000:128,6000:64,0:32 (0: the rest)")
     ap.add_argument("--qat-bits", type=int, default=0,
                     help="train with the matrices rounded to this many bits (as eval_deck_models.py --bits stores them)")
+    ap.add_argument("--teacher", default="",
+                    help="an existence model checkpoint to distill: its presence probabilities "
+                         "mixed into the training targets with --soft-weight")
+    ap.add_argument("--soft-weight", type=float, default=0.5)
     ap.add_argument("--card-features", action="store_true",
                     help="add embeddings of the cards' set codes, types, race, attribute and level")
     ap.add_argument("--num-workers", type=int, default=8)
@@ -445,6 +457,14 @@ def main():
     ).to(args.device)
     if args.qat_bits:
         quantize_aware(model, args.qat_bits)
+    teacher = None
+    if args.teacher:
+        ck = torch.load(args.teacher, map_location="cpu", weights_only=False)
+        if ck["vocab"] != vocab:
+            sys.exit(f"error: {args.teacher} has another vocabulary")
+        teacher = ExistenceModel(**ck["config"])
+        teacher.load_state_dict(ck["state_dict"])
+        teacher.to(args.device).eval()
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
     steps_per_epoch = len(train_loader)
 
@@ -497,6 +517,8 @@ def main():
             "lr": args.lr,
             "lr_schedule": args.lr_schedule,
             "warmup_steps": args.warmup_steps,
+            "teacher": args.teacher,
+            "soft_weight": args.soft_weight if args.teacher else None,
             "d_model": args.d_model,
             "hidden": args.hidden,
             "n_trunk_layers": args.n_trunk_layers,
@@ -534,7 +556,8 @@ def main():
                 callbacks[step] = _make_cb(step)
 
         train_loss = run_epoch(model, train_loader, args.device, opt,
-                               log_losses=loss_traj, mid_callbacks=callbacks, sched=sched)
+                               log_losses=loss_traj, mid_callbacks=callbacks, sched=sched,
+                               teacher=teacher, soft_weight=args.soft_weight)
         val_loss = run_epoch(model, val_loader, args.device, None)
         marker = ""
         improved = val_loss < best_val
