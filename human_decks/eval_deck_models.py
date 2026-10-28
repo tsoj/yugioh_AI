@@ -9,12 +9,19 @@ accuracy of the copies. The deck sets:
 
 Cards outside a model's vocabulary are left out of its decks, as in training.
 
-    ../.venv/bin/python eval_deck_models.py CHECKPOINT.pt [...] [--decks 2000] [--device cuda]
+The size is that of the weights as stored, compressed with zstd -19. With --bits N (16, 8, 6, 4),
+each matrix is stored as N-bit integers with a 16-bit scale per row, the other weights as 16-bit
+floats, and the model is evaluated with the weights it would get back from that.
+
+    ../.venv/bin/python eval_deck_models.py CHECKPOINT.pt [...] [--decks 2000] [--bits 8] [--device cuda]
 """
 
 import argparse
 import random
+from compression import zstd
 from pathlib import Path
+
+import numpy as np
 
 import torch
 from torch.utils.data import DataLoader, random_split
@@ -36,6 +43,29 @@ def deck_sets(n):
     return sets
 
 
+def stored(model, bits):
+    """Quantizes the model's weights in place (bits < 32) and returns their compressed size."""
+    parts = []
+    with torch.no_grad():
+        for name, w in model.state_dict().items():
+            if name.endswith("feat_ids"):
+                continue  # (from the card database at load time)
+            if bits >= 32:
+                parts.append(w.cpu().numpy().astype(np.float32).tobytes())
+            elif bits == 16 or w.dim() != 2:
+                h = w.half()
+                parts.append(h.cpu().numpy().tobytes())
+                w.copy_(h.float())
+            else:
+                top = 2 ** (bits - 1) - 1
+                # (clamped after the conversion: a row of zeros would get a scale of 0 in 16 bits)
+                scale = (w.abs().amax(dim=1, keepdim=True) / top).half().float().clamp(min=1e-7)
+                q = (w / scale).round().clamp(-top, top)
+                parts.append(q.to(torch.int8).cpu().numpy().tobytes() + scale.half().cpu().numpy().tobytes())
+                w.copy_(q * scale)
+    return len(zstd.compress(b"".join(parts), level=19))
+
+
 def decks_of(dataset_type, paths, vocab, split, n):
     ds = dataset_type(paths, vocab)
     if not split:
@@ -49,6 +79,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("checkpoints", nargs="+")
     ap.add_argument("--decks", type=int, default=2000, help="decks per set")
+    ap.add_argument("--bits", type=int, default=32, choices=[32, 16, 8, 6, 4])
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
     sets = deck_sets(args.decks)
@@ -59,6 +90,7 @@ def main():
         model.load_state_dict(ck["state_dict"])
         model.to(args.device).eval()
         params = sum(p.numel() for p in model.parameters())
+        size = stored(model, args.bits)
         cells = []
         with torch.no_grad():
             for name, paths, split in sets:
@@ -74,7 +106,7 @@ def main():
                     a = tc.eval_accuracy(model, DataLoader(decks, batch_size=256, collate_fn=tc.collate_counts), args.device)
                     cells.append(f"{name} {a['overall']:.3f}")
         kind = "existence r@20" if existence else "counts acc"
-        print(f"{Path(path).name}: {params / 1e6:.2f}M params, {kind}: " + ", ".join(cells), flush=True)
+        print(f"{Path(path).name} ({args.bits} bits): {params / 1e6:.2f}M params, {size / 1e6:.2f} MB, {kind}: " + ", ".join(cells), flush=True)
 
 
 if __name__ == "__main__":

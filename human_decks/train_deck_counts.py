@@ -239,6 +239,8 @@ def main():
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--epochs", type=int, default=5)
     ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--lr-schedule", choices=["constant", "cosine"], default="constant",
+                    help="cosine: decays the learning rate to 0 over --epochs (per epoch)")
     ap.add_argument("--d-model", type=int, default=384)
     ap.add_argument("--hidden", type=int, default=512)
     ap.add_argument("--n-trunk-layers", type=int, default=3)
@@ -287,6 +289,7 @@ def main():
         n_trunk_layers=args.n_trunk_layers,
     ).to(args.device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs) if args.lr_schedule == "cosine" else None
     n_params = sum(p.numel() for p in model.parameters())
     print(f"params = {n_params:,}")
 
@@ -319,6 +322,7 @@ def main():
     metrics = {
         "config": {
             "lr": args.lr,
+            "lr_schedule": args.lr_schedule,
             "d_model": args.d_model,
             "hidden": args.hidden,
             "n_trunk_layers": args.n_trunk_layers,
@@ -356,6 +360,8 @@ def main():
 
         train_loss = run_epoch(model, train_loader, args.device, opt,
                                log_losses=loss_traj, mid_callbacks=callbacks)
+        if sched is not None:
+            sched.step()
         val_loss = run_epoch(model, val_loader, args.device, None)
         marker = ""
         improved = val_loss < best_val

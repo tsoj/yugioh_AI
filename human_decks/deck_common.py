@@ -8,6 +8,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.utils import parametrize
 
 
 # Type flags from ygopro-core: a card is an extra-deck card iff its
@@ -106,6 +107,107 @@ def load_or_build_vocab(cache_path, decks_dir, min_freq=5):
 # ---------------------------------------------------------------------------
 # Model components
 # ---------------------------------------------------------------------------
+
+def card_feature_ids(vocab, cdb_path):
+    """Per vocabulary card the ids of its features in the card database: its set codes
+    (archetypes), type bits, race, attribute and level, all in one id space. Returns ((V, S) ids,
+    padded with n) and the number of ids n. The bot has the card database, so these cost no
+    stored bytes."""
+    db = sqlite3.connect(f"file:{cdb_path}?mode=ro", uri=True)
+    rows = {r[0]: r[1:] for r in db.execute("SELECT id, setcode, type, race, attribute, level FROM datas")}
+    db.close()
+    keys = {}
+
+    def key(k):
+        return keys.setdefault(k, len(keys))
+
+    feats = [[] for _ in vocab]
+    for code, idx in vocab.items():
+        row = rows.get(code)
+        if row is None:
+            continue
+        setcode, typ, race, attr, level = row
+        f = feats[idx]
+        f += [key(("set", (setcode >> (16 * i)) & 0xFFFF)) for i in range(4) if (setcode >> (16 * i)) & 0xFFFF]
+        f += [key(("type", b)) for b in range(32) if typ >> b & 1]
+        f += [key(("race", b)) for b in range(64) if race >> b & 1]
+        f += [key(("attribute", b)) for b in range(8) if attr >> b & 1]
+        f.append(key(("level", level & 0xFF)))
+    n = len(keys)
+    ids = torch.full((len(vocab), max(len(f) for f in feats)), n, dtype=torch.long)
+    for i, f in enumerate(feats):
+        ids[i, :len(f)] = torch.tensor(f, dtype=torch.long)
+    return ids, n
+
+
+class FakeQuant(nn.Module):
+    """A parametrization: the matrix rounded to `bits`-bit integers with a 16-bit scale per row, as
+    eval_deck_models.py stores it; gradients pass through the rounding (straight-through)."""
+
+    def __init__(self, bits):
+        super().__init__()
+        self.top = 2 ** (bits - 1) - 1
+
+    def forward(self, w):
+        # (clamped after the conversion: a row of zeros would get a scale of 0 in 16 bits)
+        scale = (w.detach().abs().amax(dim=1, keepdim=True) / self.top).half().float().clamp(min=1e-7)
+        q = (w / scale).round().clamp(-self.top, self.top) * scale
+        return w + (q - w).detach()
+
+
+def quantize_aware(model, bits):
+    """Trains `model` with its matrices rounded to `bits` bits (FakeQuant on each 2-D weight)."""
+    for m in list(model.modules()):
+        w = getattr(m, "weight", None)
+        if isinstance(w, nn.Parameter) and w.dim() == 2 and w.shape[1] > 1:
+            parametrize.register_parametrization(m, "weight", FakeQuant(bits))
+
+
+def baked_state(model):
+    """The weights the model computes with (rounded ones as rounded) under their plain names."""
+    out = {}
+    for k, v in model.state_dict().items():
+        if ".parametrizations." in k:
+            if k.endswith(".original"):
+                path = k.split(".parametrizations.")[0]
+                out[f"{path}.weight"] = model.get_submodule(path).weight.detach().cpu().clone()
+        else:
+            out[k] = v.detach().cpu().clone()
+    return out
+
+
+class CardTable(nn.Module):
+    """The card embeddings (V, d), computed: the vocabulary (indices by frequency) in buckets with a
+    dimension of their own, projected to d (`buckets`: [(n, dim)], n 0 for the rest), plus with
+    `features` ((V, S) ids from `card_feature_ids`, their number) the sum of the features'
+    embeddings."""
+
+    def __init__(self, V, d, buckets, features=None):
+        super().__init__()
+        sizes, left = [], V
+        for n, dim in buckets:
+            n = left if n == 0 else min(n, left)
+            sizes.append((n, dim))
+            left -= n
+        if left:
+            raise ValueError(f"the buckets leave {left} cards without an embedding")
+        self.parts = nn.ModuleList(nn.Embedding(n, dim) for n, dim in sizes)
+        self.projs = nn.ModuleList(nn.Identity() if dim == d else nn.Linear(dim, d, bias=False) for _, dim in sizes)
+        self.feat_emb = None
+        if features is not None:
+            ids, n = features
+            self.register_buffer("feat_ids", ids)
+            self.feat_emb = nn.Embedding(n + 1, d, padding_idx=n)
+            with torch.no_grad():
+                self.feat_emb.weight.mul_(0.3)
+                self.feat_emb.weight[n].zero_()
+
+    def forward(self):
+        t = torch.cat([proj(e.weight) for e, proj in zip(self.parts, self.projs)])
+        if self.feat_emb is not None:
+            t = t + self.feat_emb(self.feat_ids).sum(1)
+        return t
+
 
 class ContextRefiner(nn.Module):
     """One round of (pool → broadcast context → per-token refine), then a final pool.

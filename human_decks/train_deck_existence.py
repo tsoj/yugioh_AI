@@ -40,8 +40,12 @@ from torch.utils.data import DataLoader, Dataset, random_split
 from tqdm import tqdm
 
 from deck_common import (
+    CardTable,
     ContextRefiner,
+    baked_state,
     build_extra_flags,
+    card_feature_ids,
+    quantize_aware,
     load_or_build_vocab,
     parse_ydk_deck,
     print_eval_table,
@@ -155,14 +159,20 @@ def dense_counts(ids, counts, V):
 
 class ExistenceModel(nn.Module):
     def __init__(self, vocab_size, d_model=128, hidden=512, n_trunk_layers=2,
-                 slots_scale=1.0):
+                 slots_scale=1.0, emb_buckets=None, features=None):
         super().__init__()
         self.V = vocab_size
         self.d_model = d_model
         # Pre-divide the raw slots_in_deck scalar before concatenation so the
         # trunk sees an O(1) feature instead of a 0–60 bare integer.
         self.slots_scale = float(slots_scale)
-        self.card_emb = nn.Embedding(vocab_size, d_model)
+        # (`features`: (S, n) for a checkpoint, whose ids the state dict brings, or the ids and n)
+        if features is not None and not torch.is_tensor(features[0]):
+            features = (torch.zeros(vocab_size, features[0], dtype=torch.long), features[1])
+        if emb_buckets is None and features is None:
+            self.card_emb = nn.Embedding(vocab_size, d_model)
+        else:
+            self.card_table = CardTable(vocab_size, d_model, emb_buckets or [(0, d_model)], features)
         # Per-count pool weight, init to identity (0, 1, 2, 3).
         self.count_weight = nn.Embedding(4, 1)
         with torch.no_grad():
@@ -184,7 +194,8 @@ class ExistenceModel(nn.Module):
         key_padding_mask  (B, L) bool — True at padding positions
         slots_in_deck     (B,) float — total deck size (visible + unseen)
         """
-        tok = self.card_emb(card_ids)                          # (B, L, d)
+        table = self.card_emb.weight if hasattr(self, "card_emb") else self.card_table()  # (V, d)
+        tok = F.embedding(card_ids, table)                     # (B, L, d)
         w = self.count_weight(card_counts).squeeze(-1)         # (B, L)
         w = w.masked_fill(key_padding_mask, 0.0)
         pooled, _ = self.refiner(tok, w)                       # (B, d)
@@ -193,7 +204,7 @@ class ExistenceModel(nn.Module):
         z = torch.cat([pooled, slots_norm.unsqueeze(-1)], dim=-1)
         h = self.trunk(z)
         q = self.head_proj(h)                                  # (B, d)
-        logits = q @ self.card_emb.weight.T + self.presence_bias  # (B, V)
+        logits = q @ table.T + self.presence_bias              # (B, V)
         return logits
 
 
@@ -358,6 +369,12 @@ def main():
     ap.add_argument("--d-model", type=int, default=384)
     ap.add_argument("--hidden", type=int, default=512)
     ap.add_argument("--n-trunk-layers", type=int, default=3)
+    ap.add_argument("--emb-buckets", default="",
+                    help="card embedding dimensions by frequency, e.g. 2000:128,6000:64,0:32 (0: the rest)")
+    ap.add_argument("--qat-bits", type=int, default=0,
+                    help="train with the matrices rounded to this many bits (as eval_deck_models.py --bits stores them)")
+    ap.add_argument("--card-features", action="store_true",
+                    help="add embeddings of the cards' set codes, types, race, attribute and level")
     ap.add_argument("--num-workers", type=int, default=8)
     ap.add_argument("--metrics-out", default="",
                     help="path to write per-epoch metrics as JSON")
@@ -410,13 +427,19 @@ def main():
                             collate_fn=collate, num_workers=args.num_workers)
 
     # Model
+    buckets = [tuple(int(x) for x in b.split(":")) for b in args.emb_buckets.split(",")] if args.emb_buckets else None
+    features = card_feature_ids(vocab, args.cdb) if args.card_features else None
     model = ExistenceModel(
         V,
         d_model=args.d_model,
         hidden=args.hidden,
         n_trunk_layers=args.n_trunk_layers,
         slots_scale=60.0,
+        emb_buckets=buckets,
+        features=features,
     ).to(args.device)
+    if args.qat_bits:
+        quantize_aware(model, args.qat_bits)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs) if args.lr_schedule == "cosine" else None
     n_params = sum(p.numel() for p in model.parameters())
@@ -438,13 +461,16 @@ def main():
         if not args.save_path:
             return
         torch.save({
-            "state_dict": best_state,
+            "state_dict": baked_state(model) if args.qat_bits else best_state,
+            "qat_bits": args.qat_bits,
             "config": {
                 "vocab_size": V,
                 "d_model": args.d_model,
                 "hidden": args.hidden,
                 "n_trunk_layers": args.n_trunk_layers,
                 "slots_scale": 60.0,
+                "emb_buckets": buckets,
+                "features": [features[0].shape[1], features[1]] if features else None,
             },
             "vocab": vocab,
             "is_extra": is_extra,
