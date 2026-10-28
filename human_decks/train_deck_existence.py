@@ -103,41 +103,50 @@ def build_token_tensors(per_batch_visible):
     return card_ids, card_counts, key_padding_mask
 
 
-def make_collate(V, min_reveal=0.05, max_reveal=0.95):
-    """Build a DataLoader collate_fn that masks a random visible subset of
-    each deck.  Returns:
-        card_ids          (B, L_max)  long, padded with 0
-        card_counts       (B, L_max)  long, padded with 0
+class Collate:
+    """A DataLoader collate_fn (a class: worker processes must pickle it) that masks a random
+    visible subset of each deck. The cards are lists of (card, count), not dense (B, V) count
+    vectors: those would be ~7 MB per batch to pass between processes (`dense_counts` makes them on
+    the device). Returns:
+        card_ids          (B, L_max)  long, the visible cards, padded with 0
+        card_counts       (B, L_max)  long, their counts, padded with 0
         key_padding_mask  (B, L_max)  bool, True at padding
-        c_vis             (B, V)      long, dense count vector (visible part)
-        c_unseen          (B, V)      long, dense count vector (unseen part)
+        unseen_ids        (B, U_max)  long, the unseen cards, padded with 0
+        unseen_counts     (B, U_max)  long, their counts (at most 3), padded with 0
         slots_in_deck     (B,)        float, total deck size (visible + unseen)
     """
-    def _collate(batch):
+
+    def __init__(self, V, min_reveal=0.05, max_reveal=0.95):
+        self.V, self.min_reveal, self.max_reveal = V, min_reveal, max_reveal
+
+    def __call__(self, batch):
         B = len(batch)
-        c_vis = torch.zeros(B, V, dtype=torch.long)
-        c_unseen = torch.zeros(B, V, dtype=torch.long)
         slots_in_deck = torch.zeros(B, dtype=torch.float32)
-        per_batch_visible = []
+        per_batch_visible, per_batch_unseen = [], []
         for b, idxs in enumerate(batch):
             idxs = list(idxs)
             random.shuffle(idxs)
-            r = random.uniform(min_reveal, max_reveal)
+            r = random.uniform(self.min_reveal, self.max_reveal)
             k = max(1, int(round(r * len(idxs))))
             vis_counter = Counter()
             for j in idxs[:k]:
                 if vis_counter[j] < 3:
                     vis_counter[j] += 1
-            for j, n in vis_counter.items():
-                c_vis[b, j] = n
+            unseen_counter = Counter()
             for j in idxs[k:]:
-                if c_unseen[b, j] < 3:
-                    c_unseen[b, j] += 1
+                if unseen_counter[j] < 3:
+                    unseen_counter[j] += 1
             slots_in_deck[b] = len(idxs)
             per_batch_visible.append(list(vis_counter.items()))
+            per_batch_unseen.append(list(unseen_counter.items()))
         card_ids, card_counts, key_padding_mask = build_token_tensors(per_batch_visible)
-        return card_ids, card_counts, key_padding_mask, c_vis, c_unseen, slots_in_deck
-    return _collate
+        unseen_ids, unseen_counts, _ = build_token_tensors(per_batch_unseen)
+        return card_ids, card_counts, key_padding_mask, unseen_ids, unseen_counts, slots_in_deck
+
+
+def dense_counts(ids, counts, V):
+    """(B, V) count vectors from padded (card, count) lists (padding: count 0)."""
+    return torch.zeros(ids.shape[0], V, dtype=torch.long, device=ids.device).scatter_add_(1, ids, counts)
 
 
 # ---------------------------------------------------------------------------
@@ -226,15 +235,15 @@ def run_epoch(model, loader, device, opt=None,
     total, n = 0.0, 0
     callbacks = mid_callbacks or {}
     with torch.set_grad_enabled(train):
-        for step, (card_ids, card_counts, kpm, c_vis, c_unseen, slots_in_deck) in enumerate(tqdm(loader)):
+        for step, (card_ids, card_counts, kpm, unseen_ids, unseen_counts, slots_in_deck) in enumerate(tqdm(loader)):
             if step in callbacks:
                 callbacks[step]()
                 model.train(train)
             card_ids = card_ids.to(device)
             card_counts = card_counts.to(device)
             kpm = kpm.to(device)
-            c_vis = c_vis.to(device)
-            c_unseen = c_unseen.to(device)
+            c_vis = dense_counts(card_ids, card_counts, model.V)
+            c_unseen = dense_counts(unseen_ids.to(device), unseen_counts.to(device), model.V)
             slots_in_deck = slots_in_deck.to(device)
             logits = model(card_ids, card_counts, kpm, slots_in_deck)
             loss = presence_loss(logits, c_vis, c_unseen)
@@ -344,6 +353,8 @@ def main():
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--epochs", type=int, default=5)
     ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--lr-schedule", choices=["constant", "cosine"], default="constant",
+                    help="cosine: decays the learning rate to 0 over --epochs (per epoch)")
     ap.add_argument("--d-model", type=int, default=384)
     ap.add_argument("--hidden", type=int, default=512)
     ap.add_argument("--n-trunk-layers", type=int, default=3)
@@ -392,7 +403,7 @@ def main():
     train_ds, val_ds = random_split(
         ds, [len(ds) - n_val, n_val],
         generator=torch.Generator().manual_seed(args.seed))
-    collate = make_collate(V)
+    collate = Collate(V)
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
                               collate_fn=collate, num_workers=args.num_workers)
     val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False,
@@ -407,6 +418,7 @@ def main():
         slots_scale=60.0,
     ).to(args.device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs) if args.lr_schedule == "cosine" else None
     n_params = sum(p.numel() for p in model.parameters())
     print(f"params = {n_params:,}")
 
@@ -445,6 +457,7 @@ def main():
     metrics = {
         "config": {
             "lr": args.lr,
+            "lr_schedule": args.lr_schedule,
             "d_model": args.d_model,
             "hidden": args.hidden,
             "n_trunk_layers": args.n_trunk_layers,
@@ -483,6 +496,8 @@ def main():
 
         train_loss = run_epoch(model, train_loader, args.device, opt,
                                log_losses=loss_traj, mid_callbacks=callbacks)
+        if sched is not None:
+            sched.step()
         val_loss = run_epoch(model, val_loader, args.device, None)
         marker = ""
         improved = val_loss < best_val
