@@ -140,9 +140,19 @@ def card_feature_ids(vocab, cdb_path):
     return ids, n
 
 
+def quantize_rows(w, bits):
+    """The matrix as `bits`-bit integers with a 16-bit scale per row: (int8 values, float16 scales),
+    the matrix back: values * scales."""
+    top = 2 ** (bits - 1) - 1
+    # (clamped after the conversion: a row of zeros would get a scale of 0 in 16 bits)
+    scale = (w.abs().amax(dim=1, keepdim=True) / top).half().float().clamp(min=1e-7)
+    return (w / scale).round().clamp(-top, top).to(torch.int8), scale.half()
+
+
 class FakeQuant(nn.Module):
-    """A parametrization: the matrix rounded to `bits`-bit integers with a 16-bit scale per row, as
-    eval_deck_models.py stores it; gradients pass through the rounding (straight-through)."""
+    """A parametrization: the matrix rounded to `bits`-bit integers with a 16-bit scale per row
+    (`quantize_rows`, as the models are stored); gradients pass through the rounding
+    (straight-through)."""
 
     def __init__(self, bits):
         super().__init__()

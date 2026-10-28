@@ -76,8 +76,10 @@ build() {
         git -C "$TREE" checkout -q --detach "$sha"
         submodules
         echo "$(date) building $1 ($sha)" >&2
+        # (the deck models' export; commits before deck_models.bin read the ONNX export)
         systemd-run --user --scope -q -p MemoryMax=28G -p MemorySwapMax=0 nice -n 10 \
-            env CARGO_TARGET_DIR="$TARGET" CARGO_BUILD_JOBS=6 YGO_DECK_MODELS_ONNX="$ROOT/human_decks/onnx_export" \
+            env CARGO_TARGET_DIR="$TARGET" CARGO_BUILD_JOBS=6 YGO_DECK_MODELS="$ROOT/human_decks/deck_models.bin" \
+                YGO_DECK_MODELS_ONNX="$ROOT/human_decks/onnx_export" \
             cargo build --release --manifest-path "$TREE/Cargo.toml" -p bot --bin bot --bin bot-bench-search >&2 \
             || { echo "build of $1 failed" >&2; exit 1; }
         systemd-run --user --scope -q -p MemoryMax=28G -p MemorySwapMax=0 nice -n 10 \

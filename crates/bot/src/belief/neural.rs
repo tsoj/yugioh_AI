@@ -1,5 +1,5 @@
-//! Deck completion by the learned deck models (the inference of human_decks/complete_deck.py),
-//! on burn code generated from their ONNX export (crates/deckmodels).
+//! Deck completion by the learned deck models (crates/deckmodels; the inference of
+//! human_decks/complete_deck.py).
 //!
 //! An existence model predicts which cards a deck holds given the ones seen so far, a count model
 //! how many copies of each. The replay's own constraints apply on top, as for the corpus
@@ -29,20 +29,10 @@ const MAX_ITER: usize = 60;
 /// The deck size the ranking for stand-ins assumes
 const RANK_SLOTS: f32 = 55.0;
 
-#[derive(serde::Deserialize)]
-struct Meta {
-    codes: Vec<u32>,
-    is_extra: Vec<bool>,
-    avg_copies: f64,
-}
-
 /// The models and their vocabulary.
 pub struct DeckModels {
     models: deckmodels::Models,
-    codes: Vec<u32>,
     index: HashMap<u32, usize>,
-    is_extra: Vec<bool>,
-    avg_copies: f64,
     /// (`sample_deck`: the last presence vector, by the visible counts and the deck size)
     last_presence: Mutex<Option<PresenceKey>>,
 }
@@ -53,13 +43,12 @@ impl DeckModels {
     /// The models and their vocabulary, as built into crates/deckmodels.
     pub fn load() -> Result<DeckModels, String> {
         let models = deckmodels::Models::load()?;
-        let meta: Meta = serde_json::from_str(deckmodels::meta_json().ok_or("no deck models")?).map_err(|e| e.to_string())?;
-        let index = meta.codes.iter().enumerate().map(|(i, &c)| (c, i)).collect();
-        Ok(DeckModels { models, codes: meta.codes, index, is_extra: meta.is_extra, avg_copies: meta.avg_copies, last_presence: Mutex::new(None) })
+        let index = models.codes.iter().enumerate().map(|(i, &c)| (c, i)).collect();
+        Ok(DeckModels { models, index, last_presence: Mutex::new(None) })
     }
 
     pub fn vocab_len(&self) -> usize {
-        self.codes.len()
+        self.models.codes.len()
     }
 
     /// P(presence) per vocabulary index, given the visible counts per index.
@@ -91,7 +80,7 @@ impl DeckModels {
 
     /// complete_deck: the full deck (main, extra codes) given the observed codes and the sizes.
     pub fn complete_deck(&self, observed: &[u32], main_size: usize, extra_size: usize) -> Result<(Vec<u32>, Vec<u32>), String> {
-        let v = self.codes.len();
+        let v = self.models.codes.len();
         let mut c_vis = vec![0i64; v];
         for c in observed {
             if let Some(&j) = self.index.get(c)
@@ -100,8 +89,8 @@ impl DeckModels {
                 c_vis[j] += 1;
             }
         }
-        let main_obs: i64 = (0..v).filter(|&j| !self.is_extra[j]).map(|j| c_vis[j]).sum();
-        let extra_obs: i64 = (0..v).filter(|&j| self.is_extra[j]).map(|j| c_vis[j]).sum();
+        let main_obs: i64 = (0..v).filter(|&j| !self.models.is_extra[j]).map(|j| c_vis[j]).sum();
+        let extra_obs: i64 = (0..v).filter(|&j| self.models.is_extra[j]).map(|j| c_vis[j]).sum();
         if main_obs as usize > main_size || extra_obs as usize > extra_size {
             return Err(format!("observed {main_obs}+{extra_obs} cards for a deck of {main_size}+{extra_size}"));
         }
@@ -112,7 +101,7 @@ impl DeckModels {
         sorted_nv.sort_by(|&a, &b| presence[b].partial_cmp(&presence[a]).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(&b)));
         let visible: Vec<usize> = (0..v).filter(|&j| c_vis[j] > 0).collect();
         let k_max = visible.len() + sorted_nv.len();
-        let k_init = ((target as f64 / self.avg_copies.max(1e-6)).round_ties_even() as usize).max(1).max(visible.len()).min(k_max);
+        let k_init = ((target as f64 / self.models.avg_copies.max(1e-6)).round_ties_even() as usize).max(1).max(visible.len()).min(k_max);
         // the search for the number of distinct cards K
         type Entry = (usize, Vec<usize>, Vec<f64>, Vec<i64>, i64);
         let mut history: Vec<Entry> = Vec::new();
@@ -166,7 +155,7 @@ impl DeckModels {
         let mut sec: [(Vec<(usize, i64)>, i64); 2] = [(vec![], 0), (vec![], 0)];
         let sizes = [main_size as i64, extra_size as i64];
         let place = |j: usize, sec: &mut [(Vec<(usize, i64)>, i64); 2]| {
-            let s = self.is_extra[j] as usize;
+            let s = self.models.is_extra[j] as usize;
             let c = per_card[&j].min(sizes[s] - sec[s].1).max(0);
             if c > 0 {
                 sec[s].0.push((j, c));
@@ -207,7 +196,7 @@ impl DeckModels {
                 if current >= target {
                     break;
                 }
-                if counts.iter().any(|c| c.0 == j) || self.is_extra[j] != is_extra {
+                if counts.iter().any(|c| c.0 == j) || self.models.is_extra[j] != is_extra {
                     continue;
                 }
                 let c = (target - current).min(3);
@@ -217,7 +206,7 @@ impl DeckModels {
         };
         balance(&mut main, main_total, main_size as i64, false);
         balance(&mut extra, extra_total, extra_size as i64, true);
-        let expand = |s: &[(usize, i64)]| s.iter().flat_map(|&(j, n)| std::iter::repeat_n(self.codes[j], n as usize)).collect::<Vec<u32>>();
+        let expand = |s: &[(usize, i64)]| s.iter().flat_map(|&(j, n)| std::iter::repeat_n(self.models.codes[j], n as usize)).collect::<Vec<u32>>();
         Ok((expand(&main), expand(&extra)))
     }
 
@@ -245,7 +234,7 @@ impl DeckModels {
     /// a number of copies drawn from the count model (a seen card at least as many as seen); then
     /// filled up as `complete_deck` does.
     pub fn sample_deck(&self, observed: &[u32], main_size: usize, extra_size: usize, usable: &dyn Fn(u32) -> bool, rng: &mut PyRandom) -> Result<(Vec<u32>, Vec<u32>), String> {
-        let v = self.codes.len();
+        let v = self.models.codes.len();
         let mut c_vis = vec![0i64; v];
         for c in observed {
             if let Some(&j) = self.index.get(c)
@@ -274,9 +263,9 @@ impl DeckModels {
             .map(|j| (rng.random().max(1e-300).ln() * (-(presence[j] as f64).max(1e-12).ln() / t).exp(), j))
             .collect();
         keyed.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        let k = ((target as f64 / self.avg_copies.max(1e-6)).round() as usize).max(visible.len());
+        let k = ((target as f64 / self.models.avg_copies.max(1e-6)).round() as usize).max(visible.len());
         // (the usable ones only, checked in the drawn order: a first check of a card reads its script)
-        let order: Vec<usize> = keyed.into_iter().map(|x| x.1).filter(|&j| usable(self.codes[j])).take(k + target as usize).collect();
+        let order: Vec<usize> = keyed.into_iter().map(|x| x.1).filter(|&j| usable(self.models.codes[j])).take(k + target as usize).collect();
         let k = k.min(visible.len() + order.len());
         let cand: Vec<usize> = visible.iter().chain(order.iter().take(k - visible.len())).copied().collect();
         let probs = self.count_probs(&cand);
@@ -284,7 +273,7 @@ impl DeckModels {
         let mut sec: [Vec<(usize, i64)>; 2] = [vec![], vec![]];
         let mut total = [0i64; 2];
         for (i, &j) in cand.iter().enumerate() {
-            let s = self.is_extra[j] as usize;
+            let s = self.models.is_extra[j] as usize;
             let min = c_vis[j].max(1);
             let w: Vec<f64> = (1..=3).map(|n| if n >= min { probs[i][n as usize - 1].powf(1.0 / t) } else { 0.0 }).collect();
             let mut u = rng.random() * w.iter().sum::<f64>();
@@ -314,20 +303,20 @@ impl DeckModels {
                 if total[s] >= sizes[s] {
                     break;
                 }
-                if self.is_extra[j] as usize == s {
+                if self.models.is_extra[j] as usize == s {
                     let n = (sizes[s] - total[s]).min(1 + rng.randrange(3) as i64);
                     sec[s].push((j, n));
                     total[s] += n;
                 }
             }
         }
-        let expand = |s: &[(usize, i64)]| s.iter().flat_map(|&(j, n)| std::iter::repeat_n(self.codes[j], n as usize)).collect::<Vec<u32>>();
+        let expand = |s: &[(usize, i64)]| s.iter().flat_map(|&(j, n)| std::iter::repeat_n(self.models.codes[j], n as usize)).collect::<Vec<u32>>();
         Ok((expand(&sec[0]), expand(&sec[1])))
     }
 
     /// Every card of the vocabulary, the likeliest to be in the deck first (the known ones left out).
     pub fn ranked(&self, canon: &[u32]) -> Vec<u32> {
-        let mut c_vis = vec![0i64; self.codes.len()];
+        let mut c_vis = vec![0i64; self.models.codes.len()];
         for c in canon {
             if let Some(&j) = self.index.get(c)
                 && c_vis[j] < 3
@@ -338,7 +327,7 @@ impl DeckModels {
         let p = self.presence(&c_vis, RANK_SLOTS);
         let mut order: Vec<usize> = (0..p.len()).collect();
         order.sort_by(|&a, &b| p[b].partial_cmp(&p[a]).unwrap_or(std::cmp::Ordering::Equal));
-        order.into_iter().filter(|&j| c_vis[j] == 0).map(|j| self.codes[j]).collect()
+        order.into_iter().filter(|&j| c_vis[j] == 0).map(|j| self.models.codes[j]).collect()
     }
 }
 

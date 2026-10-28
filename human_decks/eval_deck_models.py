@@ -31,6 +31,7 @@ from torch.utils.data import DataLoader, random_split
 
 import train_deck_counts as tc
 import train_deck_existence as te
+from deck_common import quantize_rows
 
 HERE = Path(__file__).resolve().parent
 KS = (1, 3, 10, 20)
@@ -62,12 +63,9 @@ def stored(model, bits, bits_for=None):
                 parts.append(h.cpu().numpy().tobytes())
                 w.copy_(h.float())
             else:
-                top = 2 ** (bits_w - 1) - 1
-                # (clamped after the conversion: a row of zeros would get a scale of 0 in 16 bits)
-                scale = (w.abs().amax(dim=1, keepdim=True) / top).half().float().clamp(min=1e-7)
-                q = (w / scale).round().clamp(-top, top)
-                parts.append(q.to(torch.int8).cpu().numpy().tobytes() + scale.half().cpu().numpy().tobytes())
-                w.copy_(q * scale)
+                q, scale = quantize_rows(w, bits_w)
+                parts.append(q.cpu().numpy().tobytes() + scale.cpu().numpy().tobytes())
+                w.copy_(q.float() * scale.float())
     return len(zstd.compress(b"".join(parts), level=19))
 
 

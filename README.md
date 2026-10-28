@@ -71,7 +71,7 @@ Data that is not in git:
 
 - The human deck lists, in `human_decks/decks/` and `human_decks/decks_new/`.
   `human_decks/README.md` tells how to download them and train the deck models.
-- The deck models' export, `human_decks/onnx_export/`. The build compiles it into the bot. Without
+- The deck models' export, `human_decks/deck_models.bin`. The build embeds it in the bot. Without
   it, the bot builds without the `neural` completion; then set `BOT_COMPLETION=corpus`.
 - The index of the `corpus` completion, `build/deck_index.npz`: `scripts/build_deck_index.py`.
 
@@ -137,7 +137,7 @@ scripts with bugs; the engine's cards are translated from them.
 ```
 crates/bot/             the bot (bin bot) and its tools (bin bot-*)
 crates/bot-py-binding/  the bot's Python binding (import bot_py_binding)
-crates/deckmodels/      the deck completion models (their ONNX export, compiled in)
+crates/deckmodels/      the deck completion models (on burn, their export embedded)
 crates/highs/           HiGHS (external/HiGHS), for the belief replay's flow model
 ygopro-core-rust/       submodule: the engine (ygo-core), the cards (ygo-cards), the arbiter and the
                         bot protocol (ygo-arbiter), the differential tests (ygo-diff, oracle/)
