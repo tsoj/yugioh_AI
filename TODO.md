@@ -809,8 +809,10 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       `check_p42`, `get_card_effect`): likely an exponential material search. The current binary
       plays the game in 51 s (its search goes elsewhere), so the slow check is still there. Find
       the position (old binary: `scratchpad/datagen-bin`) and bound or speed up the check.
+      2026-10-29: the old binary is gone; 400 random games of the opening's decks (Kewl Tune vs
+      Heartland City Regionals) take 61 s, none slow: the position needs a search line.
 
-- [ ] A Kaiju loop: in round 3's game 2898 (pairs500x20_c.jsonl, 2000 nodes) a duel the search
+- [x] A Kaiju loop: in round 3's game 2898 (pairs500x20_c.jsonl, 2000 nodes) a duel the search
       reached at decision 596 never asks anything again: process_adjust ->
       adjust_self_destroy_set -> check_unique_code (Kaiju's unique procedure), memory growing ~1 GB a
       minute; the OOM killer stopped the whole datagen at 20G. run_until_prompt now gives up after
@@ -821,8 +823,12 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       adjust. The C++ destroy applies EFFECT_INDESTRUCTABLE to REASON_RULE alike, so likely upstream
       (or a script: Block Dragon's `(r&REASON_BATTLE)==0` also covers rule destruction). Next: a
       record of the line ($YGOAI_DEBUG_BROKEN prints the field at the cap) to replay against C++.
-      2026-10-29: not reproduced (no record kept); its loop emits hints, so the process-call caps
-      of the bot and the arbiter end it, and ocg_process now ends silent loops (rust f1ce3de).
+      2026-10-29: an engine bug, not the rules: reproduced by random games of Kaiju/Mikanko/Rock
+      cards (seed 8 game 169): Block Dragon under the opponent's control has to return to its
+      owner's full Monster Zones, so it is destroyed by rule, which it survives; each adjust then
+      tried the return again (an endless stream of hints). The return is one event: now the
+      monster stays with its current controller (rust 9d38b69, also in the oracle patch; regress
+      case_control_return_no_zone_8). ocg_process ends silent loops too (rust f1ce3de).
 - [x] The 4 mismatching games against the C++ core (found 2026-10-13, older than the recent
       changes): pair17349 game 1 decision 947, pair19366 game 2 decision 1880, pair8112 game 0
       decision 89, pair9854 game 1 decision 467 (`build/regress_pairs/`). Fixed (rust 745abcb);
@@ -836,11 +842,11 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       after the activated-effect checks). Alba System Dogmatikalamity (pairs 2394 9294 15254
       16976): only the C++ core runs out of its script budget, the Rust engine plays them in ~1 s
       (regress cases).
-- [ ] Safe Zone / Gozen Match (pair 12763), diagnosed 2026-10-29: Gozen Match's EVENT_ADJUST
-      operation is entered again while it waits for its AnnounceAttribute; the coroutine check
-      ("recursive event trigger detected") ends the inner run and the operation then runs without
-      its arguments (c53334471.lua:71, tp nil). Both cores alike (regress case_pair12763). A fix
-      needs a rule for continuous effects that ask while another adjust runs.
+- [x] Safe Zone / Gozen Match (pair 12763) and Rivalry of Warlords: an EVENT_ADJUST operation that
+      asks and then sends cards is triggered again during its own run; the C++ coroutine check
+      ended the outer run and it later ran without its arguments. Fixed in the oracle patch (the
+      nested call does nothing; rust 9d38b69), as the Rust engine already played it; Safe Zone's
+      condition without a target in lua_fixes/c38296564.lua. Pair 12763: 20 games identical, no errors.
 - [x] Last Turn activated during an attack: fixed 2026-10-29 (rust c75d45b, also in the oracle
       patch): the forced battle restores the attack it interrupts. The old C++ segfault pairs 471
       907 912 1125 now play 100 games identical to the core.
@@ -855,14 +861,16 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       IsAttack(0) in 2 ports (afaacfd); Freezing Chains (above). ocg_process ends a duel that
       loops silently (f1ce3de). The games as a regression test of the engine against itself:
       ygopro-core-rust regress/ (tools/regress.py, --quick ~2 min, all ~30 min).
-- [ ] Divergences from the C++ core found 2026-10-29 by the same games in differential mode
-      (build/perf/cmp/diff1, 11 of 2510 jobs; reproduce with ygo-diff --from G): Cairngorgon,
-      Antiluminescent Knight offered as a chain option only by Rust (r50_1042 game 180, r80long_3042
-      game 29); chain options with Abduction around (r50_1053 g355, r50_1068 g120, r50_1106 g44);
-      Kurama / The Deep Grave (r50_1036 g61); Akihiron confirmed only by Rust (r50_1077 g172);
-      Number 17 / Number 47 / Mathmech Multiplication (r50_1108 g433); Level Down!? (hcov_90500169_1
-      game 1); hints (r100_2008 g375, r100_2015 g175); r100_2024 timed out (1 h). Decide each by the
-      rules, fix, add a regress case.
+- [x] Divergences from the C++ core found 2026-10-29 (11 of 2510 jobs of build/perf/cmp/diff1): all
+      fixed, each with a regress case, and a second differential pass (build/perf/cmp/diff2, the
+      same 2510 jobs, ~140k games) found none. The causes: script bugs (lua_fixes + ports):
+      IsController (3 cards; Cairngorgon could not redirect to them), The Deep Grave's summon
+      condition call, the Horus LV4/6/8 and Dark Mimic LV3 LV sets, Gamma Summon, Chivalrous
+      Path, Hayate the Earth Star, Yosenju Sabu, Dogmatikamacabre (found by scanning all scripts
+      for undefined functions and constants); port bugs: Abduction's hint timing (all ports'
+      hint timings checked), 63 single-label copies of GetLabel() (26 ports), scripts loaded by
+      Duel.LoadCardScript (ScriptInfo.loads, Level Down!?); the oracle's coroutine re-entry
+      (above). r100_2024 times out only in the C++ core (Rust: 500 games in 101 s).
 - [ ] Seed the engine processes in matches (pass the seed to `ygoai-engine`), so a crashed
       game can be reproduced exactly.
 
