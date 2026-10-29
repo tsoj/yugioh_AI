@@ -776,15 +776,16 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
 ## Engine and core correctness
 
 - [x] Engine speed (user, 2026-10-29: another developer reports a ygopro-core 7x faster than
-      stock, ~3x our port): ygopro-core-rust `perf` (3ba0a87..eb3adae), merged; the same games
+      stock, ~3x our port): ygopro-core-rust `perf` (3ba0a87..7dc1d4f), merged; the same games
       throughout. 24 openings of match2 (lines 50001-50024) at 300 nodes, one E-core:
-      162.0 s -> 129.1 s (+25% nodes/s; instructions 588G -> 480G), checksums unchanged (also
+      162.0 s -> 124.7 s (+30% nodes/s; instructions 588G -> 483G), checksums unchanged (also
       README's 6 openings at 3000n and 10d). The changes:
       - `filter_effect` / `is_affected_by_effect`: return at once for a code no card or aura has
         (`Duel::card_effect_count`); card writes only on a change (`reset_sequence`, immune list).
       - `refresh_effect_conditions`: its scan kept until effects or relations change.
       - `EffArgs` without copies, `public_order` by a key per card, queries hand over their
-        buffer, empty deques not copied (`Deque`).
+        buffer, empty deques not copied (`Deque`), effect ranges without allocation
+        (`EffectRange`), script variables by binary search.
       - Release profile: thin LTO, ygo-core and bot in one codegen unit (alone ~10%, same build
         time). Fat LTO with one unit: ~10% more, but ~50 min builds; fat LTO with 16 units ~4%
         more than thin, 23 min.
