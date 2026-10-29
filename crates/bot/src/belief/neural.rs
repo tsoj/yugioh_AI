@@ -10,7 +10,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::{Mutex, OnceLock};
 
 
-use crate::belief::completion::{Completion, CorpusCompletion, VanillaCompletion, canonical_code, card, fits_need};
+use crate::belief::completion::{Completion, VanillaCompletion, canonical_code, card, fits_need};
 use crate::belief::script_index::{GlobalKey, global_keys, win_condition_codes};
 use crate::belief::tracker::Need;
 use ygo_arbiter::pyrandom::PyRandom;
@@ -314,8 +314,9 @@ impl DeckModels {
         Ok((expand(&sec[0]), expand(&sec[1])))
     }
 
-    /// Every card of the vocabulary, the likeliest to be in the deck first (the known ones left out).
-    pub fn ranked(&self, canon: &[u32]) -> Vec<u32> {
+    /// Every card of the vocabulary, the likeliest to be in a deck of `slots` cards first (the known
+    /// ones left out).
+    pub fn ranked(&self, canon: &[u32], slots: f32) -> Vec<u32> {
         let mut c_vis = vec![0i64; self.models.codes.len()];
         for c in canon {
             if let Some(&j) = self.index.get(c)
@@ -324,10 +325,15 @@ impl DeckModels {
                 c_vis[j] += 1;
             }
         }
-        let p = self.presence(&c_vis, RANK_SLOTS);
+        let p = self.presence(&c_vis, slots);
         let mut order: Vec<usize> = (0..p.len()).collect();
         order.sort_by(|&a, &b| p[b].partial_cmp(&p[a]).unwrap_or(std::cmp::Ordering::Equal));
         order.into_iter().filter(|&j| c_vis[j] == 0).map(|j| self.models.codes[j]).collect()
+    }
+
+    /// Whether the card is an extra deck card (false: not in the vocabulary).
+    pub fn is_extra(&self, code: u32) -> bool {
+        self.index.get(&code).is_some_and(|&j| self.models.is_extra[j])
     }
 }
 
@@ -405,15 +411,16 @@ impl NeuralCompletion {
         }
         let usable = |code: u32| card(code).is_some() && !wins.contains(&code) && global_keys(code).is_subset(&have);
         let (main, extra) = deck(&observed, km.len() + n_main, ke.len() + n_extra, &usable)?;
-        let corpus = || CorpusCompletion::get();
-        let fill_main = self.fill_section(&main, &km, n_main, &usable, &|| Ok(corpus()?.complete(known_main, known_extra, n_main, 0, present)?.0))?;
-        let fill_extra = self.fill_section(&extra, &ke, n_extra, &usable, &|| Ok(corpus()?.complete(known_main, known_extra, 0, n_extra, present)?.1))?;
+        let slots = (km.len() + n_main + ke.len() + n_extra) as f32;
+        let spare = |extra: bool| self.models.ranked(&observed, slots).into_iter().filter(move |&c| self.models.is_extra(c) == extra);
+        let fill_main = self.fill_section(&main, &km, n_main, &usable, &mut spare(false));
+        let fill_extra = self.fill_section(&extra, &ke, n_extra, &usable, &mut spare(true));
         Ok((fill_main, fill_extra))
     }
 
-    /// The model's cards of one section beyond the known ones, those usable (the corpus completion's
-    /// for the rest): `n` of them.
-    fn fill_section(&self, model_cards: &[u32], known: &[u32], n: usize, usable: &dyn Fn(u32) -> bool, spare: &dyn Fn() -> Result<Vec<u32>, String>) -> Result<Vec<u32>, String> {
+    /// The model's cards of one section beyond the known ones, those usable (for the rest the
+    /// spare cards, usable ones, one copy each): `n` of them.
+    fn fill_section(&self, model_cards: &[u32], known: &[u32], n: usize, usable: &dyn Fn(u32) -> bool, spare: &mut dyn Iterator<Item = u32>) -> Vec<u32> {
         let mut rest: HashMap<u32, i64> = HashMap::new();
         for &c in model_cards {
             *rest.entry(c).or_default() += 1;
@@ -434,24 +441,13 @@ impl NeuralCompletion {
             }
         }
         if out.len() < n {
-            // (in the model's order; what it could not supply, the corpus completion does)
-            let mut counts: HashMap<u32, i64> = HashMap::new();
-            for &c in known.iter().chain(&out) {
-                *counts.entry(c).or_default() += 1;
-            }
-            for c in spare()? {
-                if out.len() >= n {
-                    break;
-                }
-                let k = counts.entry(canonical_code(c)).or_default();
-                if *k < 3 {
-                    out.push(c);
-                    *k += 1;
-                }
-            }
+            // (the spare cards are neither known nor in the model's deck: those the model's deck
+            // did not hold, by its ranking)
+            let taken: BTreeSet<u32> = model_cards.iter().copied().collect();
+            out.extend(spare.filter(|c| !taken.contains(c) && usable(*c)).take(n - out.len()));
         }
         out.truncate(n);
-        Ok(out)
+        out
     }
 }
 
@@ -496,7 +492,7 @@ impl Completion for NeuralCompletion {
             have.extend(global_keys(c));
         }
         let mut out = Vec::new();
-        for code in self.models.ranked(&canon) {
+        for code in self.models.ranked(&canon, RANK_SLOTS) {
             if let Some(c) = card(code)
                 && !wins.contains(&code)
                 && global_keys(code).is_subset(&have)

@@ -13,7 +13,7 @@ use ygo_arbiter::actions::{Response, battle_options, encode, idle_options};
 use crate::bots::GreedyBot;
 use crate::belief::bot::BotBelief;
 use crate::belief::check::state_diffs;
-use crate::belief::completion::{Completion, CorpusCompletion, VanillaCompletion, by_name, card};
+use crate::belief::completion::{Completion, VanillaCompletion, by_name, card};
 use crate::belief::tracker::Need;
 use crate::belief::script_index::zone_sensitive;
 use ygo_arbiter::game::{Bot, BotError, InitInfo, ObsItem, run_until_prompt};
@@ -71,15 +71,11 @@ fn env_num(name: &str) -> Option<u64> {
 }
 
 /// The deck completion by name (`completion::by_name`), with what the belief replay and the
-/// completions load on first use loaded now, before the clock runs (the neural completion takes the
-/// corpus completion's cards for what its model cannot supply).
+/// completions load on first use loaded now, before the clock runs.
 pub fn completion(name: &str) -> Result<Option<&'static dyn Completion>, String> {
     crate::belief::script_index::warm_up();
     crate::belief::completion::monster_sset_codes();
     VanillaCompletion::get();
-    if name != "vanilla" {
-        CorpusCompletion::get()?;
-    }
     by_name(name)
 }
 
