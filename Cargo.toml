@@ -11,8 +11,18 @@ license = "AGPL-3.0-or-later"
 
 [profile.release]
 debug = 1
+# (thin LTO, and the engine and the bot in one codegen unit each: 10-20% faster, the same build
+# time; fat LTO with one codegen unit is ~10% faster still but takes ~50 minutes)
+lto = "thin"
 
 # (no debug info for dependencies: burn's generic code made the binding 600 MB; ours keeps it for
 # profiling)
 [profile.release.package."*"]
 debug = 0
+
+[profile.release.package.ygo-core]
+codegen-units = 1
+debug = 0
+
+[profile.release.package.bot]
+codegen-units = 1

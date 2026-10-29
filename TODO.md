@@ -775,6 +775,28 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
 
 ## Engine and core correctness
 
+- [x] Engine speed (user, 2026-10-29: another developer reports a ygopro-core 7x faster than
+      stock, ~3x our port): ygopro-core-rust `perf` (3ba0a87..eb3adae), merged; the same games
+      throughout. 24 openings of match2 (lines 50001-50024) at 300 nodes, one E-core:
+      162.0 s -> 129.1 s (+25% nodes/s; instructions 588G -> 480G), checksums unchanged (also
+      README's 6 openings at 3000n and 10d). The changes:
+      - `filter_effect` / `is_affected_by_effect`: return at once for a code no card or aura has
+        (`Duel::card_effect_count`); card writes only on a change (`reset_sequence`, immune list).
+      - `refresh_effect_conditions`: its scan kept until effects or relations change.
+      - `EffArgs` without copies, `public_order` by a key per card, queries hand over their
+        buffer, empty deques not copied (`Deque`).
+      - Release profile: thin LTO, ygo-core and bot in one codegen unit (alone ~10%, same build
+        time). Fat LTO with one unit: ~10% more, but ~50 min builds; fat LTO with 16 units ~4%
+        more than thin, 23 min.
+      Checked with `ygo-diff --rust-only --digest` (a hash per game) against the old build: 4800
+      random games and 2822 replayed bot games per change, none differed; at fixed nodes the bot
+      played the same 24 of 32 games move for move (the other 8 differ between two runs of the old
+      build too). Profile (callgrind, bench at 300n) of what is left: the effect checks
+      (`is_available` and the conditions), allocation (~9%), duel copies (~5%: each card cost,
+      target and operation snapshots the duel for its replay scope, 2.5x as many as the search),
+      unwinding of `Interrupt`s (~4%). Ideas: fat LTO for match builds; fewer duel snapshots (a
+      card function that asks nothing needs none, but that is known only afterwards).
+
 - [ ] A datagen game that never finishes: opening 14478 of `match1.jsonl` (`selfplay_2000n`)
       kept several threads busy for hours. With the old datagen binary (before ab5521c) it still
       runs after 10 min, inside the Synchro material check (`procs::synchro::hand_checks`,
