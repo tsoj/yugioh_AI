@@ -71,7 +71,17 @@ Data that is not in git:
 
 - The human deck lists, in `human_decks/decks/` and `human_decks/decks_new/`.
   `human_decks/README.md` tells how to download them and train the deck models.
-- The index of the `corpus` completion, `build/deck_index.npz`: `scripts/build_deck_index.py`.
+- The index of the `corpus` completion (`BOT_COMPLETION=corpus`), `build/deck_index.npz`:
+  `scripts/build_deck_index.py`.
+
+The opening books are in `books/`, compressed with zstd (`zstd -d books/match2.jsonl.zst -o
+runs/books/match2.jsonl`; `scripts/sprt_branch.sh` unpacks its book itself):
+
+- `match2.jsonl.zst`: the SPRT book; `match2_tested.jsonl.zst`: its candidates with the results of
+  their test games (`scripts/book/README.md`).
+- `pairs500x20*.jsonl.zst`: the openings of the learned evaluation's data rounds 1-3 (500 deck pairs,
+  20 games each; `scripts/train_eval_mover.py`).
+- `bench.jsonl`: the openings of the search benchmark.
 
 ## Development
 
@@ -82,7 +92,7 @@ scripts/sprt_branch.sh my-branch main
 ```
 
 The script builds both commits into `build/bots/<sha>/` and runs the arbiter with the opening book
-`runs/books/match2.jsonl`, time control 10+0.1 and Elo bounds [0, 5]. The log and the records go
+`runs/books/match2.jsonl` (unpacked from `books/`), time control 10+0.1 and Elo bounds [0, 5]. The log and the records go
 to `runs/sprt/`, a summary line to `runs/sprt/results.jsonl`. `NODES=N` gives fixed-node searches
 instead; the script's header lists the other settings.
 
@@ -100,7 +110,7 @@ Other checks:
 
 | Check | Command | When |
 |---|---|---|
-| Search behavior | `bot-bench-search runs/books/match1.jsonl 6 10d` and `... 3000n`: the checksums must not change | after a refactor of the search |
+| Search behavior | `bot-bench-search books/bench.jsonl 6 10d` and `... 3000n`: the checksums must not change | after a refactor of the search |
 | Belief replay | `.venv/bin/python scripts/suite.py --regression TAG` (see [docs/belief-replay.md](docs/belief-replay.md)) | after a change to the belief replay or the arbiter |
 | Engine | differential tests against the C++ core (`ygopro-core-rust/README.md`); `ygopro-core-rust/tools/replay_records.py` replays SPRT records on both engines | after a change to the engine |
 | Unit tests | `.venv/bin/python -m unittest discover tests`; `cargo test --release -p bot`; `cargo test --release --manifest-path ygopro-core-rust/Cargo.toml -p ygo-arbiter` | always |
@@ -121,7 +131,7 @@ The bot's models are in `crates/bot/models/` and compiled in. To make them again
 - The set policy `set_policy_s2_h16.json`: `bot-card-refs --independent --decisions` →
   `scripts/train_set_policy.py`.
 - The deck models: `human_decks/README.md`.
-- The SPRT opening book `runs/books/match2.jsonl`: `scripts/book/README.md`.
+- The SPRT opening book `books/match2.jsonl.zst`: `scripts/book/README.md`.
 
 ## Changes to the rules engine
 
@@ -140,6 +150,7 @@ crates/highs/           HiGHS (external/HiGHS), for the belief replay's flow mod
 ygopro-core-rust/       submodule: the engine (ygo-core), the cards (ygo-cards), the arbiter and the
                         bot protocol (ygo-arbiter), the differential tests (ygo-diff, oracle/)
 human_decks/            the deck corpus, its download and the deck models' training
+books/                  the opening books (zstd)
 external/               submodules: CardScripts, BabelCDB, HiGHS
 lua_fixes/              corrected card scripts
 scripts/                command line tools; common/: their shared code; book/: the SPRT opening book
