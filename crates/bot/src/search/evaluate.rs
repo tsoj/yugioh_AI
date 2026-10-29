@@ -144,8 +144,8 @@ const CHOSEN_EFFECTS: u32 = EFFECT_TYPE_IGNITION | EFFECT_TYPE_QUICK_O | EFFECT_
 /// Whether card `c` has an effect of the types `types` that can be activated from `location`
 /// with uses left this turn for player `p` (not whether it could be activated now).
 fn has_effect(d: &mut Duel, c: CardId, location: u32, types: u32, p: u32) -> bool {
-    for i in 0..d.card(c).field_effect.items.len() {
-        let e = d.card(c).field_effect.items[i].1;
+    for i in 0..d.card(c).field_effect().items.len() {
+        let e = d.card(c).field_effect().items[i].1;
         let fx = d.effect(e);
         if !fx.deleted && fx.type_ as u32 & types != 0 && fx.range as u32 & location != 0 && e.check_count_limit(d, p as u8) {
             return true;
@@ -216,7 +216,7 @@ fn side_scan(d: &mut Duel, p: u32) -> SideScan {
             fx_field += has_effect(d, c, LOCATION_SZONE, EFFECT_TYPE_IGNITION | EFFECT_TYPE_QUICK_O, p) as u32;
         }
         field |= i == 5;
-        equips += d.card(c).equiping_target.is_some() as u32;
+        equips += d.card(c).equiping_target().is_some() as u32;
         counters += count(&d.card(c).counters);
     }
     // (monsters, spells and traps of a pile, by their current types)

@@ -797,6 +797,11 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       target and operation snapshots the duel for its replay scope, 2.5x as many as the search),
       unwinding of `Interrupt`s (~4%). Ideas: fat LTO for match builds; fewer duel snapshots (a
       card function that asks nothing needs none, but that is known only afterwards).
+      Round 3 (rust ef8f004, merged with the fixes below): the condition scan is cleared only when
+      an effect with a condition or a relation of a container with one changes (flag effects
+      cleared it at ~30% of the refreshes): -1.7% instructions, the same games. Callgrind with
+      line tables: of 12.8M is_available calls from the refresh only 773 changed a status; the
+      conditions themselves (~12%) are what the rule asks for. Untried: PGO (no code change).
 
 - [ ] A datagen game that never finishes: opening 14478 of `match1.jsonl` (`selfplay_2000n`)
       kept several threads busy for hours. With the old datagen binary (before ab5521c) it still
@@ -816,6 +821,8 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       adjust. The C++ destroy applies EFFECT_INDESTRUCTABLE to REASON_RULE alike, so likely upstream
       (or a script: Block Dragon's `(r&REASON_BATTLE)==0` also covers rule destruction). Next: a
       record of the line ($YGOAI_DEBUG_BROKEN prints the field at the cap) to replay against C++.
+      2026-10-29: not reproduced (no record kept); its loop emits hints, so the process-call caps
+      of the bot and the arbiter end it, and ocg_process now ends silent loops (rust f1ce3de).
 - [x] The 4 mismatching games against the C++ core (found 2026-10-13, older than the recent
       changes): pair17349 game 1 decision 947, pair19366 game 2 decision 1880, pair8112 game 0
       decision 89, pair9854 game 1 decision 467 (`build/regress_pairs/`). Fixed (rust 745abcb);
@@ -823,16 +830,39 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
 - [x] Collect the Lua errors the C++ core really raises over the recorded deck pairs
       (`YGO_DIFF_LOG=1`): identical games hide script bugs the port copies (e.g. Spell Gear).
       Done 2026-10-15 (all 19470 pairs, 3 games, seed 1): 5 card scripts fixed (rust 81c49f0); no mismatches.
-- [ ] Left from that scan: the Freezing Chains of the Ice Barrier / Safe Zone "C stack overflow"
-      (endless IsSetCard/IsExistingMatchingCard recursion, pairs 9160 and 12763; Gozen Match's
-      error there follows it), and Alba System Dogmatikalamity's fusion check running out of the
-      core's script budget (pairs 2394 9294 15254 16976, those games skipped).
-- [ ] Last Turn activated during an attack: its forced battle leaves the outer attack without an
-      attacker, and the core panics (C++ dereferences null). This is an upstream bug. The search now
-      avoids such lines (9c3af1d); decide whether to guard it in the core too. It also ends whole
-      games outside the search: the 2 candidates lost in the match2 book build (processor3.rs:387,
-      seeds 91070843 and 91125503 of runs/data/onesided/book2_kept.jsonl reproduce it in 1 s with
-      ygoai-book-test -j 1).
+- [x] Left from that scan: Freezing Chains of the Ice Barrier's "C stack overflow" (pair 9160):
+      fixed 2026-10-29 in lua_fixes/c43582229.lua and rust 32d628e (its immunity's condition
+      asked IsSetCard, which asked the immunity again; the count is now checked last in the value,
+      after the activated-effect checks). Alba System Dogmatikalamity (pairs 2394 9294 15254
+      16976): only the C++ core runs out of its script budget, the Rust engine plays them in ~1 s
+      (regress cases).
+- [ ] Safe Zone / Gozen Match (pair 12763), diagnosed 2026-10-29: Gozen Match's EVENT_ADJUST
+      operation is entered again while it waits for its AnnounceAttribute; the coroutine check
+      ("recursive event trigger detected") ends the inner run and the operation then runs without
+      its arguments (c53334471.lua:71, tp nil). Both cores alike (regress case_pair12763). A fix
+      needs a rule for continuous effects that ask while another adjust runs.
+- [x] Last Turn activated during an attack: fixed 2026-10-29 (rust c75d45b, also in the oracle
+      patch): the forced battle restores the attack it interrupts. The old C++ segfault pairs 471
+      907 912 1125 now play 100 games identical to the core.
+- [x] Engine robustness, 2026-10-29 (user: "the core needs to be robust"): ~297k games
+      (125k random over three deck types, 1000 human deck pairs, 127k replayed bot and SPRT
+      games, 46k for rarely played cards: 13,633 of 13,671 cards played at least 3 times), the
+      speed rounds against the original engine: the same digests. Found and fixed (rust, all
+      checked against the core): Last Turn (above); a Union card substituting again while its
+      own substitution was carried out (Cloudian - Acid Cloud + Fortune Chariot: an endless loop
+      in both cores, 01b706d); value functions that ignore their card panicked when the core
+      passed none (211 functions, effect_value, cc86f51); '?' ATK outside the field matched
+      IsAttack(0) in 2 ports (afaacfd); Freezing Chains (above). ocg_process ends a duel that
+      loops silently (f1ce3de). The games as a regression test of the engine against itself:
+      ygopro-core-rust regress/ (tools/regress.py, --quick ~2 min, all ~30 min).
+- [ ] Divergences from the C++ core found 2026-10-29 by the same games in differential mode
+      (build/perf/cmp/diff1, 11 of 2510 jobs; reproduce with ygo-diff --from G): Cairngorgon,
+      Antiluminescent Knight offered as a chain option only by Rust (r50_1042 game 180, r80long_3042
+      game 29); chain options with Abduction around (r50_1053 g355, r50_1068 g120, r50_1106 g44);
+      Kurama / The Deep Grave (r50_1036 g61); Akihiron confirmed only by Rust (r50_1077 g172);
+      Number 17 / Number 47 / Mathmech Multiplication (r50_1108 g433); Level Down!? (hcov_90500169_1
+      game 1); hints (r100_2008 g375, r100_2015 g175); r100_2024 timed out (1 h). Decide each by the
+      rules, fix, add a regress case.
 - [ ] Seed the engine processes in matches (pass the seed to `ygoai-engine`), so a crashed
       game can be reproduced exactly.
 

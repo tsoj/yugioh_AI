@@ -118,5 +118,5 @@ fn card_state(d: &Duel, c: CardId, h: &mut rustc_hash::FxHasher) {
     let x = d.card(c);
     (x.cardid, x.current.position, x.status, &x.counters).hash(h);
     x.xyz_materials.iter().map(|m| d.card(*m).cardid).for_each(|id| id.hash(h));
-    x.equiping_target.map(|t| d.card(t).cardid).hash(h);
+    x.equiping_target().map(|t| d.card(t).cardid).hash(h);
 }

@@ -31,7 +31,7 @@ fn is_hidden(d: &ygo_core::duel::Duel, cid: u32) -> bool {
     use ygo_core::constants::*;
     d.card_by_id(cid).is_some_and(|c| {
         let x = d.card(c);
-        x.current.location as u32 & (LOCATION_GRAVE | LOCATION_OVERLAY) == 0 && x.overlay_target.is_none() && x.is_position(POS_FACEUP) == 0
+        x.current.location as u32 & (LOCATION_GRAVE | LOCATION_OVERLAY) == 0 && x.overlay_target().is_none() && x.is_position(POS_FACEUP) == 0
     })
 }
 
