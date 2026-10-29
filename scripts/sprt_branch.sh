@@ -6,14 +6,15 @@
 #
 # Each ref is built once into build/bots/<sha>/ (bot, bot-bench-search and its engine's arbiter
 # ygo-arbiter), in a worktree of its own (build/bench-tree, target build/bench-target; its
-# submodules at the ref's commits, the deck models the checkout's): the checkout itself is never
+# submodules at the ref's commits, the deck models the ref's, older refs' the checkout's ONNX export): the checkout itself is never
 # switched. Each build's bots run with YGO_ROOT=build/bots/<sha>/root: the ref's lua_fixes/, the
 # checkout's data. The match uses BASE's ygo-arbiter. Log and records go to runs/sprt/<name>_<time>.*, a summary line to
 # runs/sprt/results.jsonl.
 #
 # Environment: ALLOW_DIVERGED=1 (NEW need not contain BASE); TC (default 10+0.1); NODES=N for fixed-node searches (BOT_SEARCH_NODES, --tc
 # 60+1); CONC (16 games at once); OPENINGS (10000: 20000 games); ELO ("0 5"; "none": all OPENINGS, no SPRT);
-# NAME (default NEW); SHUF (the book's shuffle seed, random by default); BOOK (runs/books/match2.jsonl)
+# NAME (default NEW); SHUF (the book's shuffle seed, random by default); BOOK (runs/books/match2.jsonl;
+# a missing book is unpacked from books/, the books in git)
 # and POOL (42049: the openings drawn from are the book's first POOL, those of match2_tested.jsonl's
 # first 50000 lines; the later ones are kept for the evaluation's data and tests); BUILD_ONLY=1 builds and stops;
 # RESUME=runs/sprt/<name>_<time>.jsonl continues that stopped run (its finished pairs count, its
@@ -34,6 +35,7 @@ OPENINGS=${OPENINGS:-10000}
 ELO=${ELO:-0 5}
 BOOK=${BOOK:-runs/books/match2.jsonl}
 POOL=${POOL:-42049}
+[ -e "$BOOK" ] || { mkdir -p "$(dirname "$BOOK")"; zstd -dq "books/$(basename "$BOOK").zst" -o "$BOOK"; }
 NAME=${NAME:-$(echo "$NEW" | tr '/' '-')}
 RESUME=${RESUME:-}
 if [ -n "$RESUME" ]; then
@@ -76,6 +78,8 @@ build() {
         git -C "$TREE" checkout -q --detach "$sha"
         submodules
         echo "$(date) building $1 ($sha)" >&2
+        # (the deck models: the ref's human_decks/deck_models.bin; refs before it read the
+        # checkout's ONNX export)
         systemd-run --user --scope -q -p MemoryMax=28G -p MemorySwapMax=0 nice -n 10 \
             env CARGO_TARGET_DIR="$TARGET" CARGO_BUILD_JOBS=6 YGO_DECK_MODELS_ONNX="$ROOT/human_decks/onnx_export" \
             cargo build --release --manifest-path "$TREE/Cargo.toml" -p bot --bin bot --bin bot-bench-search >&2 \

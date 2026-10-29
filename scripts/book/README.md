@@ -18,3 +18,5 @@ does not decide too often. Each step's usage is in its script's docstring.
 4. The book: `select_openings.py runs/books/match2_tested.jsonl runs/books/match2.jsonl` keeps the
    openings in which each seat won at least 2 test games (54,590 of 64,998), without the test
    results. SPRTs draw from its first 42,049 openings (`scripts/sprt_branch.sh`: POOL).
+
+Both files are in git as `books/match2.jsonl.zst` and `books/match2_tested.jsonl.zst`.

@@ -131,7 +131,9 @@ def _rust_binding(dst: Path, ref: str | None) -> None:
     cargo = ["cargo", "build", "--release", "-q", "-p", "bot-py-binding"]
     if shutil.which("systemd-run"):
         cargo = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=20G", "-p", "MemorySwapMax=0", *cargo]
+    # (the deck models: the commit's human_decks/deck_models.bin; commits before it read the
+    # checkout's ONNX export)
     subprocess.run(cargo, cwd=src, check=True, env={**os.environ, "CARGO_TARGET_DIR": str(target), "CARGO_BUILD_JOBS": "8",
-                                         "YGO_DECK_MODELS_ONNX": str(ROOT / _DECKS / "onnx_export")})
+                                         "YGO_DECK_MODELS_ONNX": str(ROOT / "human_decks" / "onnx_export")})
     shutil.copy2(target / "release" / "libbot_py_binding.so", dst / "bot_py_binding" / "bot_py_binding.abi3.so")
     shutil.rmtree(src)

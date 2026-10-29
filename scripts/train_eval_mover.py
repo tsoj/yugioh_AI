@@ -1,6 +1,6 @@
 """Usage: scripts/train_eval_mover.py FEATURES.npz [--hidden 16] [--lam 0.5] [-o runs/nn/X.json]
 (FEATURES.npz from scripts/eval_mover_features.py; games in blocks of 20 per deck pair, alternating
-seat order, as runs/books/pairs500x20.jsonl, or explicit deck pairs: `pair`, `aseat`, `valgame`).
+seat order, as books/pairs500x20.jsonl.zst, or explicit deck pairs: `pair`, `aseat`, `valgame`).
 
 Mover-view eval with a deck-pair term (experiment).
 

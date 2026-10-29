@@ -26,6 +26,7 @@ identifies the deck early-game vs. late-game.
 
 import argparse
 import json
+import math
 import random
 import sys
 import time
@@ -40,8 +41,12 @@ from torch.utils.data import DataLoader, Dataset, random_split
 from tqdm import tqdm
 
 from deck_common import (
+    CardTable,
     ContextRefiner,
+    baked_state,
     build_extra_flags,
+    card_feature_ids,
+    quantize_aware,
     load_or_build_vocab,
     parse_ydk_deck,
     print_eval_table,
@@ -103,41 +108,50 @@ def build_token_tensors(per_batch_visible):
     return card_ids, card_counts, key_padding_mask
 
 
-def make_collate(V, min_reveal=0.05, max_reveal=0.95):
-    """Build a DataLoader collate_fn that masks a random visible subset of
-    each deck.  Returns:
-        card_ids          (B, L_max)  long, padded with 0
-        card_counts       (B, L_max)  long, padded with 0
+class Collate:
+    """A DataLoader collate_fn (a class: worker processes must pickle it) that masks a random
+    visible subset of each deck. The cards are lists of (card, count), not dense (B, V) count
+    vectors: those would be ~7 MB per batch to pass between processes (`dense_counts` makes them on
+    the device). Returns:
+        card_ids          (B, L_max)  long, the visible cards, padded with 0
+        card_counts       (B, L_max)  long, their counts, padded with 0
         key_padding_mask  (B, L_max)  bool, True at padding
-        c_vis             (B, V)      long, dense count vector (visible part)
-        c_unseen          (B, V)      long, dense count vector (unseen part)
+        unseen_ids        (B, U_max)  long, the unseen cards, padded with 0
+        unseen_counts     (B, U_max)  long, their counts (at most 3), padded with 0
         slots_in_deck     (B,)        float, total deck size (visible + unseen)
     """
-    def _collate(batch):
+
+    def __init__(self, V, min_reveal=0.05, max_reveal=0.95):
+        self.V, self.min_reveal, self.max_reveal = V, min_reveal, max_reveal
+
+    def __call__(self, batch):
         B = len(batch)
-        c_vis = torch.zeros(B, V, dtype=torch.long)
-        c_unseen = torch.zeros(B, V, dtype=torch.long)
         slots_in_deck = torch.zeros(B, dtype=torch.float32)
-        per_batch_visible = []
+        per_batch_visible, per_batch_unseen = [], []
         for b, idxs in enumerate(batch):
             idxs = list(idxs)
             random.shuffle(idxs)
-            r = random.uniform(min_reveal, max_reveal)
+            r = random.uniform(self.min_reveal, self.max_reveal)
             k = max(1, int(round(r * len(idxs))))
             vis_counter = Counter()
             for j in idxs[:k]:
                 if vis_counter[j] < 3:
                     vis_counter[j] += 1
-            for j, n in vis_counter.items():
-                c_vis[b, j] = n
+            unseen_counter = Counter()
             for j in idxs[k:]:
-                if c_unseen[b, j] < 3:
-                    c_unseen[b, j] += 1
+                if unseen_counter[j] < 3:
+                    unseen_counter[j] += 1
             slots_in_deck[b] = len(idxs)
             per_batch_visible.append(list(vis_counter.items()))
+            per_batch_unseen.append(list(unseen_counter.items()))
         card_ids, card_counts, key_padding_mask = build_token_tensors(per_batch_visible)
-        return card_ids, card_counts, key_padding_mask, c_vis, c_unseen, slots_in_deck
-    return _collate
+        unseen_ids, unseen_counts, _ = build_token_tensors(per_batch_unseen)
+        return card_ids, card_counts, key_padding_mask, unseen_ids, unseen_counts, slots_in_deck
+
+
+def dense_counts(ids, counts, V):
+    """(B, V) count vectors from padded (card, count) lists (padding: count 0)."""
+    return torch.zeros(ids.shape[0], V, dtype=torch.long, device=ids.device).scatter_add_(1, ids, counts)
 
 
 # ---------------------------------------------------------------------------
@@ -146,14 +160,20 @@ def make_collate(V, min_reveal=0.05, max_reveal=0.95):
 
 class ExistenceModel(nn.Module):
     def __init__(self, vocab_size, d_model=128, hidden=512, n_trunk_layers=2,
-                 slots_scale=1.0):
+                 slots_scale=1.0, emb_buckets=None, features=None):
         super().__init__()
         self.V = vocab_size
         self.d_model = d_model
         # Pre-divide the raw slots_in_deck scalar before concatenation so the
         # trunk sees an O(1) feature instead of a 0–60 bare integer.
         self.slots_scale = float(slots_scale)
-        self.card_emb = nn.Embedding(vocab_size, d_model)
+        # (`features`: (S, n) for a checkpoint, whose ids the state dict brings, or the ids and n)
+        if features is not None and not torch.is_tensor(features[0]):
+            features = (torch.zeros(vocab_size, features[0], dtype=torch.long), features[1])
+        if emb_buckets is None and features is None:
+            self.card_emb = nn.Embedding(vocab_size, d_model)
+        else:
+            self.card_table = CardTable(vocab_size, d_model, emb_buckets or [(0, d_model)], features)
         # Per-count pool weight, init to identity (0, 1, 2, 3).
         self.count_weight = nn.Embedding(4, 1)
         with torch.no_grad():
@@ -175,7 +195,8 @@ class ExistenceModel(nn.Module):
         key_padding_mask  (B, L) bool — True at padding positions
         slots_in_deck     (B,) float — total deck size (visible + unseen)
         """
-        tok = self.card_emb(card_ids)                          # (B, L, d)
+        table = self.card_emb.weight if hasattr(self, "card_emb") else self.card_table()  # (V, d)
+        tok = F.embedding(card_ids, table)                     # (B, L, d)
         w = self.count_weight(card_counts).squeeze(-1)         # (B, L)
         w = w.masked_fill(key_padding_mask, 0.0)
         pooled, _ = self.refiner(tok, w)                       # (B, d)
@@ -184,7 +205,7 @@ class ExistenceModel(nn.Module):
         z = torch.cat([pooled, slots_norm.unsqueeze(-1)], dim=-1)
         h = self.trunk(z)
         q = self.head_proj(h)                                  # (B, d)
-        logits = q @ self.card_emb.weight.T + self.presence_bias  # (B, V)
+        logits = q @ table.T + self.presence_bias              # (B, V)
         return logits
 
 
@@ -192,16 +213,20 @@ class ExistenceModel(nn.Module):
 # Loss
 # ---------------------------------------------------------------------------
 
-def presence_loss(logits, c_vis, c_unseen):
+def presence_loss(logits, c_vis, c_unseen, soft=None, soft_weight=0.0):
     """Binary cross-entropy: is each card present in the full deck?
 
     logits : (B, V)  — per-card presence logit
     target : (B, V)  — 1 iff (c_vis + c_unseen) > 0
+    soft   : (B, V)  — a teacher's presence probabilities, mixed into the
+                       target with soft_weight (distillation)
 
     Cards with c_vis > 0 are excluded from the loss — their presence is
     a trivial given, so training on them is wasted signal.
     """
     target = ((c_vis + c_unseen) > 0).float()
+    if soft is not None:
+        target = (1 - soft_weight) * target + soft_weight * soft
     mask = (c_vis == 0).float()
     bce = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
     return (bce * mask).sum() / mask.sum().clamp(min=1.0)
@@ -212,7 +237,7 @@ def presence_loss(logits, c_vis, c_unseen):
 # ---------------------------------------------------------------------------
 
 def run_epoch(model, loader, device, opt=None,
-              log_losses=None, mid_callbacks=None):
+              log_losses=None, mid_callbacks=None, sched=None, teacher=None, soft_weight=0.0):
     """Run one epoch.
 
     log_losses     : if a list, per-batch BCE losses are appended.
@@ -226,23 +251,29 @@ def run_epoch(model, loader, device, opt=None,
     total, n = 0.0, 0
     callbacks = mid_callbacks or {}
     with torch.set_grad_enabled(train):
-        for step, (card_ids, card_counts, kpm, c_vis, c_unseen, slots_in_deck) in enumerate(tqdm(loader)):
+        for step, (card_ids, card_counts, kpm, unseen_ids, unseen_counts, slots_in_deck) in enumerate(tqdm(loader)):
             if step in callbacks:
                 callbacks[step]()
                 model.train(train)
             card_ids = card_ids.to(device)
             card_counts = card_counts.to(device)
             kpm = kpm.to(device)
-            c_vis = c_vis.to(device)
-            c_unseen = c_unseen.to(device)
+            c_vis = dense_counts(card_ids, card_counts, model.V)
+            c_unseen = dense_counts(unseen_ids.to(device), unseen_counts.to(device), model.V)
             slots_in_deck = slots_in_deck.to(device)
             logits = model(card_ids, card_counts, kpm, slots_in_deck)
-            loss = presence_loss(logits, c_vis, c_unseen)
+            soft = None
+            if train and teacher is not None:
+                with torch.no_grad():
+                    soft = torch.sigmoid(teacher(card_ids, card_counts, kpm, slots_in_deck))
+            loss = presence_loss(logits, c_vis, c_unseen, soft, soft_weight)
             if train:
                 opt.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 opt.step()
+                if sched is not None:
+                    sched.step()
             bs = c_vis.shape[0]
             l = loss.item()
             total += l * bs
@@ -344,9 +375,23 @@ def main():
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--epochs", type=int, default=5)
     ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--lr-schedule", choices=["constant", "cosine"], default="constant",
+                    help="cosine: decays the learning rate to 0 over --epochs (per epoch)")
+    ap.add_argument("--warmup-steps", type=int, default=0,
+                    help="raise the learning rate linearly from 0 over this many steps")
     ap.add_argument("--d-model", type=int, default=384)
     ap.add_argument("--hidden", type=int, default=512)
     ap.add_argument("--n-trunk-layers", type=int, default=3)
+    ap.add_argument("--emb-buckets", default="",
+                    help="card embedding dimensions by frequency, e.g. 2000:128,6000:64,0:32 (0: the rest)")
+    ap.add_argument("--qat-bits", type=int, default=0,
+                    help="train with the matrices rounded to this many bits (as eval_deck_models.py --bits stores them)")
+    ap.add_argument("--teacher", default="",
+                    help="an existence model checkpoint to distill: its presence probabilities "
+                         "mixed into the training targets with --soft-weight")
+    ap.add_argument("--soft-weight", type=float, default=0.5)
+    ap.add_argument("--card-features", action="store_true",
+                    help="add embeddings of the cards' set codes, types, race, attribute and level")
     ap.add_argument("--num-workers", type=int, default=8)
     ap.add_argument("--metrics-out", default="",
                     help="path to write per-epoch metrics as JSON")
@@ -392,21 +437,43 @@ def main():
     train_ds, val_ds = random_split(
         ds, [len(ds) - n_val, n_val],
         generator=torch.Generator().manual_seed(args.seed))
-    collate = make_collate(V)
+    collate = Collate(V)
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
                               collate_fn=collate, num_workers=args.num_workers)
     val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False,
                             collate_fn=collate, num_workers=args.num_workers)
 
     # Model
+    buckets = [tuple(int(x) for x in b.split(":")) for b in args.emb_buckets.split(",")] if args.emb_buckets else None
+    features = card_feature_ids(vocab, args.cdb) if args.card_features else None
     model = ExistenceModel(
         V,
         d_model=args.d_model,
         hidden=args.hidden,
         n_trunk_layers=args.n_trunk_layers,
         slots_scale=60.0,
+        emb_buckets=buckets,
+        features=features,
     ).to(args.device)
+    if args.qat_bits:
+        quantize_aware(model, args.qat_bits)
+    teacher = None
+    if args.teacher:
+        ck = torch.load(args.teacher, map_location="cpu", weights_only=False)
+        if ck["vocab"] != vocab:
+            sys.exit(f"error: {args.teacher} has another vocabulary")
+        teacher = ExistenceModel(**ck["config"])
+        teacher.load_state_dict(ck["state_dict"])
+        teacher.to(args.device).eval()
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    steps_per_epoch = len(train_loader)
+
+    def lr_factor(step):
+        f = min(1.0, (step + 1) / args.warmup_steps) if args.warmup_steps else 1.0
+        if args.lr_schedule == "cosine":
+            f *= 0.5 * (1 + math.cos(math.pi * (step // steps_per_epoch) / args.epochs))
+        return f
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_factor)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"params = {n_params:,}")
 
@@ -426,13 +493,16 @@ def main():
         if not args.save_path:
             return
         torch.save({
-            "state_dict": best_state,
+            "state_dict": baked_state(model) if args.qat_bits else best_state,
+            "qat_bits": args.qat_bits,
             "config": {
                 "vocab_size": V,
                 "d_model": args.d_model,
                 "hidden": args.hidden,
                 "n_trunk_layers": args.n_trunk_layers,
                 "slots_scale": 60.0,
+                "emb_buckets": buckets,
+                "features": [features[0].shape[1], features[1]] if features else None,
             },
             "vocab": vocab,
             "is_extra": is_extra,
@@ -445,6 +515,10 @@ def main():
     metrics = {
         "config": {
             "lr": args.lr,
+            "lr_schedule": args.lr_schedule,
+            "warmup_steps": args.warmup_steps,
+            "teacher": args.teacher,
+            "soft_weight": args.soft_weight if args.teacher else None,
             "d_model": args.d_model,
             "hidden": args.hidden,
             "n_trunk_layers": args.n_trunk_layers,
@@ -482,7 +556,8 @@ def main():
                 callbacks[step] = _make_cb(step)
 
         train_loss = run_epoch(model, train_loader, args.device, opt,
-                               log_losses=loss_traj, mid_callbacks=callbacks)
+                               log_losses=loss_traj, mid_callbacks=callbacks, sched=sched,
+                               teacher=teacher, soft_weight=args.soft_weight)
         val_loss = run_epoch(model, val_loader, args.device, None)
         marker = ""
         improved = val_loss < best_val
