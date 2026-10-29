@@ -801,7 +801,13 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       an effect with a condition or a relation of a container with one changes (flag effects
       cleared it at ~30% of the refreshes): -1.7% instructions, the same games. Callgrind with
       line tables: of 12.8M is_available calls from the refresh only 773 changed a status; the
-      conditions themselves (~12%) are what the rule asks for. Untried: PGO (no code change).
+      conditions themselves (~12%) are what the rule asks for.
+      PGO (2026-10-29, user: keep at >= 15%): profile of bot-bench-search on books/bench.jsonl
+      (6 openings, 1000n), the bot built with it: 24 match2 openings at 300n on an E-core 59.5 s ->
+      46.7 s (+27% nodes/s, three runs and swapped cores alike), checksums unchanged. In
+      scripts/sprt_branch.sh for every ref (its own profile; build/bots/<sha>/pgo marks it, older
+      builds are built again): a ref's build ~13 min instead of ~5 (instrumented build, 27 s of
+      profiling, the PGO build). llvm-profdata must match rustc's LLVM (both 22.1.8 now).
 
 - [ ] A datagen game that never finishes: opening 14478 of `match1.jsonl` (`selfplay_2000n`)
       kept several threads busy for hours. With the old datagen binary (before ab5521c) it still

@@ -5,7 +5,7 @@
 #   scripts/sprt_branch.sh NEW [BASE]        (BASE defaults to main)
 #
 # Each ref is built once into build/bots/<sha>/ (bot, bot-bench-search and its engine's arbiter
-# ygo-arbiter), in a worktree of its own (build/bench-tree, target build/bench-target; its
+# ygo-arbiter; the bot profile-guided, see build()), in a worktree of its own (build/bench-tree, target build/bench-target; its
 # submodules at the ref's commits, the deck models the ref's, older refs' the checkout's ONNX export): the checkout itself is never
 # switched. Each build's bots run with YGO_ROOT=build/bots/<sha>/root: the ref's lua_fixes/, the
 # checkout's data. The match uses BASE's ygo-arbiter. Log and records go to runs/sprt/<name>_<time>.*, a summary line to
@@ -73,23 +73,45 @@ build() {
         echo "$1 has no crates/bot: rebase it onto main first" >&2
         exit 1
     fi
-    if [ ! -x "$dir/bot" ] || [ ! -x "$dir/ygo-arbiter" ] || [ ! -x "$dir/bot-bench-search" ] || [ ! -d "$dir/root" ]; then
+    # (build/bots/<sha>/pgo: built with its profile; older builds are built again, or a match
+    # would compare a profile-guided bot with one without)
+    if [ ! -x "$dir/bot" ] || [ ! -x "$dir/ygo-arbiter" ] || [ ! -x "$dir/bot-bench-search" ] || [ ! -d "$dir/root" ] || [ ! -e "$dir/pgo" ]; then
         setup_tree
         git -C "$TREE" checkout -q --detach "$sha"
         submodules
         echo "$(date) building $1 ($sha)" >&2
         # (the deck models: the ref's human_decks/deck_models.bin; refs before it read the
         # checkout's ONNX export)
+        # Profile-guided: an instrumented bot-bench-search plays the checkout's books/bench.jsonl
+        # (6 openings at 1000 nodes, the same for every ref), and the bot is built with that
+        # profile (~25% more nodes/s, the same games; ~2x the build time). The profile's path
+        # names the commit, so no crate keeps code built with another commit's profile.
+        # llvm-profdata must be of rustc's LLVM version (rustc -vV).
+        local prof=$ROOT/build/pgo/$sha
+        rm -f "$prof"/*.profraw "$prof.profdata"
+        mkdir -p "$prof"
+        systemd-run --user --scope -q -p MemoryMax=28G -p MemorySwapMax=0 nice -n 10 \
+            env CARGO_TARGET_DIR="$TARGET-pgo-gen" CARGO_BUILD_JOBS=6 YGO_DECK_MODELS_ONNX="$ROOT/human_decks/onnx_export" \
+            RUSTFLAGS="-Cprofile-generate=$prof" \
+            cargo build --release --manifest-path "$TREE/Cargo.toml" -p bot --bin bot-bench-search >&2 \
+            || { echo "instrumented build of $1 failed" >&2; exit 1; }
+        rm -f "$prof"/*.profraw  # (the build scripts' own profiles)
+        (cd "$ROOT" && "$TARGET-pgo-gen/release/bot-bench-search" books/bench.jsonl 6 1000n >&2) \
+            || { echo "profiling run of $1 failed" >&2; exit 1; }
+        llvm-profdata merge -o "$prof.profdata" "$prof"/*.profraw \
+            || { echo "llvm-profdata merge for $1 failed" >&2; exit 1; }
         systemd-run --user --scope -q -p MemoryMax=28G -p MemorySwapMax=0 nice -n 10 \
             env CARGO_TARGET_DIR="$TARGET" CARGO_BUILD_JOBS=6 YGO_DECK_MODELS_ONNX="$ROOT/human_decks/onnx_export" \
+            RUSTFLAGS="-Cprofile-use=$prof.profdata" \
             cargo build --release --manifest-path "$TREE/Cargo.toml" -p bot --bin bot --bin bot-bench-search >&2 \
             || { echo "build of $1 failed" >&2; exit 1; }
         systemd-run --user --scope -q -p MemoryMax=28G -p MemorySwapMax=0 nice -n 10 \
-            env CARGO_TARGET_DIR="$TARGET" CARGO_BUILD_JOBS=6 \
+            env CARGO_TARGET_DIR="$TARGET-arbiter" CARGO_BUILD_JOBS=6 \
             cargo build --release --manifest-path "$TREE/ygopro-core-rust/Cargo.toml" -p ygo-arbiter --bin ygo-arbiter >&2 \
             || { echo "build of $1's arbiter failed" >&2; exit 1; }
         mkdir -p "$dir/root"
-        cp "$TARGET/release/bot" "$TARGET/release/ygo-arbiter" "$TARGET/release/bot-bench-search" "$dir/"
+        touch "$dir/pgo"
+        cp "$TARGET/release/bot" "$TARGET-arbiter/release/ygo-arbiter" "$TARGET/release/bot-bench-search" "$dir/"
         # (the ref's corrected scripts; the data is the checkout's)
         git archive "$sha" lua_fixes | tar -x -C "$dir/root"
         for d in external build; do
