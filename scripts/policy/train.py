@@ -27,7 +27,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from data import H, LOCS, N_KINDS, O, T, PolicyData  # noqa: E402
+from data import H, LOCS, N_KINDS, O, S_CARD, T, PolicyData  # noqa: E402
+from embed_strings import string_key  # noqa: E402
 
 # (categorical sizes)
 N_PROMPTS = 17
@@ -44,9 +45,16 @@ def deck_pair_key(g: dict) -> str:
 class Batcher:
     """Padded batches of decisions as tensors (numpy gathers; the text embeddings stay rows)."""
 
-    def __init__(self, data: PolicyData, emb_index: dict[int, int]):
+    def __init__(self, data: PolicyData, emb_index: dict[int, int], str_keys: np.ndarray | None = None):
         self.d = data
         self.start = emb_index  # game -> first embedding row
+        self.str_keys = str_keys  # embed_strings.py's sorted keys (their rows), or None
+
+    def str_rows(self, game, code, string):
+        """The rows of card strings (embed_strings.py), -1 for none."""
+        key = string_key(game, code, string)
+        i = np.searchsorted(self.str_keys, key).clip(0, len(self.str_keys) - 1)
+        return np.where((self.str_keys[i] == key) & (code > 0) & (string < S_CARD), i, -1)
 
     def __call__(self, idx: np.ndarray) -> dict[str, torch.Tensor]:
         d = self.d
@@ -57,13 +65,13 @@ class Batcher:
         lt, lo = int(n_tok.max()), int(n_opt.max())
         base = np.array([self.start[g] - 1 for g in h[:, H["GAME"]]], dtype=np.int64)  # code index i -> row base + i
 
-        def ranges(starts, counts, width):
+        def ranges(starts, counts):
             rows = np.repeat(starts, counts) + (np.arange(counts.sum()) - np.repeat(np.cumsum(counts) - counts, counts))
             pos = np.arange(counts.sum()) - np.repeat(np.cumsum(counts) - counts, counts)
             which = np.repeat(np.arange(len(counts)), counts)
             return rows, which, pos
 
-        rows, which, pos = ranges(h[:, H["TOK_START"]], n_tok, lt)
+        rows, which, pos = ranges(h[:, H["TOK_START"]], n_tok)
         tok = np.zeros((b, lt, len(T)), dtype=np.int64)
         tok[which, pos] = d.tok[rows]
         tok[:, :, T["REF"]][tok[:, :, T["REF"]] >= MAX_TOKENS] = -1
@@ -76,7 +84,7 @@ class Batcher:
         ref_code = np.where(ref >= 0, np.take_along_axis(code, np.maximum(ref, 0), axis=1), 0)
         ref_row = np.where(ref_code > 0, base[:, None] + ref_code, -1)
 
-        rows, which, pos = ranges(h[:, H["OPT_START"]], n_opt, lo)
+        rows, which, pos = ranges(h[:, H["OPT_START"]], n_opt)
         opt = np.zeros((b, lo, len(O)), dtype=np.int64)
         opt[which, pos] = d.opt[rows]
         opt_mask = np.zeros((b, lo), dtype=bool)
@@ -91,10 +99,15 @@ class Batcher:
 
         glob_rows = np.stack([hrow("HINT_CODE"), hrow("DESC_CODE"), hrow("CODE"), hrow("PREV_CODE")], axis=1)
         t = lambda x: torch.from_numpy(np.ascontiguousarray(x))
-        return {
+        out = {
             "hdr": t(h), "tok": t(tok), "tok_mask": t(tok_mask), "tok_row": t(tok_row), "ref_row": t(ref_row),
             "opt": t(opt), "opt_mask": t(opt_mask), "opt_desc_row": t(opt_desc_row), "glob_rows": t(glob_rows),
         }
+        if self.str_keys is not None:
+            g = h[:, H["GAME"]]
+            out["opt_str_row"] = t(self.str_rows(g[:, None], dcode, opt[:, :, O["DESC_STR"]]))
+            out["glob_str_rows"] = t(np.stack([self.str_rows(g, h[:, H[c]], h[:, H[s]]) for c, s in (("HINT_CODE", "HINT_STR"), ("DESC_CODE", "DESC_STR"))], 1))
+        return out
 
 
 def bucket(x: torch.Tensor, n: int) -> torch.Tensor:
@@ -102,9 +115,12 @@ def bucket(x: torch.Tensor, n: int) -> torch.Tensor:
 
 
 class Policy(nn.Module):
-    def __init__(self, emb_dim: int, dim: int = 256, layers: int = 4, heads: int = 8, ff: int = 4, dropout: float = 0.0):
+    def __init__(self, emb_dim: int, dim: int = 256, layers: int = 4, heads: int = 8, ff: int = 4, dropout: float = 0.0, strings: bool = False):
         super().__init__()
         self.dim = dim
+        if strings:
+            self.str_opt = nn.Linear(emb_dim, dim)
+            self.str_glob = nn.ModuleList(nn.Linear(emb_dim, dim) for _ in range(2))
         self.text = nn.Linear(emb_dim, dim)
         self.text_ref = nn.Linear(emb_dim, dim)
         self.text_glob = nn.ModuleList(nn.Linear(emb_dim, dim) for _ in range(4))
@@ -134,14 +150,14 @@ class Policy(nn.Module):
         self.norm = nn.LayerNorm(dim)
         self.head = nn.Sequential(nn.Linear(2 * dim, dim), nn.GELU(), nn.Linear(dim, 1))
 
-    def forward(self, b: dict[str, torch.Tensor], emb: torch.Tensor) -> torch.Tensor:
-        """Option scores (batch, options); padding -inf."""
+    def forward(self, b: dict[str, torch.Tensor], emb: torch.Tensor, semb: torch.Tensor | None = None) -> torch.Tensor:
+        """Option scores (batch, options); padding -inf. `semb`: the card strings' embeddings
+        (a model made with strings)."""
         dev = emb.device
-        zero = torch.zeros(self.dim, device=dev)
 
-        def text(rows, lin):
+        def text(rows, lin, table=emb):
             # rows -1: zero vectors
-            e = emb[rows.clamp(min=0)].float()
+            e = table[rows.clamp(min=0)].float()
             return lin(e) * (rows >= 0).unsqueeze(-1)
 
         tok, h, opt = b["tok"], b["hdr"], b["opt"]
@@ -171,6 +187,9 @@ class Policy(nn.Module):
         g = g + self.g_num(num)
         for i, lin in enumerate(self.text_glob):
             g = g + text(b["glob_rows"][:, i], lin)
+        if semb is not None:
+            for i, lin in enumerate(self.str_glob):
+                g = g + text(b["glob_str_rows"][:, i], lin, semb)
 
         o = lambda col: opt[..., O[col]]
         kind = o("KIND").clamp(0, N_KINDS - 1)
@@ -179,6 +198,8 @@ class Policy(nn.Module):
         osys = (o("DESC_CODE") == 0) & (o("DESC_STR") > 0)
         ox = ox + self.o_sys(o("DESC_STR") % SYS_BUCKETS) * osys.unsqueeze(-1) + self.o_str(bucket(o("DESC_STR"), 32)) * (~osys).unsqueeze(-1)
         ox = ox + text(b["opt_desc_row"], self.text_desc)
+        if semb is not None:
+            ox = ox + text(b["opt_str_row"], self.str_opt, semb)
         ref_in = torch.gather(x, 1, ref.clamp(min=0).unsqueeze(-1).expand(-1, -1, self.dim)) * (ref >= 0).unsqueeze(-1)
         ox = ox + ref_in
 
@@ -205,14 +226,14 @@ def losses_and_hits(scores: torch.Tensor, b: dict[str, torch.Tensor]):
     return loss, hit
 
 
-def evaluate(model, batcher, idx, emb, dev, batch, prompts):
+def evaluate(model, batcher, idx, emb, semb, dev, batch, prompts):
     model.eval()
     tot = {}
     with torch.no_grad():
         for s in range(0, len(idx), batch):
             b = {k: v.to(dev, non_blocking=True) for k, v in batcher(idx[s:s + batch]).items()}
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                sc = model(b, emb)
+                sc = model(b, emb, semb)
             loss, hit = losses_and_hits(sc, b)
             h = b["hdr"]
             for key, sel in [("all", torch.ones_like(hit))] + [(p, h[:, H["PROMPT"]] == i) for i, p in enumerate(prompts)]:
@@ -232,6 +253,7 @@ def main():
     ap.add_argument("data")
     ap.add_argument("out")
     ap.add_argument("--emb", default="emb_0")
+    ap.add_argument("--strings", default="", help="card string embeddings (embed_strings.py), e.g. str_0")
     ap.add_argument("--layers", type=int, default=4)
     ap.add_argument("--dim", type=int, default=256)
     ap.add_argument("--heads", type=int, default=8)
@@ -268,8 +290,12 @@ def main():
 
     dev = torch.device("cuda")
     emb = torch.from_numpy(np.load(os.path.join(a.data, f"{a.emb}.npy"))).to(dev)
-    batcher = Batcher(data, start)
-    model = Policy(emb.shape[1], a.dim, a.layers, a.heads, dropout=a.dropout).to(dev)
+    semb, str_keys = None, None
+    if a.strings:
+        semb = torch.from_numpy(np.load(os.path.join(a.data, f"{a.strings}.npy"))).to(dev)
+        str_keys = np.load(os.path.join(a.data, f"{a.strings}_index.npz"))["key"]
+    batcher = Batcher(data, start, str_keys)
+    model = Policy(emb.shape[1], a.dim, a.layers, a.heads, dropout=a.dropout, strings=semb is not None).to(dev)
     print(f"{sum(p.numel() for p in model.parameters()) / 1e6:.2f}M parameters", flush=True)
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=a.wd, betas=(0.9, 0.98))
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: min(1.0, (s + 1) / a.warmup) * 0.5 * (1 + math.cos(math.pi * min(1.0, s / a.steps))))
@@ -295,7 +321,7 @@ def main():
         pending.append(pool.submit(batcher, next_idx()))
         b = {k: v.to(dev, non_blocking=True) for k, v in b.items()}
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            sc = model(b, emb)
+            sc = model(b, emb, semb)
         loss, hit = losses_and_hits(sc, b)
         loss = loss.mean()
         if not torch.isfinite(loss):
@@ -311,7 +337,7 @@ def main():
             print(f"step {step}: loss {run_loss / 200:.4f} top1 {run_hit / 200:.4f} lr {sched.get_last_lr()[0]:.2e} {200 * a.batch / (time.time() - t1):.0f} dec/s", flush=True)
             run_loss, run_hit, t1 = 0.0, 0.0, time.time()
         if step % a.eval_every == 0 or step == a.steps:
-            r = evaluate(model, batcher, val_idx, emb, dev, 512, data.prompts)
+            r = evaluate(model, batcher, val_idx, emb, semb, dev, 512, data.prompts)
             print(f"== step {step} val: " + ", ".join(f"{k} {v[1]:.4f}" for k, v in r.items() if k in ("all", "searched all")), flush=True)
             for k, v in sorted(r.items(), key=lambda kv: -kv[1][0]):
                 if not k.startswith("searched") and v[0] >= 200:
