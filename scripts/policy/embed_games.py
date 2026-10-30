@@ -52,6 +52,7 @@ def main():
     ap.add_argument("--dim", type=int, default=768, help="Matryoshka truncation (768, 512, 256, 128)")
     ap.add_argument("--batch", type=int, default=256)
     ap.add_argument("--encoder", default="google/embeddinggemma-2")
+    ap.add_argument("--max-tokens", type=int, default=512, help="texts cut after this many tokens (few cards have more)")
     ap.add_argument("--limit", type=int, default=0, help="only the first N games (a speed test)")
     a = ap.parse_args()
 
@@ -72,6 +73,7 @@ def main():
     # (eager attention: ROCm's SDPA gives NaN for padded batches)
     model = SentenceTransformer(a.encoder, device="cuda", model_kwargs={"attn_implementation": "eager", "torch_dtype": torch.bfloat16},
                                 truncate_dim=a.dim)
+    model.max_seq_length = a.max_tokens
     # (longest first: batches of similar lengths pad little)
     order = np.argsort([-len(t) for t in texts], kind="stable")
     out = np.lib.format.open_memmap(os.path.join(a.data, f"emb_{a.salt}.npy"), mode="w+", dtype=np.float16, shape=(len(texts), a.dim))

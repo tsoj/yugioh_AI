@@ -15,9 +15,10 @@
 //!
 //! Tokens: the cards of both players' hands, Monster and Spell/Trap Zones, GYs and banishment,
 //! the player's own Extra Deck and the opponent's face-up one, Xyz materials, the chain's links
-//! and the player's own Main Deck as it knows it (its deck list less the cards it has seen
-//! elsewhere: a token per code with the number of copies). Cards of a prompt that are none of
-//! these (cards in a deck) get a token of their own.
+//! the player's own Main Deck as it knows it (its deck list less the cards it has seen
+//! elsewhere: a token per code with the number of copies) and this turn's latest public actions
+//! (activations and summons). Cards of a prompt that are none of these (cards in a deck) get a
+//! token of their own.
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, Write};
@@ -31,7 +32,7 @@ use ygo_core::duel::Duel;
 use ygo_arbiter::actions::{Command, Response, available_places, battle_options, encode, idle_options};
 use ygo_arbiter::game::{GameRecord, init, run_until_prompt};
 use ygo_arbiter::messages::{Card, Msg};
-use ygo_arbiter::observe::{filter_prompt, to_core_response};
+use ygo_arbiter::observe::{filter_message, filter_prompt, to_core_response};
 use ygo_arbiter::state::{CardQuery, Snapshot, viewer_view};
 
 #[global_allocator]
@@ -117,6 +118,18 @@ const L_EXTRA: i16 = 6;
 const L_OVERLAY: i16 = 7;
 const L_DECK: i16 = 8;
 const L_CHAIN: i16 = 9;
+/// a public action of this turn (T_SEQ its kind, `E_*`; T_COUNT 1 for the latest)
+const L_EVENT: i16 = 10;
+
+const E_ACTIVATE: i16 = 1;
+const E_SUMMON: i16 = 2;
+const E_SPSUMMON: i16 = 3;
+const E_FLIPSUMMON: i16 = 4;
+/// The events kept (the latest).
+const MAX_EVENTS: usize = 16;
+
+/// A text reference to a card itself (the string number of `Codes::text`).
+const S_CARD: i64 = 16;
 
 /// The status bits a token keeps (bit i of T_STATUS is STATUS_BITS[i]).
 const STATUS_BITS: [u32; 8] = [
@@ -208,9 +221,16 @@ impl Codes {
         })
     }
 
-    /// A text reference (a desc or a hint): (code index, string number), or (0, system string).
+    /// A text reference (a desc or a hint): a card's string (code index, string number), a card
+    /// itself (code index, S_CARD) or a system string (0, its number).
     fn text(&mut self, desc: u64) -> (i64, i64) {
-        if desc >= 1 << 20 { (self.of((desc >> 20) as u32), (desc & 0xfffff) as i64) } else { (0, desc as i64) }
+        if desc >= 1 << 32 {
+            (self.of((desc >> 20) as u32), (desc & 0xfffff) as i64)
+        } else if desc >= 1 << 20 {
+            (self.of(desc as u32), S_CARD)
+        } else {
+            (0, desc as i64)
+        }
     }
 }
 
@@ -267,7 +287,7 @@ fn card_token(codes: &mut Codes, c: &CardQuery, con: i16, loc: i16, seq: u32, me
 }
 
 /// The tokens of `view` (the player `me`'s), with its own deck list `deck`.
-fn tokens(codes: &mut Codes, view: &Snapshot, me: u32, deck: &[u32]) -> Tokens {
+fn tokens(codes: &mut Codes, view: &Snapshot, me: u32, deck: &[u32], events: &[(u32, i16, u32)]) -> Tokens {
     let mut tk = Tokens { rows: Vec::new(), at: HashMap::new(), materials: HashMap::new() };
     let mut equips: Vec<(usize, ygo_arbiter::messages::Loc)> = Vec::new();
     // the copies of its deck list the player has seen elsewhere
@@ -354,6 +374,22 @@ fn tokens(codes: &mut Codes, view: &Snapshot, me: u32, deck: &[u32]) -> Tokens {
             t[T_COUNT] = n as i16;
             tk.rows.push(t);
         }
+    }
+    for (n, &(actor, kind, code)) in events.iter().rev().enumerate() {
+        let mut t = [0i16; TOK];
+        t[T_CODE] = clamp16(codes.of(code));
+        t[T_CON] = (actor != me) as i16;
+        t[T_OWNER] = 2;
+        t[T_LOC] = L_EVENT;
+        t[T_SEQ] = kind;
+        t[T_POS] = 1 | 4;
+        t[T_ATK] = -1;
+        t[T_DEF] = -1;
+        t[T_BASE_ATK] = -1;
+        t[T_BASE_DEF] = -1;
+        t[T_REF] = -1;
+        t[T_COUNT] = n as i16 + 1;
+        tk.rows.push(t);
     }
     tk
 }
@@ -571,6 +607,8 @@ fn game(g: &Game, shard: &mut Shard) -> Result<Vec<u32>, String> {
     duel.ocg_start_duel();
     let mut prompt: Option<Msg> = None;
     let mut hint: [Option<u64>; 2] = [None, None];
+    // (per viewer: this turn's public actions as it saw them, (actor, E_*, code))
+    let mut events: [Vec<(u32, i16, u32)>; 2] = [Vec::new(), Vec::new()];
     let mut prev: [(i64, i64); 2] = [(-1, 0), (-1, 0)];
     let mut hdrs: Vec<[i64; HDR]> = Vec::new();
     let mut toks: Vec<[i16; TOK]> = Vec::new();
@@ -588,10 +626,26 @@ fn game(g: &Game, shard: &mut Shard) -> Result<Vec<u32>, String> {
             if matches!(msg, Msg::NewPhase { .. } | Msg::NewTurn { .. }) {
                 hint = [None, None];
             }
+            if matches!(msg, Msg::NewTurn { .. }) {
+                events = [Vec::new(), Vec::new()];
+            }
+            for (v, ev) in events.iter_mut().enumerate() {
+                let e = match filter_message(msg, v as u32) {
+                    Some(Msg::Chaining { code, trigger_con, .. }) => (trigger_con, E_ACTIVATE, code),
+                    Some(Msg::Summoning { code, con, .. }) => (con, E_SUMMON, code),
+                    Some(Msg::Spsummoning { code, con, .. }) => (con, E_SPSUMMON, code),
+                    Some(Msg::Flipsummoning { code, con, .. }) => (con, E_FLIPSUMMON, code),
+                    _ => continue,
+                };
+                ev.push(e);
+                if ev.len() > MAX_EVENTS {
+                    ev.remove(0);
+                }
+            }
         }
         let fp = filter_prompt(&p, me);
         let view = viewer_view(&mut duel, me);
-        let mut tk = tokens(&mut codes, &view, me, &rec.decks[me as usize].main);
+        let mut tk = tokens(&mut codes, &view, me, &rec.decks[me as usize].main, &events[me as usize]);
         let o = options(&fp, &entry.response, &mut tk, &mut codes, me);
         let prompt_id = PROMPTS.iter().position(|&n| n == fp.name());
         let chosen: Vec<&[i32; OPT]> = o.iter().filter(|x| x[O_CHOSEN] != 0).collect();

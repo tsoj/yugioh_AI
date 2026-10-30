@@ -27,7 +27,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from data import H, N_KINDS, O, T, PolicyData  # noqa: E402
+from data import H, LOCS, N_KINDS, O, T, PolicyData  # noqa: E402
 
 # (categorical sizes)
 N_PROMPTS = 17
@@ -112,7 +112,7 @@ class Policy(nn.Module):
         self.unknown = nn.Parameter(torch.zeros(dim))
         E = lambda n: nn.Embedding(n, dim)
         # tokens
-        self.con, self.owner, self.locseq, self.pos = E(2), E(3), E(10 * 32), E(8)
+        self.con, self.owner, self.locseq, self.pos = E(2), E(3), E(len(LOCS) * 32), E(8)
         self.level, self.scale, self.counters, self.overlays, self.count = E(16), E(16), E(8), E(8), E(8)
         self.status = nn.Linear(8, dim)
         self.stats = nn.Linear(8, dim)
@@ -148,7 +148,7 @@ class Policy(nn.Module):
         c = lambda col: tok[..., T[col]]
         x = text(b["tok_row"], self.text) + self.unknown * (b["tok_row"] < 0).unsqueeze(-1)
         x = x + self.con(c("CON").clamp(0, 1)) + self.owner(c("OWNER").clamp(0, 2))
-        x = x + self.locseq(c("LOC").clamp(0, 9) * 32 + c("SEQ").clamp(0, 31)) + self.pos(c("POS").clamp(0, 7))
+        x = x + self.locseq(c("LOC").clamp(0, len(LOCS) - 1) * 32 + c("SEQ").clamp(0, 31)) + self.pos(c("POS").clamp(0, 7))
         x = x + self.level(bucket(c("LEVEL"), 16)) + self.scale(bucket(c("SCALE"), 16))
         x = x + self.counters(bucket(c("COUNTERS"), 8)) + self.overlays(bucket(c("OVERLAYS"), 8)) + self.count(bucket(c("COUNT"), 8))
         bits = ((c("STATUS").unsqueeze(-1) >> torch.arange(8, device=dev)) & 1).float()

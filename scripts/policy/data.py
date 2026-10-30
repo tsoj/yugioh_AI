@@ -26,7 +26,9 @@ T = {n: i for i, n in enumerate(
     "CODE CON OWNER LOC SEQ POS ATK DEF BASE_ATK BASE_DEF LEVEL SCALE COUNTERS OVERLAYS REF STATUS COUNT".split())}
 O = {n: i for i, n in enumerate("KIND TOKEN AUX DESC_CODE DESC_STR CHOSEN".split())}
 
-LOCS = ["-", "hand", "mzone", "szone", "grave", "removed", "extra", "overlay", "deck", "chain"]
+LOCS = ["-", "hand", "mzone", "szone", "grave", "removed", "extra", "overlay", "deck", "chain", "event"]
+# (a text reference to the card itself, H_HINT_STR / O_DESC_STR)
+S_CARD = 16
 KINDS = ["summon", "spsummon", "repos", "mset", "sset", "activate", "to_bp", "to_ep", "shuffle",
          "b_activate", "attack", "to_m2", "b_to_ep", "chain_pass", "chain", "yes", "no", "option", "card",
          "select", "unselect", "finish", "place", "position", "tribute", "sum", "number", "attribute", "race"]
