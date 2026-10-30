@@ -835,6 +835,9 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
       tried the return again (an endless stream of hints). The return is one event: now the
       monster stays with its current controller (rust 9d38b69, also in the oracle patch; regress
       case_control_return_no_zone_8). ocg_process ends silent loops too (rust f1ce3de).
+      Corrected (the user's ruling): a monster without a zone for its new controller is sent to
+      the GY by rule, not destroyed, so "cannot be destroyed" does not keep it; the "stays" effect
+      is gone. Both cores, in GetControl and in the control adjust of an uneven swap.
 - [x] The 4 mismatching games against the C++ core (found 2026-10-13, older than the recent
       changes): pair17349 game 1 decision 947, pair19366 game 2 decision 1880, pair8112 game 0
       decision 89, pair9854 game 1 decision 467 (`build/regress_pairs/`). Fixed (rust 745abcb);
