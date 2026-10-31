@@ -38,13 +38,7 @@ def main():
     model = Policy(emb.shape[1], args["dim"], args["layers"], args["heads"], strings=bool(args["strings"]))
     model.load_state_dict(ck["model"])
     model.eval()
-    tensors, raw = [], []
-    with torch.no_grad():
-        for name, w in model.state_dict().items():
-            h = w.half()
-            w.copy_(h.float())  # (the checks with the stored weights)
-            tensors.append({"name": name, "shape": list(w.shape)})
-            raw.append(h.numpy().astype("<f2").tobytes())
+    tensors, raw = weights(model)
 
     # checks: decisions of the data with their text vectors
     d = PolicyData(data_dir)
@@ -67,12 +61,29 @@ def main():
             sc = model(b, torch.from_numpy(np.asarray(emb)), None if semb is None else torch.from_numpy(np.asarray(semb)))
         checks.append({"hdr": b["hdr"][0].tolist(), "tok": b["tok"][0].tolist(), "opt": b["opt"][0].tolist(), "texts": texts,
                        "scores": sc[0].tolist()})
+    write(a.out, args, int(emb.shape[1]), tensors, raw, checks)
+    print(f"{a.out}: {Path(a.out).stat().st_size / 1e6:.1f} MB, {len(tensors)} tensors, {len(checks)} checks")
+
+
+def weights(model) -> tuple[list[dict], list[bytes]]:
+    """The model's tensors as float16 (the model keeps the rounded weights: it computes as the
+    export will)."""
+    tensors, raw = [], []
+    with torch.no_grad():
+        for name, w in model.state_dict().items():
+            h = w.half()
+            w.copy_(h.float())
+            tensors.append({"name": name, "shape": list(w.shape)})
+            raw.append(h.cpu().numpy().astype("<f2").tobytes())
+    return tensors, raw
+
+
+def write(out, args: dict, emb_dim: int, tensors: list[dict], raw: list[bytes], checks: list[dict]):
     consts = {"n_prompts": N_PROMPTS, "sys_buckets": SYS_BUCKETS, "max_tokens": MAX_TOKENS, "max_options": MAX_OPTIONS,
-              "locs": len(LOCS), "kinds": N_KINDS, "emb_dim": int(emb.shape[1])}
+              "locs": len(LOCS), "kinds": N_KINDS, "emb_dim": emb_dim}
     head = json.dumps({"args": args, "consts": consts, "tensors": tensors, "checks": checks}).encode()
     blob = b"YGOPOL01" + struct.pack("<I", len(head)) + head + b"".join(raw)
-    Path(a.out).write_bytes(zstd.compress(blob, level=10))
-    print(f"{a.out}: {Path(a.out).stat().st_size / 1e6:.1f} MB, {len(tensors)} tensors, {len(checks)} checks")
+    Path(out).write_bytes(zstd.compress(blob, level=10))
 
 
 if __name__ == "__main__":

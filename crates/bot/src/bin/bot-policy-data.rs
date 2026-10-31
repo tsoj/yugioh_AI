@@ -33,15 +33,6 @@ use ygo_arbiter::state::viewer_view;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-/// A worker's output files.
-struct Shard {
-    hdr: std::io::BufWriter<std::fs::File>,
-    tok: std::io::BufWriter<std::fs::File>,
-    opt: std::io::BufWriter<std::fs::File>,
-    n_tok: i64,
-    n_opt: i64,
-}
-
 struct Game {
     number: usize,
     record: GameRecord,
@@ -63,9 +54,7 @@ fn game(g: &Game, shard: &mut Shard) -> Result<Vec<u32>, String> {
     duel.ocg_start_duel();
     let mut prompt: Option<Msg> = None;
     let mut seen = [Seen::new(0), Seen::new(1)];
-    let mut hdrs: Vec<[i64; HDR]> = Vec::new();
-    let mut toks: Vec<[i16; TOK]> = Vec::new();
-    let mut opts: Vec<[i32; OPT]> = Vec::new();
+    let mut rows: Vec<Row> = Vec::new();
     for (i, entry) in rec.responses.iter().enumerate() {
         let step = run_until_prompt(&mut duel, prompt.as_ref()).map_err(|e| e.0)?;
         let p = step.prompt.ok_or_else(|| format!("the duel ended before response {i}"))?;
@@ -91,11 +80,7 @@ fn game(g: &Game, shard: &mut Shard) -> Result<Vec<u32>, String> {
                     Some(w) if w < 2 => -1,
                     _ => 0,
                 };
-                h[H_TOK_START] = shard.n_tok + toks.len() as i64;
-                h[H_OPT_START] = shard.n_opt + opts.len() as i64;
-                hdrs.push(h);
-                toks.extend(&d.tok);
-                opts.extend(d.opt.iter().map(|(o, _)| *o));
+                rows.push(Row { hdr: h, tok: d.tok, opt: d.opt.iter().map(|(o, _)| *o).collect() });
             }
         }
         seen[me as usize].decided(chosen);
@@ -104,24 +89,7 @@ fn game(g: &Game, shard: &mut Shard) -> Result<Vec<u32>, String> {
         duel.ocg_set_response(&r);
         prompt = Some(p);
     }
-    let w = |f: &mut std::io::BufWriter<std::fs::File>, bytes: &[u8]| f.write_all(bytes).map_err(|e| e.to_string());
-    for h in &hdrs {
-        for v in h {
-            w(&mut shard.hdr, &v.to_le_bytes())?;
-        }
-    }
-    for t in &toks {
-        for v in t {
-            w(&mut shard.tok, &v.to_le_bytes())?;
-        }
-    }
-    for o in &opts {
-        for v in o {
-            w(&mut shard.opt, &v.to_le_bytes())?;
-        }
-    }
-    shard.n_tok += toks.len() as i64;
-    shard.n_opt += opts.len() as i64;
+    shard.write(&rows)?;
     Ok(codes.codes)
 }
 
@@ -158,8 +126,7 @@ fn main() {
         .map(|w| {
             let (source, games_out, done, failed, out_dir) = (source.clone(), games_out.clone(), done.clone(), failed.clone(), out_dir.clone());
             std::thread::spawn(move || {
-                let create = |ext: &str| std::io::BufWriter::new(std::fs::File::create(out_dir.join(format!("{w}.{ext}"))).expect("shard"));
-                let mut shard = Shard { hdr: create("hdr"), tok: create("tok"), opt: create("opt"), n_tok: 0, n_opt: 0 };
+                let mut shard = Shard::create(&out_dir, w).expect("shard");
                 loop {
                     let (number, file, line, text) = {
                         let mut s = source.lock().unwrap();
@@ -192,9 +159,7 @@ fn main() {
                         eprintln!("{n} games, {:.0} s", t0.elapsed().as_secs_f64());
                     }
                 }
-                shard.hdr.flush().unwrap();
-                shard.tok.flush().unwrap();
-                shard.opt.flush().unwrap();
+                shard.finish().expect("shard");
             })
         })
         .collect();
@@ -202,7 +167,6 @@ fn main() {
         t.join().unwrap();
     }
     games_out.lock().unwrap().flush().unwrap();
-    let files_json = json!({"files": files, "hdr": HDR, "tok": TOK, "opt": OPT, "prompts": PROMPTS});
-    std::fs::write(out_dir.join("meta.json"), files_json.to_string()).expect("meta.json");
+    write_meta(&out_dir, json!({"files": files})).expect("meta.json");
     eprintln!("{} games, {} failed, {:.0} s", done.load(Ordering::Relaxed), failed.load(Ordering::Relaxed), t0.elapsed().as_secs_f64());
 }

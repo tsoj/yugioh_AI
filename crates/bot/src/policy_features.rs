@@ -597,3 +597,61 @@ pub fn decision(codes: &mut Codes, seen: &Seen, view: &Snapshot, fp: &Msg, resp:
     h[H_EXTRA_OPP] = view.players[1 - me as usize].extra.iter().flatten().filter(|c| c.code.unwrap_or(0) == 0).count() as i64;
     Some(Decision { hdr: h, tok: tk.rows, opt: o })
 }
+
+/// A decision's rows as the data keep them: the header (with the data's own columns), the tokens
+/// and the options (O_CHOSEN set).
+pub struct Row {
+    pub hdr: [i64; HDR],
+    pub tok: Vec<[i16; TOK]>,
+    pub opt: Vec<[i32; OPT]>,
+}
+
+/// A worker's data files (scripts/policy/data.py): `w.hdr`, `w.tok`, `w.opt`, little-endian rows.
+pub struct Shard {
+    hdr: std::io::BufWriter<std::fs::File>,
+    tok: std::io::BufWriter<std::fs::File>,
+    opt: std::io::BufWriter<std::fs::File>,
+    n_tok: i64,
+    n_opt: i64,
+}
+
+impl Shard {
+    pub fn create(dir: &std::path::Path, worker: usize) -> Result<Shard, String> {
+        let create = |ext: &str| {
+            let path = dir.join(format!("{worker}.{ext}"));
+            std::fs::File::create(&path).map(std::io::BufWriter::new).map_err(|e| format!("{}: {e}", path.display()))
+        };
+        Ok(Shard { hdr: create("hdr")?, tok: create("tok")?, opt: create("opt")?, n_tok: 0, n_opt: 0 })
+    }
+
+    /// Writes the rows, their H_TOK_START and H_OPT_START set here.
+    pub fn write(&mut self, rows: &[Row]) -> Result<(), String> {
+        use std::io::Write;
+        let err = |e: std::io::Error| e.to_string();
+        for r in rows {
+            let mut h = r.hdr;
+            h[H_TOK_START] = self.n_tok;
+            h[H_OPT_START] = self.n_opt;
+            self.n_tok += r.tok.len() as i64;
+            self.n_opt += r.opt.len() as i64;
+            h.iter().try_for_each(|v| self.hdr.write_all(&v.to_le_bytes())).map_err(err)?;
+            r.tok.iter().flatten().try_for_each(|v| self.tok.write_all(&v.to_le_bytes())).map_err(err)?;
+            r.opt.iter().flatten().try_for_each(|v| self.opt.write_all(&v.to_le_bytes())).map_err(err)?;
+        }
+        Ok(())
+    }
+
+    pub fn finish(mut self) -> Result<(), String> {
+        use std::io::Write;
+        [&mut self.hdr, &mut self.tok, &mut self.opt].into_iter().try_for_each(|f| f.flush()).map_err(|e| e.to_string())
+    }
+}
+
+/// The data's meta.json: the columns and prompts, and `extra` (the data's own keys).
+pub fn write_meta(dir: &std::path::Path, extra: serde_json::Value) -> Result<(), String> {
+    let mut meta = serde_json::json!({"hdr": HDR, "tok": TOK, "opt": OPT, "prompts": PROMPTS});
+    if let (Some(m), serde_json::Value::Object(x)) = (meta.as_object_mut(), extra) {
+        m.extend(x);
+    }
+    std::fs::write(dir.join("meta.json"), meta.to_string()).map_err(|e| e.to_string())
+}

@@ -4,7 +4,9 @@
 //! pseudo-name seeds, drawn per game. Prompts it has no options for (and a single option) the
 //! rules answer.
 //!
-//! $BOT_POLICY_NET: an export_policy.py file; $BOT_POLICY_TABLES: an embed_tables.py file.
+//! $BOT_POLICY_NET: an export_policy.py file; $BOT_POLICY_TABLES: an embed_tables.py file;
+//! $BOT_POLICY_TEMP: sample the options by softmax(score / T) (default 0: the best). RL games
+//! (bot-rl-games) make the bot with `ImitationBot::with`, which can also log its decisions.
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -19,31 +21,48 @@ use ygo_arbiter::state::Snapshot;
 use crate::heuristic::Heuristic;
 use crate::policy_features::*;
 
-/// The network and the tables, loaded once per process.
-fn loaded() -> Result<&'static (Policy, Tables), String> {
-    static LOADED: OnceLock<Result<(Policy, Tables), String>> = OnceLock::new();
+/// A network and its tables.
+#[derive(Clone)]
+pub struct Net {
+    pub policy: Arc<Policy>,
+    pub tables: Arc<Tables>,
+}
+
+impl Net {
+    pub fn load(net: &std::path::Path, tables: Arc<Tables>) -> Result<Net, String> {
+        let bytes = std::fs::read(net).map_err(|e| format!("imitation: {}: {e}", net.display()))?;
+        let (policy, _) = Policy::from_bytes(&bytes)?;
+        if tables.dim != policy.sizes.emb_dim {
+            return Err(format!("imitation: tables of {} dimensions, the net reads {}", tables.dim, policy.sizes.emb_dim));
+        }
+        Ok(Net { policy: Arc::new(policy), tables })
+    }
+}
+
+/// The environment's network and tables, loaded once per process.
+fn loaded() -> Result<Net, String> {
+    static LOADED: OnceLock<Result<Net, String>> = OnceLock::new();
     LOADED
         .get_or_init(|| {
             let var = |name: &str| std::env::var_os(name).ok_or_else(|| format!("imitation: ${name} is not set"));
-            let net = std::fs::read(var("BOT_POLICY_NET")?).map_err(|e| format!("imitation: {e}"))?;
-            let (policy, _) = Policy::from_bytes(&net)?;
             let tables = Tables::load(std::path::Path::new(&var("BOT_POLICY_TABLES")?))?;
-            if tables.dim != policy.sizes.emb_dim {
-                return Err(format!("imitation: tables of {} dimensions, the net reads {}", tables.dim, policy.sizes.emb_dim));
-            }
-            Ok((policy, tables))
+            Net::load(std::path::Path::new(&var("BOT_POLICY_NET")?), Arc::new(tables))
         })
-        .as_ref()
-        .map_err(|e| e.clone())
+        .clone()
 }
 
 pub struct ImitationBot {
+    net: Net,
+    /// 0: the best options; else sampled by softmax(score / temperature)
+    temperature: f32,
     rng: PyRandom,
     seen: Seen,
     codes: Codes,
     deck: Vec<u32>,
     /// the game's pseudo-name seed (a table's)
-    names: usize,
+    pub names: usize,
+    /// the game's decisions the network made (with 2+ options), when logging
+    pub log: Option<Vec<Row>>,
     /// text vectors by code, and by (code, string), under the game's names
     cards: HashMap<u32, Option<Arc<[f32]>>>,
     strings: HashMap<(u32, u32), Option<Arc<[f32]>>>,
@@ -54,18 +73,33 @@ pub struct ImitationBot {
 
 impl ImitationBot {
     pub fn new(seed: i64) -> Result<ImitationBot, String> {
-        loaded()?;
-        Ok(ImitationBot {
+        let temperature = match std::env::var("BOT_POLICY_TEMP") {
+            Ok(t) => t.parse().map_err(|_| format!("imitation: $BOT_POLICY_TEMP {t:?} is not a number"))?,
+            Err(_) => 0.0,
+        };
+        Ok(ImitationBot::with(loaded()?, seed, temperature, false))
+    }
+
+    pub fn with(net: Net, seed: i64, temperature: f32, log: bool) -> ImitationBot {
+        ImitationBot {
+            net,
+            temperature,
             rng: PyRandom::new(seed as i128),
             seen: Seen::new(0),
             codes: Codes::default(),
             deck: Vec::new(),
             names: 0,
+            log: log.then(Vec::new),
             cards: HashMap::new(),
             strings: HashMap::new(),
             fallback: Heuristic::new(seed as i128, 0),
             last: None,
-        })
+        }
+    }
+
+    /// The game's code indices' codes.
+    pub fn codes(&self) -> &[u32] {
+        &self.codes.codes
     }
 
     fn card(&mut self, tables: &Tables, index: i64) -> Option<Arc<[f32]>> {
@@ -85,7 +119,8 @@ impl ImitationBot {
 
     /// The options' scores (train.Batcher's truncations; options beyond them: -inf).
     fn scores(&mut self, d: &Decision) -> Vec<f32> {
-        let (policy, tables) = loaded().expect("loaded at creation");
+        let Net { policy, tables } = self.net.clone();
+        let (policy, tables) = (&*policy, &*tables);
         let s = policy.sizes;
         let lt = d.tok.len().min(s.max_tokens);
         let lo = d.opt.len().min(s.max_options);
@@ -195,18 +230,20 @@ impl Bot for ImitationBot {
         true
     }
     fn start(&mut self, player: u32, init: &InitInfo) -> Result<(), BotError> {
-        let (_, tables) = loaded().map_err(BotError::Failed)?;
         self.seen = Seen::new(player);
         self.codes = Codes::default();
         self.deck = init.deck.main.clone();
         for &c in init.deck.main.iter().chain(&init.deck.extra) {
             self.codes.of(c);
         }
-        self.names = self.rng.randrange(tables.seeds());
+        self.names = self.rng.randrange(self.net.tables.seeds());
         self.cards.clear();
         self.strings.clear();
         self.fallback = Heuristic::new(self.rng.randrange(1 << 30) as i128, player);
         self.last = None;
+        if let Some(log) = &mut self.log {
+            log.clear();
+        }
         Ok(())
     }
     fn observe(&mut self, msg: &Msg) {
@@ -221,8 +258,14 @@ impl Bot for ImitationBot {
         let chosen = match &d {
             Some(d) if !again && !d.opt.is_empty() => {
                 let scores = if d.opt.len() > 1 { self.scores(d) } else { vec![0.0] };
+                // (sampling: the Gumbel-max trick, which orders the options as drawing them one
+                // by one without replacement would)
+                let key: Vec<f32> = match self.temperature > 0.0 {
+                    true => scores.iter().map(|&s| s / self.temperature - (-(self.rng.random().max(1e-300)).ln()).ln() as f32).collect(),
+                    false => scores,
+                };
                 let mut order: Vec<usize> = (0..d.opt.len()).collect();
-                order.sort_by(|&a, &b| scores[b].total_cmp(&scores[a]));
+                order.sort_by(|&a, &b| key[b].total_cmp(&key[a]));
                 Self::response(prompt, d, &order)
             }
             _ => None,
@@ -231,7 +274,19 @@ impl Bot for ImitationBot {
             self.seen.decided(None);
             return self.fallback.respond_to(prompt, state);
         };
-        self.seen.decided(picked.first().map(|&k| d.as_ref().unwrap().chosen_key(k)));
+        let d = d.unwrap();
+        if let Some(log) = &mut self.log
+            && d.opt.len() >= 2
+        {
+            let mut opt: Vec<[i32; OPT]> = d.opt.iter().map(|(o, _)| *o).collect();
+            for &k in &picked {
+                opt[k][O_CHOSEN] = 1;
+            }
+            let mut hdr = d.hdr;
+            hdr[H_DECISION] = log.len() as i64;
+            log.push(Row { hdr, tok: d.tok.clone(), opt });
+        }
+        self.seen.decided(picked.first().map(|&k| d.chosen_key(k)));
         Ok(resp)
     }
 }
