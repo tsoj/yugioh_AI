@@ -49,19 +49,31 @@ impl Tables {
         self.seeds
     }
 
-    fn row(&self, seed: usize, row: usize) -> Vec<f32> {
-        let per_seed = self.card_row.len() + self.string_row.len();
-        let at = (seed * per_seed + row) * self.dim;
+    fn row(&self, row: usize) -> Vec<f32> {
+        let at = row * self.dim;
         self.values[at..at + self.dim].iter().map(|x| x.to_f32()).collect()
+    }
+
+    /// The row of a card's text vector under the names of `seed`, among all the file's rows
+    /// (None: not in the tables).
+    pub fn card_row(&self, seed: usize, code: u32) -> Option<usize> {
+        let per_seed = self.card_row.len() + self.string_row.len();
+        self.card_row.get(&code).map(|&r| seed * per_seed + r)
+    }
+
+    /// The row of a card string's (its number, 0-15).
+    pub fn string_row(&self, seed: usize, code: u32, string: u32) -> Option<usize> {
+        let per_seed = self.card_row.len() + self.string_row.len();
+        self.string_row.get(&(code, string)).map(|&r| seed * per_seed + r)
     }
 
     /// A card's text vector under the names of `seed` (None: not in the tables).
     pub fn card(&self, seed: usize, code: u32) -> Option<Vec<f32>> {
-        self.card_row.get(&code).map(|&r| self.row(seed, r))
+        self.card_row(seed, code).map(|r| self.row(r))
     }
 
-    /// A card string's (its number, 0-15).
+    /// A card string's.
     pub fn string(&self, seed: usize, code: u32, string: u32) -> Option<Vec<f32>> {
-        self.string_row.get(&(code, string)).map(|&r| self.row(seed, r))
+        self.string_row(seed, code, string).map(|r| self.row(r))
     }
 }

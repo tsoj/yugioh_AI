@@ -3,13 +3,14 @@
     .venv/bin/python scripts/policy/rl.py runs/policy/train/l8d512_str/model.pt runs/policy/rl/NAME [--iterations 100]
 
 Each iteration: bot-rl-games plays --count openings of --book (the next ones each iteration), both
-seats, --repeat times each, the learner sampling at --temp against itself; every decision of a
+seats, --repeat times each, the learner sampling at --temp against itself, --jobs games at a time
+(their decisions scored here, on the GPU, in batches: bot-rl-games --remote); every decision of a
 game player gets its result z (+1 won, -1 lost, 0 a draw) less the mean z of the same opening and
 player (a group baseline: the deck pair's and seat's strength drop out) as its advantage. Then
 --epochs passes of the clipped objective -min(r A, clip(r, 1 - eps, 1 + eps) A) + --kl KL(pi ||
 pi_init), r = pi(chosen) / pi_played(chosen) (pi = softmax(score / T); a multi-card choice: the
-product over its cards). The policy is exported for the games (export_policy.py's format; the
-model keeps the float16-rounded weights it plays with). Every --test-every iterations it plays
+product over its cards). The policy is exported for the bot (export_policy.py's format; the
+model keeps the float16-rounded weights, as it plays). Every --test-every iterations it plays
 the initial policy (both their best options) on --test-count openings of --test-book, both seats.
 
 The text embeddings come from the bot's tables (embed_tables.py): each game player's own
@@ -22,8 +23,10 @@ import json
 import math
 import os
 import shutil
+import struct
 import subprocess
 import sys
+import types
 import time
 from pathlib import Path
 
@@ -32,10 +35,10 @@ import torch
 import torch.nn.functional as F
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from data import H, O, PolicyData  # noqa: E402
+from data import H, O, T, PolicyData  # noqa: E402
 from embed_strings import string_key  # noqa: E402
 from export_policy import weights, write  # noqa: E402
-from train import Batcher, Policy  # noqa: E402
+from train import MAX_OPTIONS, Batcher, Policy  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -86,13 +89,62 @@ def log_probs(scores: torch.Tensor, b: dict, temp: float):
     return lp.masked_fill(~chosen, 0).sum(1), lp
 
 
-def run(cmd: list[str], log):
+def play(cmd: list[str], nets: list, tables: Tables, log, batch: int = 512):
+    """Runs bot-rl-games --remote, scoring its decisions with `nets` (network i: nets[i]); its
+    summary. (bot::policy_remote's protocol.)"""
     print(" ".join(cmd), file=log, flush=True)
-    r = subprocess.run(["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0"] + cmd,
-                       stdout=subprocess.PIPE, stderr=log, text=True)
-    if r.returncode:
-        raise SystemExit(f"{cmd[0]} failed ({r.returncode})")
-    return json.loads(r.stdout.strip().splitlines()[-1])
+    proc = subprocess.Popen(["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0"] + cmd,
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log)
+
+    def read(n: int) -> bytes:
+        b = proc.stdout.read(n)
+        if len(b) != n:
+            raise SystemExit(f"{cmd[0]} failed ({proc.wait()})")
+        return b
+
+    u32 = lambda: struct.unpack("<I", read(4))[0]
+    for m in nets:
+        m.eval()
+    while u32() == 1:
+        n = u32()
+        _, net, nt, no, nc, ns = np.frombuffer(read(24 * n), "<u4").reshape(n, 6).astype(np.int64).T
+        hdr = np.frombuffer(read(8 * len(H) * n), "<i8").reshape(n, len(H)).copy()
+        tok = np.frombuffer(read(2 * len(T) * nt.sum()), "<i2").reshape(-1, len(T))
+        opt = np.frombuffer(read(4 * len(O) * no.sum()), "<i4").reshape(-1, len(O))
+        code_rows = np.frombuffer(read(4 * nc.sum()), "<i4").astype(np.int64)
+        str_rows = np.frombuffer(read(12 * ns.sum()), "<i4").reshape(-1, 3).astype(np.int64)
+        # (as a games directory's: decision i is game i, its code index 1 at start[i])
+        hdr[:, H["GAME"]] = np.arange(n)
+        hdr[:, H["TOK_START"]] = np.cumsum(nt) - nt
+        hdr[:, H["OPT_START"]] = np.cumsum(no) - no
+        start = dict(enumerate((np.cumsum(nc) - nc).tolist()))
+        dev = tables.values.device
+        emb = tables.values[torch.from_numpy(np.where(code_rows < 0, tables.zero, code_rows)).to(dev)]
+        # (a key no string has first: the keys are never empty)
+        keys = np.concatenate([[-1], string_key(np.repeat(np.arange(n), ns), str_rows[:, 0], str_rows[:, 1])])
+        rows = np.concatenate([[tables.zero], str_rows[:, 2]])
+        order = np.argsort(keys)
+        semb = tables.values[torch.from_numpy(rows[order]).to(dev)]
+        batcher = Batcher(types.SimpleNamespace(hdr=hdr, tok=tok, opt=opt), start, keys[order])
+        ids, scores = [], []
+        with torch.no_grad():
+            for k, m in enumerate(nets):
+                idx = np.where(net == k)[0]
+                for s in range(0, len(idx), batch):
+                    j = idx[s:s + batch]
+                    b = {key: v.to(dev, non_blocking=True) for key, v in batcher(j).items()}
+                    with torch.autocast("cuda", dtype=torch.bfloat16):
+                        sc = m(b, emb, semb if hasattr(m, "str_opt") else None).float().cpu().numpy()
+                    ids.append(j)
+                    scores += [sc[i, :min(no[x], MAX_OPTIONS)] for i, x in enumerate(j)]
+        ids = np.concatenate(ids)
+        proc.stdin.write(struct.pack("<I", n) + ids.astype("<u4").tobytes() + np.array([len(x) for x in scores], "<u4").tobytes()
+                         + np.concatenate(scores).astype("<f4").tobytes())
+        proc.stdin.flush()
+    summary = json.loads(read(u32()))
+    if proc.wait():
+        raise SystemExit(f"{cmd[0]} failed ({proc.returncode})")
+    return summary
 
 
 def main():
@@ -106,7 +158,7 @@ def main():
     ap.add_argument("--repeat", type=int, default=2)
     ap.add_argument("--temp", type=float, default=1.0)
     ap.add_argument("--tables", default="runs/policy/tables/tables8.bin")
-    ap.add_argument("--jobs", type=int, default=30)
+    ap.add_argument("--jobs", type=int, default=256, help="games at a time")
     ap.add_argument("--lr", type=float, default=1e-5)
     ap.add_argument("--epochs", type=int, default=2)
     ap.add_argument("--batch", type=int, default=256)
@@ -123,8 +175,7 @@ def main():
     log = open(out / "run.log", "a")
     # (the binary as it is now: a rebuild during the run changes nothing)
     games_bin = out / "bot-rl-games"
-    if not games_bin.exists():
-        shutil.copy2(ROOT / "target/release/bot-rl-games", games_bin)
+    shutil.copy2(ROOT / "target/release/bot-rl-games", games_bin)
 
     dev = torch.device("cuda")
     tables = Tables(a.tables, dev)
@@ -141,28 +192,26 @@ def main():
     initial = Policy(tables.dim, args["dim"], args["layers"], args["heads"], strings=bool(args["strings"])).to(dev)
     initial.load_state_dict(ck["model"])
     initial.eval()
-    init_bin = out / "iter0.bin"
+    init_bin, init_weights = out / "iter0.bin", weights(initial)  # (float16-rounded, as the bot's)
     if not init_bin.exists():
-        write(init_bin, args, tables.dim, *weights(initial), [])
+        write(init_bin, args, tables.dim, *init_weights, [])
     for p in initial.parameters():
         p.requires_grad_(False)
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=0.0, betas=(0.9, 0.98))
     if state.exists() and "opt" in st:
         opt.load_state_dict(st["opt"])
-    cur_bin = out / f"iter{start_it}.bin"
+    cur_bin, cur_weights = out / f"iter{start_it}.bin", weights(model)
     if not cur_bin.exists():
-        write(cur_bin, args, tables.dim, *weights(model), [])
-    else:
-        weights(model)  # (the played weights)
+        write(cur_bin, args, tables.dim, *cur_weights, [])
     rlog = open(out / "log.jsonl", "a")
 
     for it in range(start_it + 1, a.iterations + 1):
         t0 = time.time()
         gdir = out / "games" / str(it)
         first = a.first + (it - 1) * a.count
-        g = run([str(games_bin), str(gdir), "--net", str(cur_bin), "--tables", a.tables, "--book", a.book,
-                 "--first", str(first), "--count", str(a.count), "--repeat", str(a.repeat), "--temp", str(a.temp),
-                 "--jobs", str(a.jobs), "--seed", str(it)], log)
+        g = play([str(games_bin), str(gdir), "--remote", "--tables", a.tables, "--book", a.book,
+                  "--first", str(first), "--count", str(a.count), "--repeat", str(a.repeat), "--temp", str(a.temp),
+                  "--jobs", str(a.jobs), "--seed", str(it)], [model], tables, log)
         t_games = time.time() - t0
         data = PolicyData(str(gdir))
         emb, start, semb, str_keys = tables.embeddings(data)
@@ -222,10 +271,10 @@ def main():
                 opt.step()
                 n = len(j)
                 stats["loss"] += float(loss.detach()) * n
-                stats["clipped"] += float(((r - 1).abs() > a.clip).float().sum())
-                stats["kl_init"] += float(kl0.sum())
-                stats["entropy"] += float(ent.sum())
-                stats["approx_kl"] += float((o - new).sum())
+                stats["clipped"] += float(((r.detach() - 1).abs() > a.clip).float().sum())
+                stats["kl_init"] += float(kl0.detach().sum())
+                stats["entropy"] += float(ent.detach().sum())
+                stats["approx_kl"] += float((o - new).detach().sum())
                 stats["n"] += n
         n = max(stats.pop("n"), 1)
         stats = {k: round(v / n, 5) for k, v in stats.items()}
@@ -242,8 +291,8 @@ def main():
         rec = {"iteration": it, "games": g["games"], "decisions": int(len(idx)), "openings": [first, first + a.count],
                "seconds_games": round(t_games), "seconds": round(time.time() - t0), **stats}
         if it % a.test_every == 0:
-            t = run([str(games_bin), "--test", "--net", str(cur_bin), "--opponent", str(init_bin), "--tables", a.tables,
-                     "--book", a.test_book, "--first", "0", "--count", str(a.test_count), "--jobs", str(a.jobs)], log)
+            t = play([str(games_bin), "--test", "--remote", "--versus", "--tables", a.tables,
+                      "--book", a.test_book, "--first", "0", "--count", str(a.test_count), "--jobs", str(a.jobs)], [model, initial], tables, log)
             rec["test"] = {"games": t["games"], "score": round(t["score"], 4), "elo": round(t["elo"], 1)}
         print(json.dumps(rec), file=rlog, flush=True)
         print(json.dumps(rec), flush=True)

@@ -6,7 +6,8 @@
 //!
 //! $BOT_POLICY_NET: an export_policy.py file; $BOT_POLICY_TABLES: an embed_tables.py file;
 //! $BOT_POLICY_TEMP: sample the options by softmax(score / T) (default 0: the best). RL games
-//! (bot-rl-games) make the bot with `ImitationBot::with`, which can also log its decisions.
+//! (bot-rl-games) make the bot with `ImitationBot::with`, which can also log its decisions, and
+//! can score elsewhere (`Scorer::Remote`: policy_remote).
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -20,6 +21,7 @@ use ygo_arbiter::state::Snapshot;
 
 use crate::heuristic::Heuristic;
 use crate::policy_features::*;
+use crate::policy_remote::{Remote, Request};
 
 /// A network and its tables.
 #[derive(Clone)]
@@ -39,6 +41,23 @@ impl Net {
     }
 }
 
+/// Where the bot's scores come from.
+#[derive(Clone)]
+pub enum Scorer {
+    Net(Net),
+    /// network `net` of a remote server's, with the tables it reads
+    Remote { remote: Arc<Remote>, tables: Arc<Tables>, net: u32 },
+}
+
+impl Scorer {
+    fn tables(&self) -> &Arc<Tables> {
+        match self {
+            Scorer::Net(n) => &n.tables,
+            Scorer::Remote { tables, .. } => tables,
+        }
+    }
+}
+
 /// The environment's network and tables, loaded once per process.
 fn loaded() -> Result<Net, String> {
     static LOADED: OnceLock<Result<Net, String>> = OnceLock::new();
@@ -52,7 +71,7 @@ fn loaded() -> Result<Net, String> {
 }
 
 pub struct ImitationBot {
-    net: Net,
+    scorer: Scorer,
     /// 0: the best options; else sampled by softmax(score / temperature)
     temperature: f32,
     rng: PyRandom,
@@ -77,12 +96,12 @@ impl ImitationBot {
             Ok(t) => t.parse().map_err(|_| format!("imitation: $BOT_POLICY_TEMP {t:?} is not a number"))?,
             Err(_) => 0.0,
         };
-        Ok(ImitationBot::with(loaded()?, seed, temperature, false))
+        Ok(ImitationBot::with(Scorer::Net(loaded()?), seed, temperature, false))
     }
 
-    pub fn with(net: Net, seed: i64, temperature: f32, log: bool) -> ImitationBot {
+    pub fn with(scorer: Scorer, seed: i64, temperature: f32, log: bool) -> ImitationBot {
         ImitationBot {
-            net,
+            scorer,
             temperature,
             rng: PyRandom::new(seed as i128),
             seen: Seen::new(0),
@@ -119,7 +138,36 @@ impl ImitationBot {
 
     /// The options' scores (train.Batcher's truncations; options beyond them: -inf).
     fn scores(&mut self, d: &Decision) -> Vec<f32> {
-        let Net { policy, tables } = self.net.clone();
+        let mut scores = match self.scorer.clone() {
+            Scorer::Net(net) => self.net_scores(&net, d),
+            Scorer::Remote { remote, tables, net } => remote.score(self.request(&tables, net, d)),
+        };
+        scores.resize(d.opt.len(), f32::NEG_INFINITY);
+        scores
+    }
+
+    /// The decision for a remote server: the game's code rows, the strings it refers to.
+    fn request(&self, tables: &Tables, net: u32, d: &Decision) -> Request {
+        let names = self.names;
+        let code_rows = self.codes.codes.iter().map(|&c| tables.card_row(names, c).map_or(-1, |r| r as i32)).collect();
+        let mut refs: Vec<(i64, i64)> = d.opt.iter().map(|(o, _)| (o[O_DESC_CODE] as i64, o[O_DESC_STR] as i64)).collect();
+        refs.extend([(d.hdr[H_HINT_CODE], d.hdr[H_HINT_STR]), (d.hdr[H_DESC_CODE], d.hdr[H_DESC_STR])]);
+        refs.sort_unstable();
+        refs.dedup();
+        let string_rows = refs
+            .into_iter()
+            .filter(|&(i, s)| i > 0 && (0..S_CARD).contains(&s))
+            .filter_map(|(i, s)| {
+                let code = *self.codes.codes.get((i - 1) as usize)?;
+                tables.string_row(names, code, s as u32).map(|r| [i as i32, s as i32, r as i32])
+            })
+            .collect();
+        let row = Row { hdr: d.hdr, tok: d.tok.clone(), opt: d.opt.iter().map(|(o, _)| *o).collect() };
+        Request { net, row, code_rows, string_rows }
+    }
+
+    fn net_scores(&mut self, net: &Net, d: &Decision) -> Vec<f32> {
+        let Net { policy, tables } = net.clone();
         let (policy, tables) = (&*policy, &*tables);
         let s = policy.sizes;
         let lt = d.tok.len().min(s.max_tokens);
@@ -163,9 +211,7 @@ impl ImitationBot {
             glob_text: [glob_text[0].as_deref(), glob_text[1].as_deref(), glob_text[2].as_deref(), glob_text[3].as_deref()],
             glob_str_text: [glob_str_text[0].as_deref(), glob_str_text[1].as_deref()],
         };
-        let mut scores = policy.scores(&inputs);
-        scores.resize(d.opt.len(), f32::NEG_INFINITY);
-        scores
+        policy.scores(&inputs)
     }
 
     /// The response of the best options (by `order`, the best first) and the chosen options.
@@ -236,7 +282,7 @@ impl Bot for ImitationBot {
         for &c in init.deck.main.iter().chain(&init.deck.extra) {
             self.codes.of(c);
         }
-        self.names = self.rng.randrange(self.net.tables.seeds());
+        self.names = self.rng.randrange(self.scorer.tables().seeds());
         self.cards.clear();
         self.strings.clear();
         self.fallback = Heuristic::new(self.rng.randrange(1 << 30) as i128, player);
