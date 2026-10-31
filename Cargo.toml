@@ -2,7 +2,7 @@
 # models. The duel engine (ygopro-core-rust/) is a workspace of its own.
 [workspace]
 resolver = "2"
-members = ["crates/bot", "crates/bot-py-binding", "crates/highs", "crates/deckmodels"]
+members = ["crates/bot", "crates/bot-py-binding", "crates/highs", "crates/deckmodels", "crates/policynet"]
 exclude = ["ygopro-core-rust"]
 
 [workspace.package]

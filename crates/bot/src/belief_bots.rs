@@ -552,5 +552,14 @@ pub fn make_bot(name: &str, seed: Option<i64>) -> Result<Box<dyn Bot>, String> {
     if name == "belief_mc" {
         return Ok(Box::new(BeliefMcBot::new(seed_or_entropy)?));
     }
+    if name == "imitation" {
+        return Ok(Box::new(crate::imitation::ImitationBot::new(seed_or_entropy)?));
+    }
+    if name == "rl" {
+        // ($BOT_RL_NET: an RL policy export; the best option, no sampling)
+        let path = std::env::var_os("BOT_RL_NET").ok_or("rl: $BOT_RL_NET is not set")?;
+        let net = crate::rl_policy::RlPolicyNet::load(std::path::Path::new(&path))?;
+        return Ok(Box::new(crate::rl_policy::RlPolicyBot::new(seed_or_entropy as i128, std::sync::Arc::new(net), 0.0)));
+    }
     Ok(Box::new(BeliefSearchBot::new(name, seed)?))
 }

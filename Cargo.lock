@@ -536,6 +536,7 @@ dependencies = [
  "highs",
  "indexmap",
  "mimalloc",
+ "policynet",
  "regex",
  "rustc-hash 2.1.3",
  "serde",
@@ -4504,6 +4505,17 @@ dependencies = [
  "fdeflate",
  "flate2",
  "miniz_oxide 0.8.9",
+]
+
+[[package]]
+name = "policynet"
+version = "0.1.0"
+dependencies = [
+ "burn",
+ "half",
+ "serde",
+ "serde_json",
+ "zstd",
 ]
 
 [[package]]
