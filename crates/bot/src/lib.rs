@@ -16,5 +16,6 @@ pub mod heuristic;
 pub mod mcts;
 pub mod rl_policy;
 pub mod paths;
+pub mod policy_features;
 pub mod rduel;
 pub mod search;
