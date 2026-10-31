@@ -6,9 +6,11 @@
 //! games without search: bot-refeature.
 //!
 //!   bot-datagen BOOK FIRST COUNT NODES OUT.jsonl [JOBS] [--features SET,SET...]
+//!   bot-datagen BOOK --plan PLAN.jsonl OUT.jsonl [JOBS] [--features SET,SET...]
 //!
 //! (openings FIRST..FIRST+COUNT of the book, every line; games in parallel on JOBS threads;
-//! $BOT_TRACE: each decision on stderr)
+//! $BOT_TRACE: each decision on stderr.) --plan: a game per line, {"opening": the book's line
+//! index, "nodes": [seat 0's, seat 1's]} (e.g. one side weaker); a game's number is its line's.
 
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -28,10 +30,17 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 const MAX_DECISIONS: usize = 3000;
 
-fn play(book: &ygo_arbiter::matchrun::Opening, game: usize, nodes: u64, sets: &[String]) -> (Vec<Value>, GameData) {
+/// A game: the opening's index in the book, each seat's nodes per search.
+#[derive(serde::Deserialize)]
+struct Game {
+    opening: usize,
+    nodes: [u64; 2],
+}
+
+fn play(book: &ygo_arbiter::matchrun::Opening, game: usize, nodes: [u64; 2], sets: &[String]) -> (Vec<Value>, GameData) {
     let mut record = new_record(&book.decks, book.seed, &DuelConfig::default());
     let eval = std::env::var("BOT_EVAL").unwrap_or_else(|_| "built-in".into());
-    record.bots = vec![format!("alphabeta {nodes} nodes, eval {eval}"); 2];
+    record.bots = nodes.iter().map(|n| format!("alphabeta {n} nodes, eval {eval}")).collect();
     let mut duel = record.setup(None).unwrap();
     duel.ocg_start_duel();
     let mut players = [Heuristic::new(1, 0), Heuristic::new(2, 1)];
@@ -63,7 +72,7 @@ fn play(book: &ygo_arbiter::matchrun::Opening, game: usize, nodes: u64, sets: &[
         } else if is_searched(&p) && cands.len() > 1 {
             let ab = &mut abs[player as usize];
             ab.prepare();
-            let params = SearchParams { budget: None, elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2], max_nodes: Some(nodes), depth: None, exact_root: false };
+            let params = SearchParams { budget: None, elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2], max_nodes: Some(nodes[player as usize]), depth: None, exact_root: false };
             let (best, done) = ab.search(&duel, &p, &cands, &params);
             if ab.last_value.is_finite() {
                 let label = Label { decision: record.responses.len(), player, value: ab.last_value, depth: done as u32, nodes: None, time: None, search_time: None };
@@ -87,30 +96,37 @@ fn play(book: &ygo_arbiter::matchrun::Opening, game: usize, nodes: u64, sets: &[
 fn main() {
     bot::search::panic_messages_once();
     let a: Vec<String> = std::env::args().collect();
-    if a.len() < 6 {
+    if a.len() < 5 || (a[2] != "--plan" && a.len() < 6) {
         eprintln!("usage: bot-datagen BOOK FIRST COUNT NODES OUT.jsonl [JOBS] [--features SET,SET...]");
+        eprintln!("       bot-datagen BOOK --plan PLAN.jsonl OUT.jsonl [JOBS] [--features SET,SET...]");
         std::process::exit(2);
     }
-    let (first, count, nodes): (usize, usize, u64) = (a[2].parse().unwrap(), a[3].parse().unwrap(), a[4].parse().unwrap());
-    let jobs: usize = a.get(6).filter(|s| !s.starts_with("--")).map_or(8, |s| s.parse().unwrap());
+    // (the games, numbered from `first`; the output's argument index)
+    let (games, first, at): (Vec<Game>, usize, usize) = if a[2] == "--plan" {
+        let plan = std::fs::read_to_string(&a[3]).expect("plan");
+        (plan.lines().map(|l| serde_json::from_str(l).expect("plan line")).collect(), 0, 4)
+    } else {
+        let (first, count, nodes): (usize, usize, u64) = (a[2].parse().unwrap(), a[3].parse().unwrap(), a[4].parse().unwrap());
+        ((first..first + count).map(|opening| Game { opening, nodes: [nodes; 2] }).collect(), first, 5)
+    };
+    let jobs: usize = a.get(at + 1).filter(|s| !s.starts_with("--")).map_or(8, |s| s.parse().unwrap());
     let sets: Vec<String> = a.iter().position(|x| x == "--features").map_or("mover2,static", |i| a[i + 1].as_str()).split(',').map(String::from).collect();
     let sets = Arc::new(sets);
-    let book = Arc::new(load_book(a[1].as_ref(), usize::MAX, first + count).expect("book").split_off(first));
+    let book = Arc::new(load_book(a[1].as_ref(), usize::MAX, games.iter().map(|g| g.opening + 1).max().unwrap_or(0)).expect("book"));
+    let games = Arc::new(games);
     init(None).unwrap();
     let create = |path: String| Arc::new(Mutex::new(std::io::BufWriter::new(std::fs::File::create(path).expect("output"))));
-    let (out, games_out) = (create(a[5].clone()), create(format!("{}.games.jsonl", a[5].trim_end_matches(".jsonl"))));
+    let (out, games_out) = (create(a[at].clone()), create(format!("{}.games.jsonl", a[at].trim_end_matches(".jsonl"))));
     let (next, done) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
     let t0 = std::time::Instant::now();
     let threads: Vec<_> = (0..jobs)
         .map(|_| {
-            let (book, out, games_out, next, done, sets) = (book.clone(), out.clone(), games_out.clone(), next.clone(), done.clone(), sets.clone());
+            let (book, games, out, games_out, next, done, sets) = (book.clone(), games.clone(), out.clone(), games_out.clone(), next.clone(), done.clone(), sets.clone());
             std::thread::spawn(move || {
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
-                    if i >= book.len() {
-                        break;
-                    }
-                    let Ok((rows, data)) = std::panic::catch_unwind(|| play(&book[i], first + i, nodes, &sets)) else { continue };
+                    let Some(g) = games.get(i) else { break };
+                    let Ok((rows, data)) = std::panic::catch_unwind(|| play(&book[g.opening], first + i, g.nodes, &sets)) else { continue };
                     let mut w = out.lock().unwrap();
                     for r in rows {
                         writeln!(w, "{r}").unwrap();
@@ -122,7 +138,7 @@ fn main() {
                     g.flush().unwrap();
                     let k = done.fetch_add(1, Ordering::Relaxed) + 1;
                     if k % 50 == 0 {
-                        eprintln!("[{:.0}s] {k}/{} games", t0.elapsed().as_secs_f64(), book.len());
+                        eprintln!("[{:.0}s] {k}/{} games", t0.elapsed().as_secs_f64(), games.len());
                     }
                 }
             })
