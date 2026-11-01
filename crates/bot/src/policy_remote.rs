@@ -8,8 +8,12 @@
 //! decision's after the previous one's. The answer: u32 n, the ids (u32), the scores' counts
 //! (u32), the scores (f32; train.Batcher's options, those beyond it -inf). The end: u32 2, u32
 //! length, a JSON summary.
+//!
+//! `Client`: a bot process's decisions, one at a time, as batches of one over a Unix socket
+//! (scripts/policy/serve.py).
 
 use std::io::{Read, Write};
+use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -100,38 +104,70 @@ impl Remote {
                 out.write_all(s.as_bytes())?;
                 return out.flush();
             }
-            let mut buf: Vec<u8> = Vec::new();
-            let mut put = |b: &[u8]| buf.extend_from_slice(b);
-            put(&1u32.to_le_bytes());
-            put(&(batch.len() as u32).to_le_bytes());
-            for (i, (r, _)) in batch.iter().enumerate() {
-                for x in [i as u32, r.net, r.row.tok.len() as u32, r.row.opt.len() as u32, r.code_rows.len() as u32, r.string_rows.len() as u32] {
-                    put(&x.to_le_bytes());
-                }
-            }
-            batch.iter().flat_map(|(r, _)| r.row.hdr).for_each(|x| put(&x.to_le_bytes()));
-            batch.iter().flat_map(|(r, _)| r.row.tok.iter().flatten()).for_each(|x| put(&x.to_le_bytes()));
-            batch.iter().flat_map(|(r, _)| r.row.opt.iter().flatten()).for_each(|x| put(&x.to_le_bytes()));
-            batch.iter().flat_map(|(r, _)| &r.code_rows).for_each(|x| put(&x.to_le_bytes()));
-            batch.iter().flat_map(|(r, _)| r.string_rows.iter().flatten()).for_each(|x| put(&x.to_le_bytes()));
-            out.write_all(&buf)?;
-            out.flush()?;
-
-            let n = read_u32s(input, 1)?[0] as usize;
-            let ids = read_u32s(input, n)?;
-            let counts = read_u32s(input, n)?;
-            let mut scores = vec![0u8; counts.iter().sum::<u32>() as usize * 4];
-            input.read_exact(&mut scores)?;
-            let mut at = 0;
-            for (&id, &k) in ids.iter().zip(&counts) {
-                let s: Vec<f32> = scores[at..at + k as usize * 4].chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
-                at += k as usize * 4;
+            write_batch(out, batch.iter().map(|(r, _)| r))?;
+            for (id, s) in read_answer(input)? {
                 let (answer, ready) = &*batch[id as usize].1;
                 *answer.lock().unwrap() = Some(s);
                 ready.notify_one();
             }
         }
     }
+}
+
+/// A connection to a server (one request at a time).
+pub struct Client {
+    conn: Mutex<UnixStream>,
+}
+
+impl Client {
+    pub fn connect(path: &std::path::Path) -> std::io::Result<Client> {
+        Ok(Client { conn: Mutex::new(UnixStream::connect(path)?) })
+    }
+
+    pub fn score(&self, request: &Request) -> std::io::Result<Vec<f32>> {
+        let mut conn = self.conn.lock().unwrap();
+        write_batch(&mut *conn, [request].into_iter())?;
+        let answer = read_answer(&mut *conn)?;
+        answer.into_iter().next().map(|(_, s)| s).ok_or_else(|| std::io::Error::other("an empty answer"))
+    }
+}
+
+fn write_batch<'a>(out: &mut impl Write, batch: impl Iterator<Item = &'a Request> + Clone) -> std::io::Result<()> {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut put = |b: &[u8]| buf.extend_from_slice(b);
+    put(&1u32.to_le_bytes());
+    put(&(batch.clone().count() as u32).to_le_bytes());
+    for (i, r) in batch.clone().enumerate() {
+        for x in [i as u32, r.net, r.row.tok.len() as u32, r.row.opt.len() as u32, r.code_rows.len() as u32, r.string_rows.len() as u32] {
+            put(&x.to_le_bytes());
+        }
+    }
+    batch.clone().flat_map(|r| r.row.hdr).for_each(|x| put(&x.to_le_bytes()));
+    batch.clone().flat_map(|r| r.row.tok.iter().flatten()).for_each(|x| put(&x.to_le_bytes()));
+    batch.clone().flat_map(|r| r.row.opt.iter().flatten()).for_each(|x| put(&x.to_le_bytes()));
+    batch.clone().flat_map(|r| &r.code_rows).for_each(|x| put(&x.to_le_bytes()));
+    batch.flat_map(|r| r.string_rows.iter().flatten()).for_each(|x| put(&x.to_le_bytes()));
+    out.write_all(&buf)?;
+    out.flush()
+}
+
+/// An answer's (id, scores).
+fn read_answer(input: &mut impl Read) -> std::io::Result<Vec<(u32, Vec<f32>)>> {
+    let n = read_u32s(input, 1)?[0] as usize;
+    let ids = read_u32s(input, n)?;
+    let counts = read_u32s(input, n)?;
+    let mut scores = vec![0u8; counts.iter().sum::<u32>() as usize * 4];
+    input.read_exact(&mut scores)?;
+    let mut at = 0;
+    Ok(ids
+        .into_iter()
+        .zip(counts)
+        .map(|(id, k)| {
+            let s = scores[at..at + k as usize * 4].chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
+            at += k as usize * 4;
+            (id, s)
+        })
+        .collect())
 }
 
 fn read_u32s(input: &mut impl Read, n: usize) -> std::io::Result<Vec<u32>> {

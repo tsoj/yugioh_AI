@@ -89,6 +89,46 @@ def log_probs(scores: torch.Tensor, b: dict, temp: float):
     return lp.masked_fill(~chosen, 0).sum(1), lp
 
 
+def answer(read, nets: list, tables: Tables, batch: int = 512) -> bytes:
+    """The answer to a batch of bot::policy_remote's protocol (after its u32 1; `read(k)`: its
+    next k bytes): its decisions scored by `nets` (network i: nets[i], in eval mode)."""
+    u32 = lambda: struct.unpack("<I", read(4))[0]
+    n = u32()
+    _, net, nt, no, nc, ns = np.frombuffer(read(24 * n), "<u4").reshape(n, 6).astype(np.int64).T
+    hdr = np.frombuffer(read(8 * len(H) * n), "<i8").reshape(n, len(H)).copy()
+    tok = np.frombuffer(read(2 * len(T) * nt.sum()), "<i2").reshape(-1, len(T))
+    opt = np.frombuffer(read(4 * len(O) * no.sum()), "<i4").reshape(-1, len(O))
+    code_rows = np.frombuffer(read(4 * nc.sum()), "<i4").astype(np.int64)
+    str_rows = np.frombuffer(read(12 * ns.sum()), "<i4").reshape(-1, 3).astype(np.int64)
+    # (as a games directory's: decision i is game i, its code index 1 at start[i])
+    hdr[:, H["GAME"]] = np.arange(n)
+    hdr[:, H["TOK_START"]] = np.cumsum(nt) - nt
+    hdr[:, H["OPT_START"]] = np.cumsum(no) - no
+    start = dict(enumerate((np.cumsum(nc) - nc).tolist()))
+    dev = tables.values.device
+    emb = tables.values[torch.from_numpy(np.where(code_rows < 0, tables.zero, code_rows)).to(dev)]
+    # (a key no string has first: the keys are never empty)
+    keys = np.concatenate([[-1], string_key(np.repeat(np.arange(n), ns), str_rows[:, 0], str_rows[:, 1])])
+    rows = np.concatenate([[tables.zero], str_rows[:, 2]])
+    order = np.argsort(keys)
+    semb = tables.values[torch.from_numpy(rows[order]).to(dev)]
+    batcher = Batcher(types.SimpleNamespace(hdr=hdr, tok=tok, opt=opt), start, keys[order])
+    ids, scores = [], []
+    with torch.no_grad():
+        for k, m in enumerate(nets):
+            idx = np.where(net == k)[0]
+            for s in range(0, len(idx), batch):
+                j = idx[s:s + batch]
+                b = {key: v.to(dev, non_blocking=True) for key, v in batcher(j).items()}
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    sc = m(b, emb, semb if hasattr(m, "str_opt") else None).float().cpu().numpy()
+                ids.append(j)
+                scores += [sc[i, :min(no[x], MAX_OPTIONS)] for i, x in enumerate(j)]
+    ids = np.concatenate(ids)
+    return (struct.pack("<I", n) + ids.astype("<u4").tobytes() + np.array([len(x) for x in scores], "<u4").tobytes()
+            + np.concatenate(scores).astype("<f4").tobytes())
+
+
 def play(cmd: list[str], nets: list, tables: Tables, log, batch: int = 512):
     """Runs bot-rl-games --remote, scoring its decisions with `nets` (network i: nets[i]); its
     summary. (bot::policy_remote's protocol.)"""
@@ -106,40 +146,7 @@ def play(cmd: list[str], nets: list, tables: Tables, log, batch: int = 512):
     for m in nets:
         m.eval()
     while u32() == 1:
-        n = u32()
-        _, net, nt, no, nc, ns = np.frombuffer(read(24 * n), "<u4").reshape(n, 6).astype(np.int64).T
-        hdr = np.frombuffer(read(8 * len(H) * n), "<i8").reshape(n, len(H)).copy()
-        tok = np.frombuffer(read(2 * len(T) * nt.sum()), "<i2").reshape(-1, len(T))
-        opt = np.frombuffer(read(4 * len(O) * no.sum()), "<i4").reshape(-1, len(O))
-        code_rows = np.frombuffer(read(4 * nc.sum()), "<i4").astype(np.int64)
-        str_rows = np.frombuffer(read(12 * ns.sum()), "<i4").reshape(-1, 3).astype(np.int64)
-        # (as a games directory's: decision i is game i, its code index 1 at start[i])
-        hdr[:, H["GAME"]] = np.arange(n)
-        hdr[:, H["TOK_START"]] = np.cumsum(nt) - nt
-        hdr[:, H["OPT_START"]] = np.cumsum(no) - no
-        start = dict(enumerate((np.cumsum(nc) - nc).tolist()))
-        dev = tables.values.device
-        emb = tables.values[torch.from_numpy(np.where(code_rows < 0, tables.zero, code_rows)).to(dev)]
-        # (a key no string has first: the keys are never empty)
-        keys = np.concatenate([[-1], string_key(np.repeat(np.arange(n), ns), str_rows[:, 0], str_rows[:, 1])])
-        rows = np.concatenate([[tables.zero], str_rows[:, 2]])
-        order = np.argsort(keys)
-        semb = tables.values[torch.from_numpy(rows[order]).to(dev)]
-        batcher = Batcher(types.SimpleNamespace(hdr=hdr, tok=tok, opt=opt), start, keys[order])
-        ids, scores = [], []
-        with torch.no_grad():
-            for k, m in enumerate(nets):
-                idx = np.where(net == k)[0]
-                for s in range(0, len(idx), batch):
-                    j = idx[s:s + batch]
-                    b = {key: v.to(dev, non_blocking=True) for key, v in batcher(j).items()}
-                    with torch.autocast("cuda", dtype=torch.bfloat16):
-                        sc = m(b, emb, semb if hasattr(m, "str_opt") else None).float().cpu().numpy()
-                    ids.append(j)
-                    scores += [sc[i, :min(no[x], MAX_OPTIONS)] for i, x in enumerate(j)]
-        ids = np.concatenate(ids)
-        proc.stdin.write(struct.pack("<I", n) + ids.astype("<u4").tobytes() + np.array([len(x) for x in scores], "<u4").tobytes()
-                         + np.concatenate(scores).astype("<f4").tobytes())
+        proc.stdin.write(answer(read, nets, tables, batch))
         proc.stdin.flush()
     summary = json.loads(read(u32()))
     if proc.wait():

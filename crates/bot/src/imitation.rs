@@ -7,7 +7,8 @@
 //! $BOT_POLICY_NET: an export_policy.py file; $BOT_POLICY_TABLES: an embed_tables.py file;
 //! $BOT_POLICY_TEMP: sample the options by softmax(score / T) (default 0: the best). RL games
 //! (bot-rl-games) make the bot with `ImitationBot::with`, which can also log its decisions, and
-//! can score elsewhere (`Scorer::Remote`: policy_remote).
+//! can score elsewhere (`Scorer::Remote`: policy_remote). $BOT_POLICY_SERVER (a Unix socket of
+//! scripts/policy/serve.py's, instead of $BOT_POLICY_NET): the server scores (on the GPU).
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -21,7 +22,7 @@ use ygo_arbiter::state::Snapshot;
 
 use crate::heuristic::Heuristic;
 use crate::policy_features::*;
-use crate::policy_remote::{Remote, Request};
+use crate::policy_remote::{Client, Remote, Request};
 
 /// A network and its tables.
 #[derive(Clone)]
@@ -47,25 +48,31 @@ pub enum Scorer {
     Net(Net),
     /// network `net` of a remote server's, with the tables it reads
     Remote { remote: Arc<Remote>, tables: Arc<Tables>, net: u32 },
+    /// a server's network (network 0)
+    Client { client: Arc<Client>, tables: Arc<Tables> },
 }
 
 impl Scorer {
     fn tables(&self) -> &Arc<Tables> {
         match self {
             Scorer::Net(n) => &n.tables,
-            Scorer::Remote { tables, .. } => tables,
+            Scorer::Remote { tables, .. } | Scorer::Client { tables, .. } => tables,
         }
     }
 }
 
-/// The environment's network and tables, loaded once per process.
-fn loaded() -> Result<Net, String> {
-    static LOADED: OnceLock<Result<Net, String>> = OnceLock::new();
+/// The environment's scorer: its network or server, with the tables; once per process.
+fn loaded() -> Result<Scorer, String> {
+    static LOADED: OnceLock<Result<Scorer, String>> = OnceLock::new();
     LOADED
         .get_or_init(|| {
             let var = |name: &str| std::env::var_os(name).ok_or_else(|| format!("imitation: ${name} is not set"));
-            let tables = Tables::load(std::path::Path::new(&var("BOT_POLICY_TABLES")?))?;
-            Net::load(std::path::Path::new(&var("BOT_POLICY_NET")?), Arc::new(tables))
+            let tables = Arc::new(Tables::load(std::path::Path::new(&var("BOT_POLICY_TABLES")?))?);
+            if let Some(server) = std::env::var_os("BOT_POLICY_SERVER") {
+                let client = Client::connect(std::path::Path::new(&server)).map_err(|e| format!("imitation: {}: {e}", server.to_string_lossy()))?;
+                return Ok(Scorer::Client { client: Arc::new(client), tables });
+            }
+            Ok(Scorer::Net(Net::load(std::path::Path::new(&var("BOT_POLICY_NET")?), tables)?))
         })
         .clone()
 }
@@ -96,7 +103,7 @@ impl ImitationBot {
             Ok(t) => t.parse().map_err(|_| format!("imitation: $BOT_POLICY_TEMP {t:?} is not a number"))?,
             Err(_) => 0.0,
         };
-        Ok(ImitationBot::with(Scorer::Net(loaded()?), seed, temperature, false))
+        Ok(ImitationBot::with(loaded()?, seed, temperature, false))
     }
 
     pub fn with(scorer: Scorer, seed: i64, temperature: f32, log: bool) -> ImitationBot {
@@ -137,13 +144,14 @@ impl ImitationBot {
     }
 
     /// The options' scores (train.Batcher's truncations; options beyond them: -inf).
-    fn scores(&mut self, d: &Decision) -> Vec<f32> {
+    fn scores(&mut self, d: &Decision) -> Result<Vec<f32>, BotError> {
         let mut scores = match self.scorer.clone() {
             Scorer::Net(net) => self.net_scores(&net, d),
             Scorer::Remote { remote, tables, net } => remote.score(self.request(&tables, net, d)),
+            Scorer::Client { client, tables } => client.score(&self.request(&tables, 0, d)).map_err(|e| BotError::Failed(format!("imitation: the server: {e}")))?,
         };
         scores.resize(d.opt.len(), f32::NEG_INFINITY);
-        scores
+        Ok(scores)
     }
 
     /// The decision for a remote server: the game's code rows, the strings it refers to.
@@ -303,7 +311,7 @@ impl Bot for ImitationBot {
         let d = decision(&mut self.codes, &self.seen, view, prompt, &Response::default(), &self.deck);
         let chosen = match &d {
             Some(d) if !again && !d.opt.is_empty() => {
-                let scores = if d.opt.len() > 1 { self.scores(d) } else { vec![0.0] };
+                let scores = if d.opt.len() > 1 { self.scores(d)? } else { vec![0.0] };
                 // (sampling: the Gumbel-max trick, which orders the options as drawing them one
                 // by one without replacement would)
                 let key: Vec<f32> = match self.temperature > 0.0 {
