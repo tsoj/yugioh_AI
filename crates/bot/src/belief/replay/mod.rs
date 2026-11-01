@@ -901,7 +901,8 @@ impl BeliefReplay {
                 }
             }
         }
-        let h = Rc::new(tracker.solve(Some(self.completion))?);
+        // (the fills' order: random, fixed by the observations so far)
+        let h = Rc::new(tracker.solve(Some(self.completion), self.items.len() as u64)?);
         self.hypothesis = Some(h.clone());
         self.solved = Some(Rc::new(tracker));
         Ok(h)

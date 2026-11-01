@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use ygo_core::constants::*;
 
 use crate::belief::completion::{Completion, VanillaCompletion, card, fits_need, monster_sset_codes};
+use ygo_arbiter::pyrandom::PyRandom;
 use crate::belief::tracker::{Guess, Hypothesis, Kind, Need, PoolLoc, Result, ShuffleOutcome, Tracker, TrackerError, VarId};
 
 const WILD_MAIN: &str = "main";
@@ -111,6 +112,8 @@ impl Counter {
 pub struct FlowSolver<'a> {
     pub t: &'a mut Tracker,
     pub completion: Option<&'a dyn Completion>,
+    /// the seed of the order in which the completion's cards fill the unknown cards
+    pub fill_seed: u64,
 }
 
 /// The card's original code for alternate artworks (Solver._base).
@@ -130,8 +133,8 @@ fn fits(code: u32, need: Need, usual: bool) -> bool {
 }
 
 impl<'a> FlowSolver<'a> {
-    pub fn new(t: &'a mut Tracker, completion: Option<&'a dyn Completion>) -> Self {
-        FlowSolver { t, completion }
+    pub fn new(t: &'a mut Tracker, completion: Option<&'a dyn Completion>, fill_seed: u64) -> Self {
+        FlowSolver { t, completion, fill_seed }
     }
 
     /// Cards for slots whose requirement differs in kind from those of all the cards they can be.
@@ -776,7 +779,12 @@ impl<'a> FlowSolver<'a> {
                     Ok(f) => f,
                     Err(_) => completion.complete(&known_main, &known_extra, n_main, n_extra, &present).map_err(TrackerError)?,
                 };
+                // (in a random order: the completion's comes likeliest first, and the unknown cards'
+                // order would give the hand the least likely ones)
                 let (mut fm, mut fe) = (fill_main, fill_extra);
+                let mut rng = PyRandom::new(self.fill_seed as i128);
+                rng.shuffle(&mut fm);
+                rng.shuffle(&mut fe);
                 let mut order = plain.clone();
                 order.sort_by_key(|a| excluded.get(a).is_none_or(|e| e.is_empty()));
                 for a in order {
@@ -911,8 +919,9 @@ pub fn finish(t: &Tracker, unknown: usize) -> Result<Hypothesis> {
 }
 
 impl Tracker {
-    /// The hypothesis (belief/tracker.py Tracker.solve: the flow solver).
-    pub fn solve(&mut self, completion: Option<&dyn Completion>) -> Result<Hypothesis> {
-        FlowSolver::new(self, completion).solve()
+    /// The hypothesis (belief/tracker.py Tracker.solve: the flow solver); `fill_seed`: the order
+    /// of the completion's cards for the unknown ones.
+    pub fn solve(&mut self, completion: Option<&dyn Completion>, fill_seed: u64) -> Result<Hypothesis> {
+        FlowSolver::new(self, completion, fill_seed).solve()
     }
 }
