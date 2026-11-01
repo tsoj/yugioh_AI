@@ -122,10 +122,10 @@ during a run does not change it.
 
 The bot's models are in `crates/bot/models/` and compiled in. To make them again:
 
-- The evaluation `eval_mover2_sprt2r23os_64.json`: SPRT records → `scripts/collect_sprt_games.py`
-  → `bot-refeature --features mover2` → `scripts/sprt_games_to_npz.py` (with rounds 2 and 3:
-  `bot-datagen` → `scripts/eval_mover_features.py`, in `runs/data/rounds23/`) →
-  `scripts/train_eval_mover.py --dims 64 --held 400 --drop-onesided --lam 0.5`.
+- The evaluation `eval_mover2_era2os_64.json`: `bot-datagen` on the era book's datagen part
+  (`runs/books/era_data.jsonl`), then each opening again with the winner handicapped (`bot-datagen
+  --plan`) → `scripts/datagen_to_npz.py OUT.npz ROWS:GAMES ROWS:GAMES` →
+  `scripts/train_eval_mover.py --dims 64 --held 2000 --held-below 29996 --drop-onesided --lam 0.5`.
 - The card policy `card_policy_cp4_h16.json`: `bot-card-refs --independent` →
   `scripts/train_card_policy.py`.
 - The set policy `set_policy_s2_h16.json`: `bot-card-refs --independent --decisions` →

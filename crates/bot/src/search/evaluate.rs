@@ -578,7 +578,7 @@ impl LearnedEval {
     }
 
     /// The trained evaluation in use (read once): $BOT_EVAL's JSON file if set, the built-in
-    /// models/eval_mover2_sprt2r23os_64.json otherwise.
+    /// models/eval_mover2_era2os_64.json otherwise.
     pub fn from_env() -> &'static LearnedEval {
         static E: std::sync::OnceLock<LearnedEval> = std::sync::OnceLock::new();
         E.get_or_init(|| match std::env::var("BOT_EVAL").ok().filter(|p| !p.is_empty()) {
@@ -586,17 +586,17 @@ impl LearnedEval {
                 let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("BOT_EVAL {path}: {e}"));
                 LearnedEval::from_json(&text, &path)
             }
-            None => LearnedEval::from_json(DEFAULT_EVAL, "models/eval_mover2_sprt2r23os_64.json"),
+            None => LearnedEval::from_json(DEFAULT_EVAL, "models/eval_mover2_era2os_64.json"),
         })
     }
 }
 
-/// The default evaluation (scripts/train_eval_mover.py --dims 64 --held 400 --drop-onesided --lam 0.5:
-/// an MLP with a hidden layer of 64 on the 87 mover2 features), trained on all SPRT games with
-/// search values since the round-2+3 net became the default (2026-10-17 23:22 to 2026-10-24, 184522
-/// games, 28.1M positions, runs/data/sprt_net2/) and on rounds 2 and 3, without the deck pairs where
-/// one deck won every game (its predecessors and their SPRTs: TODO.md, "Evaluation").
-const DEFAULT_EVAL: &str = include_str!("../../models/eval_mover2_sprt2r23os_64.json");
+/// The default evaluation (scripts/train_eval_mover.py --dims 64 --held 2000 --held-below 29996
+/// --drop-onesided --lam 0.5: an MLP with a hidden layer of 64 on the 87 mover2 features), trained on
+/// the era book's datagen games only (runs/data/era/era2.npz: each opening twice, the second game with
+/// the first's winner handicapped; 59877 games, 7.0M positions), without the deck pairs where one deck
+/// won both games (its predecessors and their SPRTs: TODO.md, "Evaluation").
+const DEFAULT_EVAL: &str = include_str!("../../models/eval_mover2_era2os_64.json");
 
 /// The position's value for `me` (in LP): the trained evaluation (`LearnedEval::from_env`).
 pub fn evaluate(d: &mut Duel, me: u32) -> f64 {
