@@ -7,6 +7,8 @@ are not Pendulum Monsters, tokens) get no text and the flag has_effect 0.
 
 OUT.npz: codes (n), has_effect (n), emb (seeds, n, dim) float16 (zero rows without an effect).
 --codes: only the codes of a cards_to_npz.py file (default: every card of the database).
+--clean: the texts without what tells the summoning type (clean_effect.py: material lines,
+summoning conditions, Pendulum headings, flavor text); a card left without text has no effect.
 """
 
 import argparse
@@ -20,8 +22,10 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # (scripts/: common)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "book"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from card_text import Names, _texts  # noqa: E402
+from clean_effect import clean_effect  # noqa: E402
 from common import constants_gen as G  # noqa: E402
 from common.carddb import default_db  # noqa: E402
 
@@ -58,6 +62,7 @@ def main():
     ap.add_argument("--codes", default=None)
     ap.add_argument("--encoder", default="google/embeddinggemma-2")
     ap.add_argument("--max-tokens", type=int, default=512)
+    ap.add_argument("--clean", action="store_true")
     a = ap.parse_args()
 
     db = default_db()
@@ -65,7 +70,10 @@ def main():
         codes = [int(c) for c in np.load(a.codes)["codes"]]
     else:
         codes = sorted({row[0] for f in db.files for row in sqlite3.connect(f"file:{f}?mode=ro", uri=True).execute("SELECT id FROM datas")})
-    flags = np.array([db.get(c) is not None and has_effect(db.get(c)) and bool(_texts().get(c, ("", ""))[1]) for c in codes])
+    def text(c):
+        t = _texts().get(c, ("", ""))[1]
+        return clean_effect(t, db.get(c).type)[0] if a.clean and t else t
+    flags = np.array([db.get(c) is not None and has_effect(db.get(c)) and bool(text(c).strip()) for c in codes])
     idx = np.flatnonzero(flags)
     print(f"{len(codes)} cards, {len(idx)} with an effect, {a.seeds} seeds, {a.device}", flush=True)
 
@@ -78,7 +86,7 @@ def main():
     t0 = time.time()
     for k in range(a.seeds):
         names = Names(a.first_seed + k)
-        emb[k, idx] = encode(model, [names.effect(_texts()[codes[i]][1]) for i in idx], a.batch)
+        emb[k, idx] = encode(model, [names.effect(text(codes[i])) for i in idx], a.batch)
         print(f"  seed {k}: {time.time() - t0:.0f} s", flush=True)
     np.savez(a.out, codes=np.array(codes, np.int64), has_effect=flags.astype(np.int8), emb=emb)
     print(f"wrote {a.out}")

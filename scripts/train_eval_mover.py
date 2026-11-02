@@ -149,10 +149,11 @@ if args.cards:
     EC_t = torch.tensor(EC, device=dev); HE_t = torch.tensor(HE, device=dev)
     EF_codes, EF_emb, EF_has = ef["codes"], torch.tensor(emb), torch.tensor(ef["has_effect"].astype(np.float32))  # (every card: the export's table)
     OFF = torch.tensor(cd["off"], device=dev)
-    CI = torch.tensor(cd["cidx"].astype(np.int64), device=dev)
-    BK = torch.tensor(cd["bucket"].astype(np.int64), device=dev)
-    ST = torch.tensor(cd["negated"].astype(np.int64) * 2 + cd["used"].astype(np.int64), device=dev)
-    SGN = torch.tensor(np.where(cd["mine"] > 0, 1.0, -1.0).astype(np.float32), device=dev)
+    # (compact on the device: 500M entries of the SPRT data; widened per batch)
+    CI = torch.tensor(cd["cidx"].astype(np.int32), device=dev)
+    BK = torch.tensor(cd["bucket"].astype(np.int8), device=dev)
+    ST = torch.tensor((cd["negated"] * 2 + cd["used"]).astype(np.int8), device=dev)
+    SGN = torch.tensor(np.where(cd["mine"] > 0, 1, -1).astype(np.int8), device=dev)
     del cd, ef, emb
     card_w = torch.zeros(emb_dim := EC.shape[1], N_BUCKETS, device=dev, requires_grad=True)
     card_c = torch.zeros(N_BUCKETS, device=dev, requires_grad=True)
@@ -171,8 +172,8 @@ def card_x(idx):
     cnt = hi - lo
     row = torch.repeat_interleave(torch.arange(len(idx), device=dev), cnt)
     ent = torch.repeat_interleave(lo - torch.cumsum(cnt, 0) + cnt, cnt) + torch.arange(int(cnt.sum()), device=dev)
-    b = BK[ent]
-    val = SGN[ent] * m[b, ST[ent]] * s[CI[ent], b]
+    b = BK[ent].long()
+    val = SGN[ent].float() * m[b, ST[ent].long()] * s[CI[ent].long(), b]
     out = torch.zeros(len(idx) * N_BUCKETS, device=dev)
     out.index_add_(0, row * N_BUCKETS + b, val)
     return out.view(len(idx), N_BUCKETS)
