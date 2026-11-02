@@ -6,6 +6,13 @@ Mover-view eval with a deck-pair term (experiment).
 
 logit P(mover wins) = sgn * a[pair, seat order] + v(x); the search value's target is sigmoid(v(x))
 alone (the search knows nothing of deck strength). a is dropped at inference.
+
+With --cards (scripts/eval_cards/cards_to_npz.py, the rows' card lists) and --effects
+(scripts/eval_cards/embed_effects.py) the card term: per bucket b (hand, GY, field) a card's
+strength s_b = w_b . e + c_b (e: its effect text's embedding, the mean over the pseudo-name seeds;
+0 for a card without an effect), times a learned multiplier m_b by the card's state (negated, used
+up; 1 for neither), summed over the cards, the mover's minus the opponent's: 3 more inputs of the
+network. With --card-out instead their sum is added to the network's output (the logit).
 """
 import argparse
 import numpy as np
@@ -33,12 +40,20 @@ ap.add_argument("--indicator", action="store_true", help="the last column marks 
 ap.add_argument("--drop-onesided", action="store_true", help="leave out of training the deck pairs where one deck won every game (held-out pairs stay); --min-wins 1")
 ap.add_argument("--min-wins", type=int, default=0, help="leave out of training the deck pairs where a deck won fewer games than this (held-out pairs stay)")
 ap.add_argument("--balance-wins", action="store_true", help="weight each training game so that both decks of a pair have as much weight in won games: a game the pair's winner of W of its games won counts min(W, L) / W (a one-sided pair: 0)")
+ap.add_argument("--cards", help="the rows' card lists (cards_to_npz.py): the card term")
+ap.add_argument("--effects", help="the effect embeddings (embed_effects.py), with --cards")
+ap.add_argument("--card-free", action="store_true", help="(diagnostic) the card term's strengths a free learned value per code and bucket instead of w_b . e (no export)")
+ap.add_argument("--card-out", action="store_true", help="the card term added to the output instead of 3 more inputs")
+ap.add_argument("--card-wd", type=float, default=0.0, help="weight decay of the card term's w_b")
+ap.add_argument("--threads", type=int, default=0, help="torch's CPU threads (0: its default)")
 ap.add_argument("--fold",help="I/N: hold out the I-th of N folds of the deck pairs instead of --held of them")
 args = ap.parse_args()
 hidden = [int(w) for w in args.dims.split(",")] if args.dims else [args.hidden] * args.layers
 args.layers = len(hidden)
 torch.manual_seed(args.seed)
 dev = "cuda" if torch.cuda.is_available() else "cpu"
+if args.threads:
+    torch.set_num_threads(args.threads)
 
 d = np.load(args.data)
 X, value, static, result, game, player, turn = (d[k] for k in ["x", "value", "static", "result", "game", "player", "turn"])
@@ -102,8 +117,16 @@ if min_wins or args.balance_wins:
         lo = np.minimum(w0, w1)
         W = np.where(won == 2, 1.0, lo / np.maximum(np.where(won == 0, w0, w1), 1)).astype(np.float32)
         print(f"--balance-wins: training rows' weight {W[is_tr].sum():.0f} of {is_tr.sum()}")
-mu, sd = X[is_tr].mean(0), X[is_tr].std(0) + 1e-6
-Z = torch.tensor((X - mu) / sd, device=dev)
+# (normalized on the device in chunks: no float copies of X in memory)
+Z = torch.tensor(X, device=dev); TR = torch.tensor(is_tr, device=dev)
+s1 = torch.zeros(X.shape[1], dtype=torch.float64, device=dev); s2 = torch.zeros_like(s1)
+for i in range(0, len(X), 1 << 20):
+    z = Z[i:i + (1 << 20)][TR[i:i + (1 << 20)]].double()
+    s1 += z.sum(0); s2 += (z * z).sum(0)
+n_tr = int(is_tr.sum()); m_ = s1 / n_tr
+mu, sd = m_.cpu().numpy().astype(np.float32), ((s2 / n_tr - m_ * m_).clamp_min(0).sqrt().cpu().numpy() + 1e-6).astype(np.float32)
+Z.sub_(torch.tensor(mu, device=dev)).div_(torch.tensor(sd, device=dev))
+del TR
 Yr = torch.tensor((result + 1) / 2, dtype=torch.float32, device=dev)
 Yv = torch.tensor(1 / (1 + np.exp(-np.clip(value / Kr, -50, 50))), dtype=torch.float32, device=dev)
 PS = torch.tensor(ps, device=dev); SG = torch.tensor(sgn, device=dev)
@@ -111,6 +134,52 @@ dec = torch.tensor(result != 0, device=dev)
 Wt = torch.tensor(W, device=dev)
 
 n = X.shape[1]
+N_BUCKETS, N_STATES = 3, 4
+if args.cards:
+    cd = np.load(args.cards); ef = np.load(args.effects)
+    assert len(cd["off"]) == len(X) + 1, "the card lists are not the npz's rows"
+    # (each data code's effect embedding: the mean over the seeds; none: 0)
+    at = {c: i for i, c in enumerate(ef["codes"].tolist())}
+    emb = ef["emb"].astype(np.float32).mean(0) * ef["has_effect"][:, None]
+    rows_of = np.array([at.get(c, -1) for c in cd["codes"].tolist()])
+    print(f"card term: {len(rows_of)} codes, {(rows_of < 0).sum()} without an embedding, "
+          f"{(ef['has_effect'][rows_of[rows_of >= 0]] == 0).sum()} without an effect")
+    EC = np.zeros((len(rows_of), emb.shape[1]), np.float32); EC[rows_of >= 0] = emb[rows_of[rows_of >= 0]]
+    HE = np.zeros(len(rows_of), np.float32); HE[rows_of >= 0] = ef["has_effect"][rows_of[rows_of >= 0]]
+    EC_t = torch.tensor(EC, device=dev); HE_t = torch.tensor(HE, device=dev)
+    EF_codes, EF_emb, EF_has = ef["codes"], torch.tensor(emb), torch.tensor(ef["has_effect"].astype(np.float32))  # (every card: the export's table)
+    OFF = torch.tensor(cd["off"], device=dev)
+    # (compact on the device: 500M entries of the SPRT data; widened per batch)
+    CI = torch.tensor(cd["cidx"].astype(np.int32), device=dev)
+    BK = torch.tensor(cd["bucket"].astype(np.int8), device=dev)
+    ST = torch.tensor((cd["negated"] * 2 + cd["used"]).astype(np.int8), device=dev)
+    SGN = torch.tensor(np.where(cd["mine"] > 0, 1, -1).astype(np.int8), device=dev)
+    del cd, ef, emb
+    card_w = torch.zeros(emb_dim := EC.shape[1], N_BUCKETS, device=dev, requires_grad=True)
+    card_c = torch.zeros(N_BUCKETS, device=dev, requires_grad=True)
+    card_m = torch.zeros(N_BUCKETS, N_STATES - 1, device=dev, requires_grad=True)  # (the multipliers of the states but "neither", minus 1)
+    card_T = torch.zeros(len(rows_of), N_BUCKETS, device=dev, requires_grad=True)
+    card_params = [card_w, card_c, card_m] + ([card_T] if args.card_free else [])
+    n_x = n if args.card_out else n + N_BUCKETS
+else:
+    card_params, n_x = [], n
+
+def card_x(idx):
+    """The card term's inputs of rows idx: (len(idx), N_BUCKETS)."""
+    s = ((card_T if args.card_free else EC_t @ card_w) + card_c) * HE_t[:, None]  # (each code's strength per bucket)
+    m = torch.cat([torch.ones(N_BUCKETS, 1, device=dev), 1 + card_m], 1)
+    lo, hi = OFF[idx], OFF[idx + 1]
+    cnt = hi - lo
+    row = torch.repeat_interleave(torch.arange(len(idx), device=dev), cnt)
+    ent = torch.repeat_interleave(lo - torch.cumsum(cnt, 0) + cnt, cnt) + torch.arange(int(cnt.sum()), device=dev)
+    b = BK[ent].long()
+    val = SGN[ent].float() * m[b, ST[ent].long()] * s[CI[ent].long(), b]
+    out = torch.zeros(len(idx) * N_BUCKETS, device=dev)
+    out.index_add_(0, row * N_BUCKETS + b, val)
+    return out.view(len(idx), N_BUCKETS)
+
+n_in = n
+n = n_x
 if args.model == "linear":
     net = torch.nn.Linear(n, 1)
 else:
@@ -118,12 +187,19 @@ else:
     net = torch.nn.Sequential(*[m for a_, b_ in zip(dims, dims[1:]) for m in (torch.nn.Linear(a_, b_), torch.nn.ReLU())], torch.nn.Linear(dims[-1], 1))
 net = net.to(dev)
 a = torch.zeros(int(ps.max()) + 1, device=dev, requires_grad=True)
-opt = torch.optim.Adam([{"params": net.parameters(), "weight_decay": args.wd}, {"params": [a]}], lr=args.lr)
+groups = [{"params": net.parameters(), "weight_decay": args.wd}, {"params": [a]}]
+if card_params:
+    groups += [{"params": [card_T if args.card_free else card_w], "weight_decay": args.card_wd}, {"params": [card_c, card_m]}]
+opt = torch.optim.Adam(groups, lr=args.lr)
 tr_idx = torch.tensor(np.nonzero(is_tr)[0], device=dev)
 N = len(tr_idx)
 bce = torch.nn.functional.binary_cross_entropy_with_logits
 
 def v_of(idx):
+    if card_params and args.card_out:
+        return net(Z[idx]).squeeze(-1) + card_x(idx).sum(1)
+    if card_params:
+        return net(torch.cat([Z[idx], card_x(idx)], 1)).squeeze(-1)
     return net(Z[idx]).squeeze(-1)
 
 def loss_of(idx, use_a=True, weighted=False, v=None):
@@ -190,9 +266,30 @@ for ep in range(args.epochs):
     if ep % 3 == 2 or ep == args.epochs - 1:
         report(f"epoch {ep + 1}")
 print("pair term: sd", a.detach().std().item())
+if card_params:
+    with torch.no_grad():
+        s = (((card_T if args.card_free else EC_t @ card_w) + card_c) * HE_t[:, None]).cpu().numpy()
+        print("card term: multipliers (bucket x [neither, used, negated, both])\n", torch.cat([torch.ones(N_BUCKETS, 1, device=dev), 1 + card_m], 1).cpu().numpy().round(3))
+        print("card term: strength sd per bucket", s[HE > 0].std(0).round(4), *(() if args.card_out else ("first layer's weights of the card inputs", net[0].weight[:, n_in:].norm(dim=0).cpu().numpy().round(3))))
+        np.savez((args.output or "card_term") + ".cards.npz", codes=np.load(args.cards)["codes"], strength=s, mult=torch.cat([torch.ones(N_BUCKETS, 1, device=dev), 1 + card_m], 1).cpu().numpy())
 if args.save_v:
     np.savez(args.save_v, v=all_v())
-if args.output:
+def card_table():
+    """The card term for the bot: every card's strength per bucket (the cards with an effect), the
+    multipliers per bucket and state. With --card-out (`direct`) the strengths in the output's
+    points (times K, as w2)."""
+    with torch.no_grad():
+        s = ((EF_emb @ card_w.cpu() + card_c.cpu()) * EF_has[:, None]).numpy()
+        m = torch.cat([torch.ones(N_BUCKETS, 1), 1 + card_m.cpu()], 1).numpy()
+    keep = EF_has.numpy() > 0
+    if args.card_out:
+        s = s * K
+    return {"codes": EF_codes[keep].tolist(), "strength": s[keep].astype(float).tolist(), "mult": m.astype(float).tolist(),
+            **({"direct": True} if args.card_out else {})}
+
+if args.output and args.card_free:
+    print("(--card-free: no export)")
+elif args.output:
     import json
     assert args.model == "mlp"
     FEATURE_SETS = {87: "mover2", 99: "mover5", 104: "mover3", 122: "mover4"}
@@ -202,20 +299,31 @@ if args.output:
         sd[[int(i) for i in args.drop.split(",")]] = 1
     if args.indicator:  # (the indicator is 0 in play: its input (0 - mu) / sd joins the bias)
         st["0.bias"] = st["0.bias"] + st["0.weight"][:, -1] * (0 - mu[-1]) / sd[-1]
+        assert not card_params
         st["0.weight"], mu, sd, n = st["0.weight"][:, :-1], mu[:-1], sd[:-1], n - 1
-    json.dump({"features": FEATURE_SETS.get(n, "mover"), "model": "mover_mlp", "mu": mu.astype(float).tolist(), "scale": sd.astype(float).tolist(),
+    json.dump({"features": FEATURE_SETS.get(n_in, "mover"), "model": "mover_mlp", "mu": mu.astype(float).tolist(), "scale": sd.astype(float).tolist(),
                "w1": st["0.weight"].tolist(), "b1": st["0.bias"].tolist(),
                "layers": [{"w": st[f"{2 * i}.weight"].tolist(), "b": st[f"{2 * i}.bias"].tolist()} for i in range(1, args.layers)],
                "w2": (st[f"{2 * args.layers}.weight"][0] * K).tolist(), "b2": float(st[f"{2 * args.layers}.bias"][0] * K),
-               "k": float(K), "lam": args.lam, "hidden": hidden[0], "dims": hidden, "n_layers": args.layers}, open(args.output, "w"))
+               "k": float(K), "lam": args.lam, "hidden": hidden[0], "dims": hidden, "n_layers": args.layers,
+               **({"cards": card_table()} if card_params else {})}, open(args.output, "w"))
     print("saved", args.output)
     # the LP anchor (bot-anchor) on the held-out pairs' rows, so that the bot's values are in LP
     import os, subprocess, tempfile
     anchor = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "target", "release", "bot-anchor")
     if os.path.exists(anchor):
+        hp = np.nonzero(is_hp)[0]
+        if card_params:
+            with torch.no_grad():
+                cx = torch.cat([card_x(torch.tensor(hp[i:i + 100000], device=dev)) for i in range(0, len(hp), 100000)]).cpu().numpy()
+                if args.card_out:
+                    cx = cx * K
         with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
-            for row in d["x"][is_hp][:, :n]:
-                f.write(json.dumps({FEATURE_SETS.get(n, "mover"): row.astype(float).tolist()}) + "\n")
+            for j, row in enumerate(d["x"][hp][:, :n_in]):
+                r = {FEATURE_SETS.get(n_in, "mover"): row.astype(float).tolist()}
+                if card_params:
+                    r["card_x"] = cx[j].astype(float).tolist()
+                f.write(json.dumps(r) + "\n")
         subprocess.run([anchor, args.output, f.name, "--write"], check=True)
         os.unlink(f.name)
     else:
