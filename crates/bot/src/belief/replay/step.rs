@@ -614,7 +614,12 @@ impl BeliefReplay {
                     return div(Divergence::new(self.pos, "stream ended before the viewer's prompt"));
                 }
                 let item = self.items[self.pos].clone();
-                let fp = filter_prompt(&p, self.viewer);
+                let mut fp = filter_prompt(&p, self.viewer);
+                // (a chain prompt's timing hints are the arbiter's, from the viewer's own stream
+                // (observe::Timing): not replayed)
+                if let (ObsItem::Prompt(Msg::SelectChain { hint_timing: h, hint_timing_other: o, .. }, _), Msg::SelectChain { hint_timing, hint_timing_other, .. }) = (&item, &mut fp) {
+                    (*hint_timing, *hint_timing_other) = (*h, *o);
+                }
                 let same = matches!(&item, ObsItem::Prompt(x, _) if *x == fp);
                 if !same && !(self.lenient && self.depth == 0) {
                     let fix = self.viewer_prompt_fix(&item, &fp, duel, cp);

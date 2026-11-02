@@ -6,15 +6,19 @@
 //! * [`bots`], [`heuristic`], [`belief_bots`]: the strategies
 //! * [`search`], [`mcts`]: searches on a duel
 //! * [`belief`]: the belief replay and deck completion
-//! * [`datarow`], [`rl_policy`]: training data, the learned policy
+//! * [`datarow`], [`rl_policy`], [`policy_features`], [`imitation`], [`policy_remote`]: training
+//!   data, the learned policies
 
 pub mod belief;
 pub mod belief_bots;
 pub mod datarow;
 pub mod bots;
 pub mod heuristic;
+pub mod imitation;
 pub mod mcts;
 pub mod rl_policy;
 pub mod paths;
+pub mod policy_features;
+pub mod policy_remote;
 pub mod rduel;
 pub mod search;

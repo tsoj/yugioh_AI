@@ -883,6 +883,39 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
 - [ ] Seed the engine processes in matches (pass the seed to `ygoai-engine`), so a crashed
       game can be reproduced exactly.
 
+## Effect embeddings (parked 2026-10-31: too long for the likely gain)
+
+Re-pretraining the card-text encoder (runs/nn/effect1: EmbeddingGemma 2 fully fine-tuned 6000 steps,
+3.8 h, on what-happens-next targets; scripts/book/{build_effect_data,train_effect_model,card_text}.py)
+as rules-only embeddings useful beyond the policy nets. Thoughts if it is picked up again:
+
+- [ ] Targets: rules only (no policy or value). The old window (until the next decision) mostly
+      ends at the opponent's chance to chain, so it sees costs, not what the effect does: add a
+      window per chain link (its resolution: moves, position/ATK/DEF changes, LP, messages, the
+      effect's declared categories). And legality per card from the state alone (can activate,
+      Normal/Special Summon, Set, attack): the options are then not an input; the chosen action
+      is a marker on its card.
+- [ ] Model: a trunk like the imitation policy's (scripts/policy/train.py) on the full state (every
+      card a token, decks by depth from the top), outcome heads conditioned on the action.
+- [ ] Encoder: LoRA (peft 0.21 installed, never tried) keeps it close to the original; compare
+      with full / last-N-layers fine-tuning on speed and on the probes, at equal steps (effect1's
+      lead over the frozen runs was 6000 vs 3000 steps).
+- [ ] Judge the frozen embeddings, not the joint model: a fresh rules model on them, linear probes
+      on single cards (cdb category bits, card type, trigger/ignition/quick, once per turn,
+      archetype), the imitation policy as one probe; all on held-out cards, vs frozen base Gemma.
+      Pseudo-names: report a fixed seed and the mean over seeds.
+- [ ] Truncation: card texts (pseudo-names + "document" prompt) median 95 tokens, max 670; over
+      192 (effect1's limit) 2.9% of cards / 2.2% of deck slots in era games, over 256 0.55% /
+      0.28%, over 384 0.03% / 0.00%: use 384.
+- [ ] Split (era data book, first 30k games): games of era >= 2025-01-01 (14%) as late-era val
+      (every card released since is unseen); from the earlier games, cards held out stratified by
+      release (<=2010, 2011-17, 2018-21, 2022-24; cards in <= 0.2% of games, <= 3% of games lost
+      per bin): 290 cards, 11.4% of those games to val; 3% of the rest as a seen-cards control;
+      ~74% train. Held-out cards skew to less played ones; group reprints by effect text; Gemma
+      may have seen the texts on the web.
+- [ ] One vector per card squashes multi-effect cards; per-effect embeddings need clause splitting
+      (the engine's effect strings do not map to text clauses).
+
 ## Housekeeping
 
 - [x] Repo cleanup (branch `py-cleanup`, merged 2026-10-27, fast-forward): the Python play stack
