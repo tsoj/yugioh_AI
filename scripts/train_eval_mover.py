@@ -12,7 +12,7 @@ With --cards (scripts/eval_cards/cards_to_npz.py, the rows' card lists) and --ef
 strength s_b = w_b . e + c_b (e: its effect text's embedding, the mean over the pseudo-name seeds;
 0 for a card without an effect), times a learned multiplier m_b by the card's state (negated, used
 up; 1 for neither), summed over the cards, the mover's minus the opponent's: 3 more inputs of the
-network.
+network. With --card-out instead their sum is added to the network's output (the logit).
 """
 import argparse
 import numpy as np
@@ -43,6 +43,7 @@ ap.add_argument("--balance-wins", action="store_true", help="weight each trainin
 ap.add_argument("--cards", help="the rows' card lists (cards_to_npz.py): the card term")
 ap.add_argument("--effects", help="the effect embeddings (embed_effects.py), with --cards")
 ap.add_argument("--card-free", action="store_true", help="(diagnostic) the card term's strengths a free learned value per code and bucket instead of w_b . e (no export)")
+ap.add_argument("--card-out", action="store_true", help="the card term added to the output instead of 3 more inputs")
 ap.add_argument("--card-wd", type=float, default=0.0, help="weight decay of the card term's w_b")
 ap.add_argument("--threads", type=int, default=0, help="torch's CPU threads (0: its default)")
 ap.add_argument("--fold",help="I/N: hold out the I-th of N folds of the deck pairs instead of --held of them")
@@ -158,7 +159,7 @@ if args.cards:
     card_m = torch.zeros(N_BUCKETS, N_STATES - 1, device=dev, requires_grad=True)  # (the multipliers of the states but "neither", minus 1)
     card_T = torch.zeros(len(rows_of), N_BUCKETS, device=dev, requires_grad=True)
     card_params = [card_w, card_c, card_m] + ([card_T] if args.card_free else [])
-    n_x = n + N_BUCKETS
+    n_x = n if args.card_out else n + N_BUCKETS
 else:
     card_params, n_x = [], n
 
@@ -194,6 +195,8 @@ N = len(tr_idx)
 bce = torch.nn.functional.binary_cross_entropy_with_logits
 
 def v_of(idx):
+    if card_params and args.card_out:
+        return net(Z[idx]).squeeze(-1) + card_x(idx).sum(1)
     if card_params:
         return net(torch.cat([Z[idx], card_x(idx)], 1)).squeeze(-1)
     return net(Z[idx]).squeeze(-1)
@@ -266,18 +269,22 @@ if card_params:
     with torch.no_grad():
         s = (((card_T if args.card_free else EC_t @ card_w) + card_c) * HE_t[:, None]).cpu().numpy()
         print("card term: multipliers (bucket x [neither, used, negated, both])\n", torch.cat([torch.ones(N_BUCKETS, 1, device=dev), 1 + card_m], 1).cpu().numpy().round(3))
-        print("card term: strength sd per bucket", s[HE > 0].std(0).round(4), "first layer's weights of the card inputs", net[0].weight[:, n_in:].norm(dim=0).cpu().numpy().round(3))
+        print("card term: strength sd per bucket", s[HE > 0].std(0).round(4), *(() if args.card_out else ("first layer's weights of the card inputs", net[0].weight[:, n_in:].norm(dim=0).cpu().numpy().round(3))))
         np.savez((args.output or "card_term") + ".cards.npz", codes=np.load(args.cards)["codes"], strength=s, mult=torch.cat([torch.ones(N_BUCKETS, 1, device=dev), 1 + card_m], 1).cpu().numpy())
 if args.save_v:
     np.savez(args.save_v, v=all_v())
 def card_table():
     """The card term for the bot: every card's strength per bucket (the cards with an effect), the
-    multipliers per bucket and state."""
+    multipliers per bucket and state. With --card-out (`direct`) the strengths in the output's
+    points (times K, as w2)."""
     with torch.no_grad():
         s = ((EF_emb @ card_w.cpu() + card_c.cpu()) * EF_has[:, None]).numpy()
         m = torch.cat([torch.ones(N_BUCKETS, 1), 1 + card_m.cpu()], 1).numpy()
     keep = EF_has.numpy() > 0
-    return {"codes": EF_codes[keep].tolist(), "strength": s[keep].astype(float).tolist(), "mult": m.astype(float).tolist()}
+    if args.card_out:
+        s = s * K
+    return {"codes": EF_codes[keep].tolist(), "strength": s[keep].astype(float).tolist(), "mult": m.astype(float).tolist(),
+            **({"direct": True} if args.card_out else {})}
 
 if args.output and args.card_free:
     print("(--card-free: no export)")
@@ -308,6 +315,8 @@ elif args.output:
         if card_params:
             with torch.no_grad():
                 cx = torch.cat([card_x(torch.tensor(hp[i:i + 100000], device=dev)) for i in range(0, len(hp), 100000)]).cpu().numpy()
+                if args.card_out:
+                    cx = cx * K
         with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
             for j, row in enumerate(d["x"][hp][:, :n_in]):
                 r = {FEATURE_SETS.get(n_in, "mover"): row.astype(float).tolist()}

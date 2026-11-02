@@ -561,12 +561,15 @@ pub const LP_ANCHOR_STEP: f64 = 250.0;
 /// The card term of a trained evaluation (scripts/train_eval_mover.py --cards): per card with an
 /// effect its strength in each bucket (`CardBucket`), per bucket the multiplier of each state
 /// (neither, used up, negated, both). Its inputs: per bucket the sum of strength times multiplier
-/// over `card_list`'s cards, the mover's minus the opponent's.
+/// over `card_list`'s cards, the mover's minus the opponent's. `direct` (--card-out): not inputs,
+/// their sum is added to the output (the strengths in the output's points).
 #[derive(serde::Deserialize, Clone)]
 struct CardTerm {
     codes: Vec<u32>,
     strength: Vec<[f64; 3]>,
     mult: [[f64; 4]; 3],
+    #[serde(default)]
+    direct: bool,
 }
 
 #[derive(serde::Deserialize, Clone)]
@@ -633,6 +636,9 @@ impl LearnedEval {
         if let Some(c) = &self.cards {
             all.extend(c.codes.iter().map(|&x| x as f64));
             all.extend(c.strength.iter().flatten().chain(c.mult.iter().flatten()).copied());
+            if c.direct {
+                all.push(1.0);
+            }
         }
         for x in all {
             eat(&x.to_bits().to_le_bytes());
@@ -676,13 +682,17 @@ impl LearnedEval {
     /// The network's output (its own points) for the mover's features `x` and card term inputs
     /// `cards` (`card_inputs`).
     pub fn mover_output(&self, x: &[f64], cards: &[f64]) -> f64 {
+        let direct = self.cards.as_ref().is_some_and(|c| c.direct);
         let mut z: Vec<f64> = x.iter().zip(&self.mu).zip(&self.scale).map(|((a, m), s)| (a - m) / s).collect();
-        z.extend_from_slice(cards);
+        if !direct {
+            z.extend_from_slice(cards);
+        }
         let mut h = dense_relu(&self.w1, &self.b1, &z);
         for l in &self.layers {
             h = dense_relu(&l.w, &l.b, &h);
         }
-        self.b2 + self.w2.iter().zip(&h).map(|(w, x)| w * x).sum::<f64>()
+        let out = self.b2 + self.w2.iter().zip(&h).map(|(w, x)| w * x).sum::<f64>();
+        if direct { out + cards.iter().sum::<f64>() } else { out }
     }
 
     /// The factor from the network's points to LP.
@@ -700,7 +710,7 @@ impl LearnedEval {
     }
 
     /// The trained evaluation in use (read once): $BOT_EVAL's JSON file if set, the built-in
-    /// models/eval_mover2_era2os_cards_64.json otherwise.
+    /// models/eval_mover2_era2os_cardsout_64.json otherwise.
     pub fn from_env() -> &'static LearnedEval {
         static E: std::sync::OnceLock<LearnedEval> = std::sync::OnceLock::new();
         E.get_or_init(|| match std::env::var("BOT_EVAL").ok().filter(|p| !p.is_empty()) {
@@ -708,18 +718,18 @@ impl LearnedEval {
                 let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("BOT_EVAL {path}: {e}"));
                 LearnedEval::from_json(&text, &path)
             }
-            None => LearnedEval::from_json(DEFAULT_EVAL, "models/eval_mover2_era2os_cards_64.json"),
+            None => LearnedEval::from_json(DEFAULT_EVAL, "models/eval_mover2_era2os_cardsout_64.json"),
         })
     }
 }
 
 /// The default evaluation (scripts/train_eval_mover.py --dims 64 --held 2000 --held-below 29996
-/// --drop-onesided --lam 0.5 --cards --effects --card-wd 0.01: an MLP with a hidden layer of 64 on
-/// the 87 mover2 features and the card term's 3 inputs; the effect embeddings: embed_effects.py, 4
+/// --drop-onesided --lam 0.5 --cards --effects --card-out: an MLP with a hidden layer of 64 on
+/// the 87 mover2 features plus the card term on its output; the effect embeddings: embed_effects.py, 4
 /// seeds), trained on the era book's datagen games only (runs/data/era/era2.npz: each opening twice, the second game with
 /// the first's winner handicapped; 59877 games, 7.0M positions), without the deck pairs where one deck
 /// won both games (its predecessors and their SPRTs: TODO.md, "Evaluation").
-const DEFAULT_EVAL: &str = include_str!("../../models/eval_mover2_era2os_cards_64.json");
+const DEFAULT_EVAL: &str = include_str!("../../models/eval_mover2_era2os_cardsout_64.json");
 
 /// The position's value for `me` (in LP): the trained evaluation (`LearnedEval::from_env`).
 pub fn evaluate(d: &mut Duel, me: u32) -> f64 {
