@@ -102,8 +102,16 @@ if min_wins or args.balance_wins:
         lo = np.minimum(w0, w1)
         W = np.where(won == 2, 1.0, lo / np.maximum(np.where(won == 0, w0, w1), 1)).astype(np.float32)
         print(f"--balance-wins: training rows' weight {W[is_tr].sum():.0f} of {is_tr.sum()}")
-mu, sd = X[is_tr].mean(0), X[is_tr].std(0) + 1e-6
-Z = torch.tensor((X - mu) / sd, device=dev)
+# (normalized on the device in chunks: no float copies of X in memory)
+Z = torch.tensor(X, device=dev); TR = torch.tensor(is_tr, device=dev)
+s1 = torch.zeros(X.shape[1], dtype=torch.float64, device=dev); s2 = torch.zeros_like(s1)
+for i in range(0, len(X), 1 << 20):
+    z = Z[i:i + (1 << 20)][TR[i:i + (1 << 20)]].double()
+    s1 += z.sum(0); s2 += (z * z).sum(0)
+n_tr = int(is_tr.sum()); m_ = s1 / n_tr
+mu, sd = m_.cpu().numpy().astype(np.float32), ((s2 / n_tr - m_ * m_).clamp_min(0).sqrt().cpu().numpy() + 1e-6).astype(np.float32)
+Z.sub_(torch.tensor(mu, device=dev)).div_(torch.tensor(sd, device=dev))
+del TR
 Yr = torch.tensor((result + 1) / 2, dtype=torch.float32, device=dev)
 Yv = torch.tensor(1 / (1 + np.exp(-np.clip(value / Kr, -50, 50))), dtype=torch.float32, device=dev)
 PS = torch.tensor(ps, device=dev); SG = torch.tensor(sgn, device=dev)

@@ -15,6 +15,15 @@
 //! K, after the game's earlier decisions as played (searched with few nodes, then replaced by the
 //! recorded responses); prints its response, its search and its reconstruction failures.
 //! $BOT_ANALYZE_SEED: the bot's seed (default 1; its reconstructions' guesses).
+//!
+//!   bot-analyze RECORDS.jsonl LINE K --playout N [--force RESPONSE] [--nodes 5000]
+//!
+//! --playout: N games from decision K on, the bot (alphabeta) on both sides, after the game's
+//! earlier decisions as played; decision K the bot's own or RESPONSE (JSON). Game i: the bots'
+//! seeds 2i+1, 2i+2. Prints each game's winner. $BOT_ANALYZE_WINDBOT=DIR (WindBot's build) and
+//! $BOT_ANALYZE_SEATS (default "ab,wind"): which player WindBot is (runs/windbot/ygo-windbot), its
+//! earlier decisions asked and replaced as well. $BOT_ANALYZE_RECORDS=OUT: the games' records
+//! appended to OUT.
 
 use std::io::BufRead;
 
@@ -66,6 +75,8 @@ fn main() {
     let num = |s: &str| -> u64 { s.parse().unwrap_or_else(|_| usage(&format!("not a number: {s}"))) };
     let (path, line, k) = (&argv[0], num(&argv[1]) as usize, num(&argv[2]) as usize);
     let (mut nodes, mut exact, mut cont, mut as_bot): (u64, bool, Option<(usize, String)>, bool) = (5000, false, None, false);
+    let mut as_eval = false;
+    let (mut playout, mut force): (Option<usize>, Option<Response>) = (None, None);
     let mut i = 3;
     while i < argv.len() {
         match argv[i].as_str() {
@@ -79,6 +90,19 @@ fn main() {
             }
             "--bot" => {
                 as_bot = true;
+                i += 1;
+            }
+            "--playout" => {
+                playout = Some(num(argv.get(i + 1).unwrap_or_else(|| usage("--playout N"))) as usize);
+                i += 2;
+            }
+            "--force" => {
+                let r = argv.get(i + 1).unwrap_or_else(|| usage("--force RESPONSE"));
+                force = Some(serde_json::from_str(r).unwrap_or_else(|e| usage(&format!("not a response: {e}"))));
+                i += 2;
+            }
+            "--eval" => {
+                as_eval = true;
                 i += 1;
             }
             "--line" => {
@@ -97,6 +121,15 @@ fn main() {
 
     if as_bot {
         run_bot(&record, k, nodes);
+        return;
+    }
+    if let Some(n) = playout {
+        record.responses.truncate(k);
+        if let Some(r) = force {
+            let player = prompt_player(&record, k);
+            record.responses.push(RecordedResponse { player, response: r });
+        }
+        run_playouts(&record, n, nodes);
         return;
     }
     let mut duel = record.setup(None).unwrap();
@@ -118,6 +151,13 @@ fn main() {
         let Some(p) = step.prompt else { break };
         let player = p.player().unwrap_or(0);
         let hint = hints[player as usize].take();
+        if as_eval && i == k {
+            // (--eval: the static evaluation at decision K for its player, with and without the prompt)
+            let with = bot::search::evaluate::evaluate_at(&mut duel, player, Some(&p));
+            let without = bot::search::evaluate::evaluate_at(&mut duel, player, None);
+            println!("decision {k}: {} of P{player}: eval {with:+.0} (without the prompt {without:+.0})", p.name());
+            return;
+        }
         let response = if i < k {
             record.responses[i].response.clone()
         } else {
@@ -196,4 +236,107 @@ fn run_bot(record: &GameRecord, k: usize, nodes: u64) {
             ObsItem::Response(_) => {}
         }
     }
+}
+
+/// The player of decision `k`'s prompt.
+fn prompt_player(record: &GameRecord, k: usize) -> u32 {
+    let mut duel = record.setup(None).unwrap();
+    duel.ocg_start_duel();
+    let mut prompt: Option<Msg> = None;
+    for i in 0..=k {
+        let p = run_until_prompt(&mut duel, prompt.as_ref()).unwrap().prompt.unwrap_or_else(|| usage("no such decision"));
+        if i == k {
+            return p.player().unwrap_or(0);
+        }
+        let core = to_core_response(&p, p.player().unwrap_or(0), &record.responses[i].response).unwrap();
+        duel.ocg_set_response(&encode(&p, &core).unwrap());
+        prompt = Some(p);
+    }
+    unreachable!()
+}
+
+/// A bot that first answers with the given responses (its earlier decisions as played).
+struct Prefixed<B: Bot> {
+    bot: B,
+    played: std::collections::VecDeque<Response>,
+    nodes: u64,
+    /// (the bot's history: the response it gave replaced by the one played)
+    replace: fn(&mut B, Response),
+}
+
+impl<B: Bot> Bot for Prefixed<B> {
+    fn name(&self) -> String {
+        self.bot.name()
+    }
+    fn wants_state(&self) -> bool {
+        true
+    }
+    fn start(&mut self, player: u32, init: &ygo_arbiter::game::InitInfo) -> Result<(), ygo_arbiter::game::BotError> {
+        self.bot.start(player, init)
+    }
+    fn observe(&mut self, msg: &Msg) {
+        self.bot.observe(msg)
+    }
+    fn respond(&mut self, prompt: &Msg, state: Option<&ygo_arbiter::state::Snapshot>, _clock: Option<(f64, f64)>) -> Result<Response, ygo_arbiter::game::BotError> {
+        let Some(r) = self.played.pop_front() else {
+            self.bot.set_node_limit(Some(self.nodes));
+            return self.bot.respond(prompt, state, None);
+        };
+        self.bot.set_node_limit(Some(100));
+        let _ = self.bot.respond(prompt, state, None);
+        (self.replace)(&mut self.bot, r.clone());
+        Ok(r)
+    }
+}
+
+/// `--playout`.
+fn run_playouts(record: &GameRecord, n: usize, nodes: u64) {
+    let played: Vec<Vec<Response>> = (0..2)
+        .map(|p| {
+            let mut log = ObservationLog::new(p, false);
+            replay(record, &mut [&mut log], None, None).unwrap();
+            log.items.iter().filter_map(|x| if let ObsItem::Response(r) = x { Some(r.clone()) } else { None }).collect()
+        })
+        .collect();
+    let threads = std::env::var("BOT_ANALYZE_THREADS").ok().and_then(|s| s.parse().ok()).unwrap_or(8usize);
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if i >= n {
+                    break;
+                }
+                let windbot = std::env::var("BOT_ANALYZE_WINDBOT").ok();
+                let seats = std::env::var("BOT_ANALYZE_SEATS").unwrap_or_else(|_| "ab,wind".into());
+                let mut bots: Vec<Box<dyn Bot>> = seats
+                    .split(',')
+                    .enumerate()
+                    .map(|(p, name)| -> Box<dyn Bot> {
+                        let played = played[p].iter().cloned().collect();
+                        match (name, &windbot) {
+                            ("wind", Some(dir)) => {
+                                let w = ygo_arbiter::protocol::BotProcess::start(&["runs/windbot/ygo-windbot".into()], "wind", &[("WindBot".into(), dir.clone())]).unwrap();
+                                Box::new(Prefixed { bot: w, played, nodes, replace: |_, _| {} })
+                            }
+                            _ => Box::new(Prefixed { bot: BeliefSearchBot::new("alphabeta", Some(2 * i as i64 + 1 + p as i64)).unwrap(), played, nodes, replace: BeliefSearchBot::set_last_response }),
+                        }
+                    })
+                    .collect();
+                let mut game = record.clone();
+                game.responses.clear();
+                game.labels.clear();
+                let mut opts = ygo_arbiter::game::PlayOptions::default();
+                let (a, b) = bots.split_at_mut(1);
+                ygo_arbiter::game::play(&mut game, &mut [&mut *a[0], &mut *b[0]], &mut [], &mut opts).unwrap();
+                if let Ok(out) = std::env::var("BOT_ANALYZE_RECORDS") {
+                    use std::io::Write;
+                    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(out).unwrap();
+                    writeln!(f, "{}", serde_json::to_string(&game).unwrap()).unwrap();
+                }
+                let diverged = game.responses.iter().zip(&record.responses).position(|(x, y)| x.response != y.response);
+                println!("game {i}: winner {} ({}), turns {}, decisions {}{}", game.result.get("winner").map_or("-".into(), |w| w.to_string()), game.result.get("reason").map_or("-".into(), |w| w.to_string()), game.result.get("turns").map_or("-".into(), |w| w.to_string()), game.responses.len(), diverged.map_or(String::new(), |d| format!(", prefix differs at {d}")));
+            });
+        }
+    });
 }
