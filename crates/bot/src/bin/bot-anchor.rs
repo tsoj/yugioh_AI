@@ -4,7 +4,8 @@
 //!   bot-anchor MODEL.json ROWS.jsonl [--write] [--max N]
 //!
 //! ROWS: data rows (bot-datagen, bot-refeature) with the model's `mover2` features (or a
-//! larger set's whose first 87 they are: "mover3", "mover4"); every row
+//! larger set's whose first 87 they are: "mover3", "mover4"), and `card_x` (the card term's inputs)
+//! if the model has the card term; every row
 //! whose two players both have LP_ANCHOR_MIN_LP or more counts (at most N, default 200000,
 //! spread over the file). For each, the mover's LP goes up and
 //! the opponent's down by LP_ANCHOR_STEP against the reverse; the slope is the mean change of the
@@ -37,12 +38,19 @@ fn main() {
         };
         // (`mover2`'s 87 features are the first of `mover3`'s and `mover4`'s)
         let x: Vec<f64> = x.iter().take(eval.n_features()).map(|v| v.as_f64().unwrap()).collect();
+        let cards: Vec<f64> = match row.get("card_x").and_then(|v| v.as_array()) {
+            Some(c) => c.iter().map(|v| v.as_f64().unwrap()).collect(),
+            None => {
+                assert!(!eval.has_cards(), "the model has the card term: the rows need `card_x`");
+                Vec::new()
+            }
+        };
         let (lp_me, lp_opp) = (x[me] * 1000.0, x[opp] * 1000.0);
         let step = LP_ANCHOR_STEP / 1000.0;
         let shifted = |sign: f64| {
             let mut y = x.clone();
             (y[me], y[opp]) = (y[me] + sign * step, y[opp] - sign * step);
-            eval.mover_output(&y)
+            eval.mover_output(&y, &cards)
         };
         let slope = (shifted(1.0) - shifted(-1.0)) / (4.0 * LP_ANCHOR_STEP);
         if lp_me >= LP_ANCHOR_MIN_LP && lp_opp >= LP_ANCHOR_MIN_LP {

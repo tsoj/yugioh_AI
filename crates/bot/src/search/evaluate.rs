@@ -420,6 +420,82 @@ pub fn mover_features4(d: &mut Duel, mover: u32, prompt: Option<&Msg>) -> Vec<f6
     mover_view(d, mover, prompt, 4)
 }
 
+/// Where a card of the card term is (`card_list`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardBucket {
+    Hand = 0,
+    Grave = 1,
+    Field = 2,
+}
+
+/// A card of the card term (`card_list`): its printed code, where it is, whether it belongs to the
+/// mover, whether its effects are negated, and whether every effect one chooses to activate there
+/// has no uses left this turn (false for a card without such effects).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CardEntry {
+    pub code: u32,
+    pub bucket: CardBucket,
+    pub mine: bool,
+    pub negated: bool,
+    pub used: bool,
+}
+
+/// Whether card `c` has effects one chooses to activate from `location`, and none of them with
+/// uses left this turn for player `p`.
+fn used_up(d: &mut Duel, c: CardId, location: u32, p: u32) -> bool {
+    let mut any = false;
+    for i in 0..d.card(c).field_effect().items.len() {
+        let e = d.card(c).field_effect().items[i].1;
+        let fx = d.effect(e);
+        if !fx.deleted && fx.type_ as u32 & CHOSEN_EFFECTS != 0 && fx.range as u32 & location != 0 {
+            if e.check_count_limit(d, p as u8) {
+                return false;
+            }
+            any = true;
+        }
+    }
+    any
+}
+
+/// The cards of the card term in the mover's view: the mover's hand, GY and field (face-down
+/// cards included), the opponent's GY and face-up field cards (its hand and face-down cards are
+/// hidden).
+pub fn card_list(d: &mut Duel, mover: u32) -> Vec<CardEntry> {
+    let was = d.querying;
+    d.querying = true;
+    let mut out = Vec::with_capacity(32);
+    for p in [mover, 1 - mover] {
+        let pl = p as usize;
+        let mine = p == mover;
+        let mut push = |d: &mut Duel, c: CardId, bucket: CardBucket, location: u32| {
+            let negated = d.card(c).is_status(STATUS_DISABLED);
+            let used = used_up(d, c, location, p);
+            out.push(CardEntry { code: d.card(c).data.code, bucket, mine, negated, used });
+        };
+        if mine {
+            for i in 0..d.player[pl].list_hand.len() {
+                let c = d.player[pl].list_hand[i];
+                push(d, c, CardBucket::Hand, LOCATION_HAND);
+            }
+        }
+        for i in 0..d.player[pl].list_grave.len() {
+            let c = d.player[pl].list_grave[i];
+            push(d, c, CardBucket::Grave, LOCATION_GRAVE);
+        }
+        for (location, n) in [(LOCATION_MZONE, d.player[pl].list_mzone.len()), (LOCATION_SZONE, d.player[pl].list_szone.len())] {
+            for i in 0..n {
+                let slot = if location == LOCATION_MZONE { d.player[pl].list_mzone[i] } else { d.player[pl].list_szone[i] };
+                let Some(c) = slot else { continue };
+                if mine || c.get_info_location(d).position & POS_FACEUP != 0 {
+                    push(d, c, CardBucket::Field, location);
+                }
+            }
+        }
+    }
+    d.querying = was;
+    out
+}
+
 /// The trained evaluation (scripts/train_eval_mover.py's export): an MLP on the 87 `mover2`
 /// features of the view of the player to move, z = (x - mu) / scale, hidden layers relu(w h + b),
 /// output w2 . h + b2 for the mover (negated for the other player). Its value is in LP: the
@@ -452,6 +528,12 @@ pub struct LearnedEval {
     layers: Vec<Layer>,
     #[serde(default)]
     pub lp_anchor: Option<LpAnchor>,
+    /// (the card term, if the net has one: its 3 inputs follow the normalized features)
+    #[serde(default)]
+    cards: Option<CardTerm>,
+    /// (`cards`' strengths by code)
+    #[serde(skip)]
+    strength: std::collections::HashMap<u32, [f64; 3]>,
     /// (the factor in use: the anchor's if it belongs to these weights, else 1)
     #[serde(skip)]
     lp_factor: f64,
@@ -475,6 +557,17 @@ pub struct LpAnchor {
 pub const LP_ANCHOR_MIN_LP: f64 = 2000.0;
 /// (`LpAnchor`: each player's LP moved by this much, both ways)
 pub const LP_ANCHOR_STEP: f64 = 250.0;
+
+/// The card term of a trained evaluation (scripts/train_eval_mover.py --cards): per card with an
+/// effect its strength in each bucket (`CardBucket`), per bucket the multiplier of each state
+/// (neither, used up, negated, both). Its inputs: per bucket the sum of strength times multiplier
+/// over `card_list`'s cards, the mover's minus the opponent's.
+#[derive(serde::Deserialize, Clone)]
+struct CardTerm {
+    codes: Vec<u32>,
+    strength: Vec<[f64; 3]>,
+    mult: [[f64; 4]; 3],
+}
 
 #[derive(serde::Deserialize, Clone)]
 struct Layer {
@@ -509,6 +602,10 @@ impl LearnedEval {
     pub fn from_json_unanchored(text: &str, name: &str) -> LearnedEval {
         let mut e: LearnedEval = serde_json::from_str(text).unwrap_or_else(|err| panic!("eval {name}: {err}"));
         assert!(e.features == "mover2" && e.mu.len() == e.scale.len(), "eval {name}: a {} net; only mover2 MLPs are evaluated", e.features);
+        if let Some(c) = &e.cards {
+            assert!(c.codes.len() == c.strength.len(), "eval {name}: the card term's codes and strengths differ in number");
+            e.strength = c.codes.iter().copied().zip(c.strength.iter().copied()).collect();
+        }
         e.lp_factor = 1.0;
         e
     }
@@ -533,6 +630,10 @@ impl LearnedEval {
             all.extend(l.w.iter().flatten().chain(&l.b).copied());
         }
         all.push(self.b2);
+        if let Some(c) = &self.cards {
+            all.extend(c.codes.iter().map(|&x| x as f64));
+            all.extend(c.strength.iter().flatten().chain(c.mult.iter().flatten()).copied());
+        }
         for x in all {
             eat(&x.to_bits().to_le_bytes());
         }
@@ -554,9 +655,29 @@ impl LearnedEval {
         self.scale.len()
     }
 
-    /// The network's output (its own points) for the mover's features `x`.
-    pub fn mover_output(&self, x: &[f64]) -> f64 {
-        let z: Vec<f64> = x.iter().zip(&self.mu).zip(&self.scale).map(|((a, m), s)| (a - m) / s).collect();
+    /// Whether the net has the card term (its inputs: `card_inputs`).
+    pub fn has_cards(&self) -> bool {
+        self.cards.is_some()
+    }
+
+    /// The card term's inputs for `mover` (empty without the term).
+    pub fn card_inputs(&self, d: &mut Duel, mover: u32) -> Vec<f64> {
+        let Some(term) = &self.cards else { return Vec::new() };
+        let mut x = vec![0.0; 3];
+        for c in card_list(d, mover) {
+            let Some(s) = self.strength.get(&c.code) else { continue };
+            let b = c.bucket as usize;
+            let v = s[b] * term.mult[b][c.negated as usize * 2 + c.used as usize];
+            x[b] += if c.mine { v } else { -v };
+        }
+        x
+    }
+
+    /// The network's output (its own points) for the mover's features `x` and card term inputs
+    /// `cards` (`card_inputs`).
+    pub fn mover_output(&self, x: &[f64], cards: &[f64]) -> f64 {
+        let mut z: Vec<f64> = x.iter().zip(&self.mu).zip(&self.scale).map(|((a, m), s)| (a - m) / s).collect();
+        z.extend_from_slice(cards);
         let mut h = dense_relu(&self.w1, &self.b1, &z);
         for l in &self.layers {
             h = dense_relu(&l.w, &l.b, &h);
@@ -573,12 +694,13 @@ impl LearnedEval {
     /// opponent.
     pub fn value(&self, d: &mut Duel, me: u32, prompt: Option<&Msg>) -> f64 {
         let mover = prompt.and_then(|m| m.player()).unwrap_or(me);
-        let v = self.mover_output(&mover_features2(d, mover, prompt));
+        let cards = self.card_inputs(d, mover);
+        let v = self.mover_output(&mover_features2(d, mover, prompt), &cards);
         self.lp_factor * if mover == me { v } else { -v }
     }
 
     /// The trained evaluation in use (read once): $BOT_EVAL's JSON file if set, the built-in
-    /// models/eval_mover2_era2os_64.json otherwise.
+    /// models/eval_mover2_era2os_cards_64.json otherwise.
     pub fn from_env() -> &'static LearnedEval {
         static E: std::sync::OnceLock<LearnedEval> = std::sync::OnceLock::new();
         E.get_or_init(|| match std::env::var("BOT_EVAL").ok().filter(|p| !p.is_empty()) {
@@ -586,17 +708,18 @@ impl LearnedEval {
                 let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("BOT_EVAL {path}: {e}"));
                 LearnedEval::from_json(&text, &path)
             }
-            None => LearnedEval::from_json(DEFAULT_EVAL, "models/eval_mover2_era2os_64.json"),
+            None => LearnedEval::from_json(DEFAULT_EVAL, "models/eval_mover2_era2os_cards_64.json"),
         })
     }
 }
 
 /// The default evaluation (scripts/train_eval_mover.py --dims 64 --held 2000 --held-below 29996
-/// --drop-onesided --lam 0.5: an MLP with a hidden layer of 64 on the 87 mover2 features), trained on
-/// the era book's datagen games only (runs/data/era/era2.npz: each opening twice, the second game with
+/// --drop-onesided --lam 0.5 --cards --effects --card-wd 0.01: an MLP with a hidden layer of 64 on
+/// the 87 mover2 features and the card term's 3 inputs; the effect embeddings: embed_effects.py, 4
+/// seeds), trained on the era book's datagen games only (runs/data/era/era2.npz: each opening twice, the second game with
 /// the first's winner handicapped; 59877 games, 7.0M positions), without the deck pairs where one deck
 /// won both games (its predecessors and their SPRTs: TODO.md, "Evaluation").
-const DEFAULT_EVAL: &str = include_str!("../../models/eval_mover2_era2os_64.json");
+const DEFAULT_EVAL: &str = include_str!("../../models/eval_mover2_era2os_cards_64.json");
 
 /// The position's value for `me` (in LP): the trained evaluation (`LearnedEval::from_env`).
 pub fn evaluate(d: &mut Duel, me: u32) -> f64 {

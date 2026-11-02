@@ -18,7 +18,7 @@ use ygo_arbiter::actions::encode;
 use ygo_arbiter::game::{GameRecord, run_until_prompt};
 use ygo_arbiter::messages::Msg;
 use ygo_arbiter::observe::to_core_response;
-use crate::search::{eval_features, evaluate_at, mover_features, mover_features2, mover_features3, mover_features4, rich_features};
+use crate::search::{card_list, eval_features, evaluate_at, mover_features, mover_features2, mover_features3, mover_features4, rich_features};
 use ygo_arbiter::state::parse_location_query;
 
 /// The feature sets a row can carry:
@@ -28,9 +28,11 @@ use ygo_arbiter::state::parse_location_query;
 /// - `eval`: the hand-written evaluation's terms for the mover (`search::eval_features`)
 /// - `rich`: `search::rich_features` for the mover
 /// - `static`: the evaluation in use (BOT_EVAL) for the mover
+/// - `cards`: the card term's cards in the mover's view (`search::card_list`), each [code, bucket
+///   (0 hand, 1 GY, 2 field), mine, negated, used up]
 /// - `state`: both sides as JSON, the mover first (see `side`; the true duel, hidden cards
 ///   included: not for features as they are)
-pub const FEATURE_SETS: [&str; 8] = ["mover4", "mover3", "mover2", "mover", "eval", "rich", "static", "state"];
+pub const FEATURE_SETS: [&str; 9] = ["mover4", "mover3", "mover2", "mover", "eval", "rich", "static", "cards", "state"];
 
 pub use ygo_arbiter::game::Label;
 
@@ -88,6 +90,7 @@ pub fn features(d: &mut Duel, prompt: &Msg, set: &str) -> Result<Value, String> 
         "eval" => json!(eval_features(d, me).to_vec()),
         "rich" => json!(rich_features(d, me)),
         "static" => json!(evaluate_at(d, me, Some(prompt))),
+        "cards" => json!(card_list(d, me).iter().map(|c| [c.code, c.bucket as u32, c.mine as u32, c.negated as u32, c.used as u32]).collect::<Vec<_>>()),
         "state" => json!([side(d, me), side(d, 1 - me)]),
         _ => return Err(format!("unknown feature set {set} (known: {})", FEATURE_SETS.join(", "))),
     })
