@@ -13,6 +13,11 @@ strength s_b = w_b . e + c_b (e: its effect text's embedding, the mean over the 
 0 for a card without an effect), times a learned multiplier m_b by the card's state (negated, used
 up; 1 for neither), summed over the cards, the mover's minus the opponent's: 3 more inputs of the
 network. With --card-out instead their sum is added to the network's output (the logit).
+--card-pca K: e reduced to its first K principal components (of every card with an effect,
+whitened); --card-hidden H1,H2,..: hidden layers (ReLU) before the strengths (s = W relu(.. relu(W1 e + b1)) + c);
+--card-no-gy: only the cards in the hand and on the field (the GY's strengths 0); --card-decorr W:
+a penalty on the card term's correlation with the pair term (the decks' strength). A
+card's strengths depend on its code only: the export is a table in both cases.
 """
 import argparse
 import numpy as np
@@ -42,9 +47,14 @@ ap.add_argument("--min-wins", type=int, default=0, help="leave out of training t
 ap.add_argument("--balance-wins", action="store_true", help="weight each training game so that both decks of a pair have as much weight in won games: a game the pair's winner of W of its games won counts min(W, L) / W (a one-sided pair: 0)")
 ap.add_argument("--cards", help="the rows' card lists (cards_to_npz.py): the card term")
 ap.add_argument("--effects", help="the effect embeddings (embed_effects.py), with --cards")
-ap.add_argument("--card-free", action="store_true", help="(diagnostic) the card term's strengths a free learned value per code and bucket instead of w_b . e (no export)")
+ap.add_argument("--card-free", action="store_true", help="the card term's strengths a free learned value per code and bucket instead of w_b . e (no embeddings; the export: the codes of the data)")
 ap.add_argument("--card-out", action="store_true", help="the card term added to the output instead of 3 more inputs")
-ap.add_argument("--card-wd", type=float, default=0.0, help="weight decay of the card term's w_b")
+ap.add_argument("--card-wd", type=float, default=0.0, help="weight decay of the card term's w_b (or first layer)")
+ap.add_argument("--card-pca", type=int, default=0, help="the effect embeddings reduced to their first K principal components (whitened; 0: all dimensions)")
+ap.add_argument("--card-no-gy", action="store_true", help="no card term for the cards in the GY (their strengths 0)")
+ap.add_argument("--card-decorr", type=float, default=0.0, help="weight of a penalty on the squared correlation of the card term's sum with the pair term (the mover's side, its gradient stopped): the card term is not to tell the decks' strength (--card-out)")
+ap.add_argument("--card-holdout", type=float, default=0.0, help="(diagnostic) this share of the codes with an effect left out of the card term in training; the reports also with them in: does the card term carry over to unseen cards")
+ap.add_argument("--card-hidden", default="", help="hidden layers (ReLU) before the card term's strengths, their widths as a comma list (e.g. 32,32; empty: none)")
 ap.add_argument("--threads", type=int, default=0, help="torch's CPU threads (0: its default)")
 ap.add_argument("--fold",help="I/N: hold out the I-th of N folds of the deck pairs instead of --held of them")
 args = ap.parse_args()
@@ -73,12 +83,13 @@ sgn = np.where(player == 0, 1.0, -1.0).astype(np.float32)
 def fit_k(v, r):
     # (no wins and losses: +/-100000 before the values were in LP, +/-1e7 since)
     keep = (r != 0) & (np.abs(v) < 90000)
-    v, y = v[keep].astype(np.float64), (r[keep] + 1) / 2
+    # (on the device: millions of rows times 400 scales)
+    v = torch.tensor(v[keep], dtype=torch.float64, device=dev)
+    y = torch.tensor((r[keep] + 1) / 2, dtype=torch.float64, device=dev)
     best = None
     for kk in np.geomspace(1, 1e5, 400):
-        z = -v / kk
-        p = 1 / (1 + np.exp(np.clip(z, -50, 50)))
-        loss = -np.mean(y * np.log(p + 1e-9) + (1 - y) * np.log(1 - p + 1e-9))
+        p = torch.sigmoid((v / kk).clamp(-50, 50))
+        loss = -(y * torch.log(p + 1e-9) + (1 - y) * torch.log(1 - p + 1e-9)).mean().item()
         if best is None or loss < best[0]:
             best = (loss, kk)
     return best[1]
@@ -141,6 +152,13 @@ if args.cards:
     # (each data code's effect embedding: the mean over the seeds; none: 0)
     at = {c: i for i, c in enumerate(ef["codes"].tolist())}
     emb = ef["emb"].astype(np.float32).mean(0) * ef["has_effect"][:, None]
+    if args.card_pca:
+        # (the principal components of the cards with an effect; the cards without stay 0)
+        E = emb[ef["has_effect"] > 0]; mean = E.mean(0)
+        ev, vec = np.linalg.eigh(np.cov(E - mean, rowvar=False))
+        top = np.argsort(ev)[::-1][:args.card_pca]
+        print(f"card term: PCA {args.card_pca} of {E.shape[1]}: {ev[top].sum() / ev.sum():.3f} of the variance", flush=True)
+        emb = (((emb - mean) @ vec[:, top]) / np.sqrt(ev[top])).astype(np.float32) * ef["has_effect"][:, None]
     rows_of = np.array([at.get(c, -1) for c in cd["codes"].tolist()])
     print(f"card term: {len(rows_of)} codes, {(rows_of < 0).sum()} without an embedding, "
           f"{(ef['has_effect'][rows_of[rows_of >= 0]] == 0).sum()} without an effect")
@@ -149,24 +167,51 @@ if args.cards:
     EC_t = torch.tensor(EC, device=dev); HE_t = torch.tensor(HE, device=dev)
     EF_codes, EF_emb, EF_has = ef["codes"], torch.tensor(emb), torch.tensor(ef["has_effect"].astype(np.float32))  # (every card: the export's table)
     OFF = torch.tensor(cd["off"], device=dev)
+    DATA_CODES = cd["codes"]
     # (compact on the device: 500M entries of the SPRT data; widened per batch)
     CI = torch.tensor(cd["cidx"].astype(np.int32), device=dev)
     BK = torch.tensor(cd["bucket"].astype(np.int8), device=dev)
     ST = torch.tensor((cd["negated"] * 2 + cd["used"]).astype(np.int8), device=dev)
     SGN = torch.tensor(np.where(cd["mine"] > 0, 1, -1).astype(np.int8), device=dev)
     del cd, ef, emb
-    card_w = torch.zeros(emb_dim := EC.shape[1], N_BUCKETS, device=dev, requires_grad=True)
+    emb_dim = EC.shape[1]
+    card_hid = [int(h) for h in args.card_hidden.split(",") if h]
+    if card_hid:
+        card_layers = [torch.nn.Linear(a_, b_).to(dev) for a_, b_ in zip([emb_dim] + card_hid, card_hid)]
+        card_w = torch.zeros(card_hid[-1], N_BUCKETS, device=dev, requires_grad=True)
+        card_first = [p_ for l_ in card_layers for p_ in l_.parameters()]
+    else:
+        card_w = torch.zeros(emb_dim, N_BUCKETS, device=dev, requires_grad=True)
+        card_first = [card_w]
     card_c = torch.zeros(N_BUCKETS, device=dev, requires_grad=True)
     card_m = torch.zeros(N_BUCKETS, N_STATES - 1, device=dev, requires_grad=True)  # (the multipliers of the states but "neither", minus 1)
     card_T = torch.zeros(len(rows_of), N_BUCKETS, device=dev, requires_grad=True)
-    card_params = [card_w, card_c, card_m] + ([card_T] if args.card_free else [])
+    # (--card-holdout: the codes left out of the card term in training)
+    HOLD = torch.zeros(len(rows_of), dtype=torch.bool, device=dev)
+    if args.card_holdout:
+        cand = np.flatnonzero(HE > 0)
+        HOLD[torch.tensor(np.random.default_rng(1).choice(cand, int(len(cand) * args.card_holdout), replace=False), device=dev)] = True
+        print(f"--card-holdout: {int(HOLD.sum())} of {len(cand)} codes with an effect left out; {HOLD[CI.long()].float().mean().item():.3f} of the card entries", flush=True)
+    use_hold = [bool(args.card_holdout)]
+    card_params = [card_w, card_c, card_m] + ([card_T] if args.card_free else []) + (card_first if card_hid else [])
     n_x = n if args.card_out else n + N_BUCKETS
 else:
     card_params, n_x = [], n
 
+def card_strength(E, has):
+    """The strengths per bucket of the cards with embeddings E (on card_w's device or not)."""
+    dv = E.device
+    on = torch.tensor([1.0, 0.0 if args.card_no_gy else 1.0, 1.0], device=dv)  # (hand, GY, field)
+    if args.card_free:
+        return (card_T + card_c) * has[:, None] * on
+    h = E
+    for l_ in (card_layers if card_hid else []):
+        h = torch.relu(torch.nn.functional.linear(h, l_.weight.to(dv), l_.bias.to(dv)))
+    return (h @ card_w.to(dv) + card_c.to(dv)) * has[:, None] * on
+
 def card_x(idx):
     """The card term's inputs of rows idx: (len(idx), N_BUCKETS)."""
-    s = ((card_T if args.card_free else EC_t @ card_w) + card_c) * HE_t[:, None]  # (each code's strength per bucket)
+    s = card_strength(EC_t, HE_t)  # (each code's strength per bucket)
     m = torch.cat([torch.ones(N_BUCKETS, 1, device=dev), 1 + card_m], 1)
     lo, hi = OFF[idx], OFF[idx + 1]
     cnt = hi - lo
@@ -174,6 +219,8 @@ def card_x(idx):
     ent = torch.repeat_interleave(lo - torch.cumsum(cnt, 0) + cnt, cnt) + torch.arange(int(cnt.sum()), device=dev)
     b = BK[ent].long()
     val = SGN[ent].float() * m[b, ST[ent].long()] * s[CI[ent].long(), b]
+    if use_hold[0]:
+        val = val * (~HOLD[CI[ent].long()]).float()
     out = torch.zeros(len(idx) * N_BUCKETS, device=dev)
     out.index_add_(0, row * N_BUCKETS + b, val)
     return out.view(len(idx), N_BUCKETS)
@@ -189,7 +236,9 @@ net = net.to(dev)
 a = torch.zeros(int(ps.max()) + 1, device=dev, requires_grad=True)
 groups = [{"params": net.parameters(), "weight_decay": args.wd}, {"params": [a]}]
 if card_params:
-    groups += [{"params": [card_T if args.card_free else card_w], "weight_decay": args.card_wd}, {"params": [card_c, card_m]}]
+    first = [card_T] if args.card_free else ([card_layers[0].weight] if card_hid else [card_w])
+    rest = [card_c, card_m] + ([p_ for p_ in card_first if all(p_ is not f_ for f_ in first)] + [card_w] if card_hid else [])
+    groups += [{"params": first, "weight_decay": args.card_wd}, {"params": rest}]
 opt = torch.optim.Adam(groups, lr=args.lr)
 tr_idx = torch.tensor(np.nonzero(is_tr)[0], device=dev)
 N = len(tr_idx)
@@ -250,8 +299,38 @@ def report(tag):
             lr_, lv = loss_of(idx, ua, v=V[idx])
             out.append(f"{name} res-ll {lr_.item():.4f} val-bce {lv.item():.4f}")
         del V
-    print(f"{tag}: " + " | ".join(out) + f" | rank held-pairs {ranking(v, is_hp):.4f}", flush=True)
+    print(f"{tag}: " + " | ".join(out) + f" | rank held-pairs {ranking(v, is_hp):.4f} | held-pairs fit res-ll {fitted_res_ll(v, is_hp):.4f}", flush=True)
+    if args.cards and args.card_holdout:
+        # (the same with the held-out codes in, their strengths from the trained card term)
+        use_hold[0] = False
+        v2 = all_v()
+        use_hold[0] = True
+        with torch.no_grad():
+            idx = torch.tensor(np.nonzero(is_hp)[0], device=dev)
+            lr2, lv2 = loss_of(idx, False, v=torch.tensor(v2[np.nonzero(is_hp)[0]], device=dev))
+        print(f"{tag} with the held-out codes: held-pairs res-ll {lr2.item():.4f} val-bce {lv2.item():.4f} | rank held-pairs {ranking(v2, is_hp):.4f} | held-pairs fit res-ll {fitted_res_ll(v2, is_hp):.4f}", flush=True)
     return v
+
+def fitted_res_ll(vals, mask, iters=12):
+    """The result log-loss of the rows of mask with an offset per pair and seat order fitted on the
+    pair's other games (cross-fitted by the game's parity, prior sd --sigma): what v tells within a
+    pair, not which deck is stronger."""
+    sel = np.nonzero(mask & (result != 0))[0]
+    q = np.unique(ps[sel], return_inverse=True)[1]
+    V, Q = torch.tensor(vals[sel], dtype=torch.float64, device=dev), torch.tensor(q, device=dev)
+    S, Y = SG[torch.tensor(sel, device=dev)].double(), Yr[torch.tensor(sel, device=dev)].double()
+    fold = torch.tensor(game[sel] % 2, device=dev)
+    n_q, tot = int(q.max()) + 1, 0.0
+    for f in (0, 1):
+        fit, ev = fold != f, fold == f
+        b = torch.zeros(n_q, dtype=torch.float64, device=dev)
+        for _ in range(iters):  # (Newton per offset)
+            p = torch.sigmoid(S[fit] * b[Q[fit]] + V[fit])
+            g = torch.zeros_like(b).index_add_(0, Q[fit], S[fit] * (p - Y[fit])) + b / args.sigma ** 2
+            h = torch.zeros_like(b).index_add_(0, Q[fit], p * (1 - p)) + 1 / args.sigma ** 2
+            b -= g / h
+        tot += bce(S[ev] * b[Q[ev]] + V[ev], Y[ev], reduction="sum").item()
+    return tot / len(sel)
 
 print(f"{len(X)} rows, K {K:.1f} (per set: {', '.join(f'{v_:.1f}' for v_ in Ks.values())}); train {is_tr.sum()} val-games {is_vin.sum()} held-pairs {is_hp.sum()}")
 print(f"baselines rank held-pairs: static {ranking(static, is_hp):.4f} search {ranking(value, is_hp):.4f}")
@@ -260,18 +339,27 @@ for ep in range(args.epochs):
     perm = tr_idx[torch.randperm(N, device=dev)]
     for i in range(0, N, B):
         b = perm[i:i + B]
-        l_res, l_val = loss_of(b, weighted=args.balance_wins)
-        loss = (1 - args.lam) * l_res + args.lam * l_val + (a ** 2).sum() / (2 * args.sigma ** 2) / N
+        if args.card_decorr:
+            cs = card_x(b).sum(1)
+            l_res, l_val = loss_of(b, weighted=args.balance_wins, v=net(Z[b]).squeeze(-1) + cs)
+            t = SG[b] * a.detach()[PS[b]]
+            cs_, t_ = cs - cs.mean(), t - t.mean()
+            corr2 = (cs_ * t_).mean() ** 2 / ((cs_ ** 2).mean() * (t_ ** 2).mean()).clamp_min(1e-12)
+        else:
+            l_res, l_val = loss_of(b, weighted=args.balance_wins)
+            corr2 = 0.0
+        loss = (1 - args.lam) * l_res + args.lam * l_val + (a ** 2).sum() / (2 * args.sigma ** 2) / N + args.card_decorr * corr2
         opt.zero_grad(); loss.backward(); opt.step()
     if ep % 3 == 2 or ep == args.epochs - 1:
         report(f"epoch {ep + 1}")
 print("pair term: sd", a.detach().std().item())
 if card_params:
     with torch.no_grad():
-        s = (((card_T if args.card_free else EC_t @ card_w) + card_c) * HE_t[:, None]).cpu().numpy()
+        s = card_strength(EC_t, HE_t).cpu().numpy()
         print("card term: multipliers (bucket x [neither, used, negated, both])\n", torch.cat([torch.ones(N_BUCKETS, 1, device=dev), 1 + card_m], 1).cpu().numpy().round(3))
         print("card term: strength sd per bucket", s[HE > 0].std(0).round(4), *(() if args.card_out else ("first layer's weights of the card inputs", net[0].weight[:, n_in:].norm(dim=0).cpu().numpy().round(3))))
-        np.savez((args.output or "card_term") + ".cards.npz", codes=np.load(args.cards)["codes"], strength=s, mult=torch.cat([torch.ones(N_BUCKETS, 1, device=dev), 1 + card_m], 1).cpu().numpy())
+        if args.output:
+            np.savez(args.output + ".cards.npz", codes=np.load(args.cards)["codes"], strength=s, mult=torch.cat([torch.ones(N_BUCKETS, 1, device=dev), 1 + card_m], 1).cpu().numpy())
 if args.save_v:
     np.savez(args.save_v, v=all_v())
 def card_table():
@@ -279,17 +367,17 @@ def card_table():
     multipliers per bucket and state. With --card-out (`direct`) the strengths in the output's
     points (times K, as w2)."""
     with torch.no_grad():
-        s = ((EF_emb @ card_w.cpu() + card_c.cpu()) * EF_has[:, None]).numpy()
         m = torch.cat([torch.ones(N_BUCKETS, 1), 1 + card_m.cpu()], 1).numpy()
-    keep = EF_has.numpy() > 0
+        if args.card_free:  # (the codes of the data only: a code never seen has no value)
+            s, codes, keep = card_strength(EC_t, HE_t).cpu().numpy(), DATA_CODES, HE > 0
+        else:
+            s, codes, keep = card_strength(EF_emb, EF_has).numpy(), EF_codes, EF_has.numpy() > 0
     if args.card_out:
         s = s * K
-    return {"codes": EF_codes[keep].tolist(), "strength": s[keep].astype(float).tolist(), "mult": m.astype(float).tolist(),
+    return {"codes": codes[keep].tolist(), "strength": s[keep].astype(float).tolist(), "mult": m.astype(float).tolist(),
             **({"direct": True} if args.card_out else {})}
 
-if args.output and args.card_free:
-    print("(--card-free: no export)")
-elif args.output:
+if args.output:
     import json
     assert args.model == "mlp"
     FEATURE_SETS = {87: "mover2", 99: "mover5", 104: "mover3", 122: "mover4"}
