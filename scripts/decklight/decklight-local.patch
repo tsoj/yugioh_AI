@@ -1,0 +1,113 @@
+diff --git a/src/decklight/edopro/client.py b/src/decklight/edopro/client.py
+index c3a861a..4f914bd 100644
+--- a/src/decklight/edopro/client.py
++++ b/src/decklight/edopro/client.py
+@@ -428,6 +428,11 @@ class ClientSession:
+                     self.record.seat = seat
+                     self._lobby_seat = seat
+                     return None, frames[i + 1 :]
++                elif proto == P.STOC_GAME_MSG and deck_sent and payload[:1] == bytes([C.MSG_START]):
++                    # (local patch, yugioh_AI_2: a server that starts the duel without STOC_DUEL_START, as
++                    # ygo-windbot does for WindBot: MSG_START starts it; the duel loop reads the seat from it)
++                    self._lobby_seat = seat
++                    return None, frames[i:]
+                 elif proto == P.STOC_DUEL_END:
+                     self.record.duel_end = True
+                     return OK, []
+diff --git a/src/decklight/edopro/filter.py b/src/decklight/edopro/filter.py
+index 41e2b9a..6c72c49 100644
+--- a/src/decklight/edopro/filter.py
++++ b/src/decklight/edopro/filter.py
+@@ -111,7 +111,10 @@ def filtered_message(raw: bytes, viewer: int) -> bytes | None:
+             return raw
+         loc = raw[11]  # first card's location (code u32, controller u8, location u8)
+         if loc in (C.LOCATION_DECK, C.LOCATION_EXTRA):
+-            return raw if viewer == player else None
++            # (local patch, yugioh_AI_2: also to the cards' controller, who knows them, as the
++            # ygo-arbiter shows it; e.g. an own Extra Deck card revealed to the opponent)
++            own = all(raw[10 + 10 * i] == viewer for i in range(count))
++            return raw if viewer == player or own else None
+         return raw
+     if t in (C.MSG_SHUFFLE_HAND, C.MSG_SHUFFLE_EXTRA):
+         player = raw[1]
+@@ -127,6 +130,12 @@ def filtered_message(raw: bytes, viewer: int) -> bytes | None:
+         con, loc, _seq, pos = _loc(raw, 15)
+         if viewer == con:
+             return raw
++        # (local patch, yugioh_AI_2: a card returned from the hand to the Deck as a cost or material is
++        # shown first, as the ygo-arbiter shows it)
++        _pcon, ploc, _pseq, _ppos = _prev
++        reason = _u32(raw, 25)
++        if ploc == C.LOCATION_HAND and loc & (C.LOCATION_DECK + C.LOCATION_EXTRA) and reason & (C.REASON_COST | C.REASON_MATERIAL):
++            return raw
+         if not (loc & (C.LOCATION_GRAVE + C.LOCATION_OVERLAY)) and (
+             (loc & (C.LOCATION_DECK + C.LOCATION_HAND)) or (pos & _FACEDOWN)
+         ):
+diff --git a/src/decklight/edopro/protocol.py b/src/decklight/edopro/protocol.py
+index efa1e0f..b9faf7f 100644
+--- a/src/decklight/edopro/protocol.py
++++ b/src/decklight/edopro/protocol.py
+@@ -325,8 +325,11 @@ def pack_hand_result(res1: int, res2: int) -> bytes:
+ 
+ def parse_join_game(payload: bytes) -> HostInfo:
+     """STOC_JOIN_GAME payload -> HostInfo (raises ValueError when short)."""
+-    if len(payload) < _HOSTINFO_FMT.size:
++    # (local patch, yugioh_AI_2: WindBot's older 56-byte HostInfo without the deck limits, as ygo-windbot
++    # sends it, is accepted: the missing fields are zero; the client does not use them)
++    if len(payload) < 56:
+         raise ValueError(f"join-game packet too short: {len(payload)}")
++    payload = payload + bytes(max(0, _HOSTINFO_FMT.size - len(payload)))
+     return HostInfo.unpack(payload)
+ 
+ 
+diff --git a/src/decklight/engine/inverse.py b/src/decklight/engine/inverse.py
+index 097eae4..0765906 100644
+--- a/src/decklight/engine/inverse.py
++++ b/src/decklight/engine/inverse.py
+@@ -139,7 +139,9 @@ def _sort_path(dec: A.Decision, auto_single: bool, resp: bytes) -> list[int] | N
+     order = [0] * n
+     for i, r in enumerate(resp):
+         order[r] = i
+-    wants = [(lambda o, c=c: o.kind == A.Kind.SORT and o.card == msg.cards[c]) for c in order[:-1]]
++    # (local patch, yugioh_AI_2: a single card is one pick too, the last of more cards none)
++    picks = order[:-1] if n > 1 else order
++    wants = [(lambda o, c=c: o.kind == A.Kind.SORT and o.card == msg.cards[c]) for c in picks]
+     return _follow(dec, auto_single, wants, resp)
+ 
+ 
+diff --git a/src/decklight/engine/resources.py b/src/decklight/engine/resources.py
+index f3d187b..60f5cfc 100644
+--- a/src/decklight/engine/resources.py
++++ b/src/decklight/engine/resources.py
+@@ -19,7 +19,9 @@ from pathlib import Path
+ from decklight.engine import constants as C
+ 
+ ROOT = Path(__file__).resolve().parents[3]
+-CORE_LIB = ROOT / "build/core/libocgcore.so"
++# (local patch, yugioh_AI_2: YGO_CORE=rust also puts the host's duels (Engine) on the Rust core shim, as the
++# search's env (cpp_env.py) already is: one core for both)
++CORE_LIB = ROOT / ("build/rust/libocgcore_rs.so" if os.environ.get("YGO_CORE") == "rust" else "build/core/libocgcore.so")
+ SCRIPTS_DIR = ROOT / "third_party/CardScripts"
+ CDB_DIR = ROOT / "third_party/BabelCDB"
+ EXTRA_CARDS_ENV = "YGO_EXTRA_CARDS"
+diff --git a/src/decklight/play/stream.py b/src/decklight/play/stream.py
+index 9bb29c4..e1c2fa6 100644
+--- a/src/decklight/play/stream.py
++++ b/src/decklight/play/stream.py
+@@ -727,7 +727,8 @@ class StreamView:
+         self._resp = resp
+         if self._clear_deck_after:
+             # A deck SORT's response reorders the top: drop positions, keep statuses.
+-            self._demote_deck()
++            # (local patch, yugioh_AI_2: StreamView has no _demote_deck; its state does, as in take_auto below)
++            self.state._demote_deck()
+             self._clear_deck_after = False
+         return resp
+ 
+diff --git a/third_party/ygopro-core-rust b/third_party/ygopro-core-rust
+index 3ba0a87..0478c44 160000
+--- a/third_party/ygopro-core-rust
++++ b/third_party/ygopro-core-rust
+@@ -1 +1 @@
+-Subproject commit 3ba0a875db89e368122a5c6a2da7ff0a362afd11
++Subproject commit 0478c44ee09b6e668b5db47e41145487dea4ce7c-dirty
