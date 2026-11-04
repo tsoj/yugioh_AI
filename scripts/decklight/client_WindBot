@@ -1,0 +1,18 @@
+#!/bin/bash
+# decklight's raw policy (its product policy forge_r1, no search) as a WindBot-like client for ygo-windbot: WindBot's
+# Key=Value arguments mapped to scripts/edopro_join.py; Deck=NAME is runs/decklight/client/decks/NAME.ydk
+HERE="$(cd "$(dirname "$0")" && pwd)"
+DL=/home/tsoj/Dokumente/Projects/yugioh_AI_2/external/decklight
+for a in "$@"; do
+  case $a in
+    Deck=*) deck=${a#Deck=};;
+    Host=*) host=${a#Host=};;
+    Port=*) port=${a#Port=};;
+  esac
+done
+cd "$DL" || exit 2
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
+.venv/bin/python scripts/edopro_join.py --name decklight --deck "$HERE/decks/$deck.ydk" --host "$host" --port "$port" \
+  --agent raw --ckpt data/cache/forge_r1/best.pt --device cpu --timeout 600 --record-dir "$HERE/../records" \
+  2>>"$HERE/../logs/$deck-$port.log"
+wait
