@@ -43,6 +43,47 @@ the rerun: longest game 941 decisions).
 ## Running now
 
 - Nothing.
+
+## Card strength of unknown cards (user, 2026-11-05)
+
+Goal: estimate the strength of a card the eval has never seen, so that the bot stays general with new
+cards. Today the eval's card term is a learned value per code and bucket (hand, GY, field;
+`--card-free`, main since ced2a3f9, H1 +5.7 against the linear embedding term). A code not in the
+training data has no value (0).
+
+What we know (2026-11-02 to -04; runs/nn/cards_*, runs/nn/card_value/, scripts/card_value/ on branch
+eval-cards-gemma):
+- The table's values are reliable: two seeds agree at r 0.8-0.9 (full eval), 0.90-0.96 (card-only
+  eval, `--model cards`).
+- Predicted from the card alone (out-of-fold, by card and by archetype), every method stops at about
+  r 0.4 (hand), 0.2 (GY), 0.6 (field) against the card-only table (ceiling 0.95+): linear and PCA
+  embedding terms, hidden layers, ridge / boosting / kNN / MLP on the effect embedding (cleaned or
+  not), printed stats, type/attribute/race/category bits, 56 hand-written text features, the
+  archetype mean, and EmbeddingGemma 2 fine-tuned on the values. Against the full eval's table:
+  r 0.30 / 0.13 / 0.26.
+- In play: the fine-tuned Gemma values (every card as if unseen, `--card-fixed`) are -6.5 against
+  the table and -1.7 against the old linear embedding term.
+- Why (examples, runs/nn/card_value/examples_*.txt): the predictors learn a general "power" of the
+  text. The table measures what an unused card is worth at that place. Hand: held interaction
+  (Traps, Quick-Play Spells, hand traps) high, combo starters that are played at once low. Field:
+  continuous engines (Continuous/Field Spells) high, Extra Deck monsters that are only a step low.
+- Embedding similarity says almost nothing about the table's values (similar texts are not closer
+  than random pairs, except near-duplicates on the field).
+- Against decklight's search (its cards from text + Lua script features, no per-card table), on its
+  new-card decks with those cards out of our table: our bot +190.8 (scripts/decklight/).
+
+Ideas:
+1. Timing and persistence features: usable on the opponent's turn (Trap, Quick-Play, Quick Effect,
+   hand trap), continuous effects, once-per-turn limits, one-time triggers on summon; from the Lua
+   scripts' effect types and flags (as decklight's `lua_desc`), with bucket interactions.
+2. Bucket differences as targets (field - hand, GY - hand): the general power cancels out.
+3. Deck context: a card's value given its deck (share of its archetype, copies, the deck's type mix):
+   s(card, deck) = f(card) + g(card, deck features).
+4. The table for known cards, a predicted value as the fallback for unknown ones (instead of 0); a
+   test book with deliberately unknown cards to measure it (the SPRT book's cards are 99% known).
+5. Learn the value from play instead of from the table: e.g. a small model on text + script
+   features trained end to end in the eval with a card-level holdout (`--card-holdout`) as the
+   check.
 - `tidy` (2026-10-25, the code cleanup after Nalwald's style: same search, bench checksums
   unchanged; the belief regression set equal to a fresh build of main) regression SPRT vs main
   [-10, 0]: H1 at 3546 games, +1.3 +/- 8.9, LLR +3.03. Merged (fast-forward to 61f0965).
