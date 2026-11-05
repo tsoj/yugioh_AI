@@ -14,24 +14,52 @@ use ygo_arbiter::random::{RandomBot, pick, random_response};
 use ygo_arbiter::state::Snapshot;
 
 pub const MAX_SAME_ACTIVATION_PER_TURN: u32 = 3;
+/// (generous: a monster that may attack several times stays far below it; a declaration cancelled
+/// at its selection counts too, so declaring and cancelling cannot loop forever)
+pub const MAX_SAME_ATTACK_PER_TURN: u32 = 10;
 
-/// How often each effect was activated this turn, by (code, location, sequence, description),
-/// capped at `MAX_SAME_ACTIVATION_PER_TURN` (so that unlimited effects cannot loop forever); reset
-/// by NEW_TURN.
+/// What is capped per turn.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum CappedUse {
+    Activation,
+    Attack,
+}
+
+impl CappedUse {
+    fn limit(self) -> u32 {
+        match self {
+            CappedUse::Activation => MAX_SAME_ACTIVATION_PER_TURN,
+            CappedUse::Attack => MAX_SAME_ATTACK_PER_TURN,
+        }
+    }
+}
+
+/// How often each effect was activated (and each monster declared an attack) this turn, by
+/// (use, code, location, sequence, description), capped at the use's limit (so that unlimited
+/// effects cannot loop forever); reset by NEW_TURN.
 #[derive(Clone, Default)]
-pub struct ActivationCaps(HashMap<(u32, u32, u32, Option<u64>), u32>);
+pub struct ActivationCaps(HashMap<(CappedUse, u32, u32, u32, Option<u64>), u32>);
 
 impl ActivationCaps {
-    fn key(e: &ygo_arbiter::messages::Card) -> (u32, u32, u32, Option<u64>) {
-        (e.code, e.loc, e.seq, e.desc)
+    fn key(u: CappedUse, e: &ygo_arbiter::messages::Card) -> (CappedUse, u32, u32, u32, Option<u64>) {
+        (u, e.code, e.loc, e.seq, e.desc)
     }
 
+    /// (an effect's activation)
     pub fn allowed(&self, e: &ygo_arbiter::messages::Card) -> bool {
-        self.0.get(&Self::key(e)).copied().unwrap_or(0) < MAX_SAME_ACTIVATION_PER_TURN
+        self.allowed_use(CappedUse::Activation, e)
     }
 
     pub fn note(&mut self, e: &ygo_arbiter::messages::Card) {
-        *self.0.entry(Self::key(e)).or_insert(0) += 1;
+        self.note_use(CappedUse::Activation, e)
+    }
+
+    pub fn allowed_use(&self, u: CappedUse, e: &ygo_arbiter::messages::Card) -> bool {
+        self.0.get(&Self::key(u, e)).copied().unwrap_or(0) < u.limit()
+    }
+
+    pub fn note_use(&mut self, u: CappedUse, e: &ygo_arbiter::messages::Card) {
+        *self.0.entry(Self::key(u, e)).or_insert(0) += 1;
     }
 
     pub fn observe(&mut self, msg: &Msg) {
