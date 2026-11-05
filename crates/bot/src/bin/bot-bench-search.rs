@@ -16,15 +16,10 @@
 
 use std::collections::BTreeMap;
 use std::io::Write;
-use std::ops::AddAssign;
-use std::time::Instant;
 
-use ygo_arbiter::game::{DuelConfig, init, new_record, run_until_prompt};
-use bot::heuristic::Heuristic;
-use ygo_arbiter::matchrun::load_book;
-use ygo_arbiter::observe::{auto_response, is_hidden_prompt};
+use bot::bench::{Budget, Options};
+use bot::search::NodeStats;
 use bot::search::stats::{Extension, Reductions, Subtree, TtEntry, Width};
-use bot::search::{AlphaBeta, NodeStats, SearchParams, candidates, is_searched};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -32,145 +27,71 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let n: usize = args.get(2).map_or(2, |s| s.parse().unwrap());
-    let book = load_book(args[1].as_ref(), usize::MAX, n).expect("book");
-    let budget = args.get(3).map_or("0.5", |s| s.as_str());
-    let (budget, max_nodes, depth) = match (budget.strip_suffix('n'), budget.strip_suffix('d')) {
-        (Some(k), _) => (None, Some(k.parse::<u64>().unwrap()), None),
-        (_, Some(k)) => (None, None, Some(k.parse::<i32>().unwrap())),
-        _ => (Some(budget.parse::<f64>().unwrap()), None, None),
-    };
-    let mut checksum = 0u64;
-    init(None).unwrap();
-    let (mut nodes, mut searches, mut depth_sum, mut secs) = (0u64, 0u32, 0i64, 0.0);
-    let mut tt = (0u64, 0u64);
-    // (per search: the completed depth, the greatest height, the main line's height)
-    let mut heights: [Vec<i32>; 3] = Default::default();
-    // (per search: the best move's share of the nodes, the time budget's scale)
-    let mut tm: [Vec<f64>; 2] = Default::default();
-    // (the main-line extension's nodes, and the searches whose last iteration's main line it extended)
-    let (mut extension, mut ext_searches) = (Extension::default(), 0u32);
-    let mut broken = 0u64;
+    let budget = Budget::parse(args.get(3).map_or("0.5", |s| s.as_str())).unwrap();
     let stats_path = std::env::var("BOT_SEARCH_STATS").ok();
-    let mut stats = NodeStats::default();
-    let skip: usize = std::env::var("BOT_SKIP").map_or(0, |s| s.parse().unwrap());
-    // ($BOT_TIME_EVAL: the evaluation's time per call, 1000 calls at each searched position)
-    let time_eval = std::env::var_os("BOT_TIME_EVAL").is_some();
-    let (mut eval_secs, mut eval_calls) = (0.0, 0u64);
-    let mut best_out = std::env::var("BOT_BEST").ok().map(|p| std::io::BufWriter::new(std::fs::File::create(p).expect("best file")));
-    for (oi, opening) in book.iter().enumerate().take(n).skip(skip) {
-        let mut si = 0;
-        let record = new_record(&opening.decks, opening.seed, &DuelConfig::default());
-        let mut duel = record.setup(None).unwrap();
-        duel.ocg_start_duel();
-        let mut players = [Heuristic::new(1, 0), Heuristic::new(2, 1)];
-        let mut ab = AlphaBeta::default();
-        if stats_path.is_some() {
-            ab.stats = Some(Default::default());
-        }
-        let mut prompt = None;
-        for _ in 0..400 {
-            let step = run_until_prompt(&mut duel, prompt.as_ref()).unwrap();
-            if step.messages.iter().any(|m| matches!(m, ygo_arbiter::messages::Msg::Win { .. })) || step.ended {
-                break;
-            }
-            for m in &step.messages {
-                for p in &mut players {
-                    p.observe_msg(m);
-                }
-            }
-            let p = step.prompt.unwrap();
-            let player = p.player().unwrap();
-            let cands = candidates(&p);
-            if player == 0 && is_searched(&p) && cands.len() > 1 {
-                if time_eval {
-                    let t = Instant::now();
-                    let mut acc = 0.0;
-                    for _ in 0..1000 {
-                        acc += bot::search::evaluate_at(&mut duel, 0, Some(&p));
-                    }
-                    eval_secs += t.elapsed().as_secs_f64();
-                    eval_calls += 1000;
-                    std::hint::black_box(acc);
-                }
-                ab.prepare();
-                let before = ab.nodes;
-                let (bp, bh, bb) = (ab.tt_probes, ab.tt_hits, ab.broken);
-                let extension_before = ab.extension;
-                let t = Instant::now();
-                let params = SearchParams { budget, elapsed: 0.0, clock_remaining: 1000.0, hint: None, seeds: [1, 2], max_nodes, depth, exact_root: false };
-                let (best, done) = ab.search(&duel, &p, &cands, &params);
-                if let Some(f) = &mut best_out {
-                    // (then the prompt, the extension's nodes in this search, and whether it extended
-                    // the last iteration's main line)
-                    writeln!(f, "{oi} {si} {best} {} {} {}", p.name(), ab.extension.nodes - extension_before.nodes, (ab.pv_height > done) as u8).unwrap();
-                }
-                si += 1;
-                checksum = checksum.wrapping_mul(0x100000001b3) ^ (best as u64) ^ ((done as u64) << 8) ^ ((ab.nodes - before) << 16);
-                secs += t.elapsed().as_secs_f64();
-                nodes += ab.nodes - before;
-                tt.0 += ab.tt_probes - bp;
-                tt.1 += ab.tt_hits - bh;
-                broken += ab.broken - bb;
-                searches += 1;
-                depth_sum += done as i64;
-                extension += ab.extension - extension_before;
-                ext_searches += (ab.pv_height > done) as u32;
-                tm[0].push(ab.best_fraction);
-                tm[1].push(ab.tm_scale);
-                for (v, h) in heights.iter_mut().zip([done, ab.seldepth, ab.pv_height]) {
-                    v.push(h);
-                }
-            }
-            let resp = if is_hidden_prompt(&p) { auto_response() } else { players[player as usize].respond_to(&p, None).unwrap() };
-            duel.ocg_set_response(&ygo_arbiter::actions::encode(&p, &resp).unwrap());
-            prompt = Some(p);
-        }
-        if let Some(st) = ab.stats.take() {
-            merge(&mut stats.widths, st.widths);
-            merge(&mut stats.lmr, st.lmr);
-            merge(&mut stats.subtree, st.subtree);
-            merge(&mut stats.cuts, st.cuts);
+    let opts = Options {
+        skip: std::env::var("BOT_SKIP").map_or(0, |s| s.parse().unwrap()),
+        stats: stats_path.is_some(),
+        // ($BOT_TIME_EVAL: the evaluation's time per call, 1000 calls at each searched position)
+        time_eval: std::env::var_os("BOT_TIME_EVAL").is_some(),
+    };
+    ygo_arbiter::game::init(None).unwrap();
+    let report = bot::bench::run(args[1].as_ref(), n, budget, &opts).expect("bench");
+    let searches = &report.searches;
+    if let Ok(path) = std::env::var("BOT_BEST") {
+        let mut f = std::io::BufWriter::new(std::fs::File::create(path).expect("best file"));
+        for s in searches {
+            // (then the prompt, the extension's nodes in this search, and whether it extended the
+            // last iteration's main line)
+            writeln!(f, "{} {} {} {} {} {}", s.opening, s.index, s.best, s.prompt, s.extension.nodes, s.extended() as u8).unwrap();
         }
     }
     if let Some(path) = stats_path {
-        print_stats(&stats, &path);
+        print_stats(&report.stats, &path);
     }
-    for (name, v) in ["iteration depth", "greatest height", "main-line height"].iter().zip(heights.iter_mut()) {
+    let heights: [(&str, fn(&bot::bench::Search) -> i32); 3] = [("iteration depth", |s| s.depth), ("greatest height", |s| s.seldepth), ("main-line height", |s| s.pv_height)];
+    for (name, f) in heights {
+        let mut v: Vec<i32> = searches.iter().map(f).collect();
         v.sort();
         let q = |f: f64| v.get(((v.len() as f64 - 1.0) * f).round() as usize).copied().unwrap_or(0);
         let mean = v.iter().map(|&x| x as f64).sum::<f64>() / v.len().max(1) as f64;
         println!("{name:>16}: mean {mean:.2}, min {}, p10 {}, p25 {}, median {}, p75 {}, p90 {}, max {}", q(0.0), q(0.1), q(0.25), q(0.5), q(0.75), q(0.9), q(1.0));
     }
+    let nodes = report.nodes();
+    let mut extension = Extension::default();
+    for s in searches {
+        extension += s.extension;
+    }
     println!(
-        "main-line extension: {} nodes ({:.2}% of all), {} decided, {} of them ({:.1}%) another card than the rules'; it extended the last iteration's main line in {ext_searches} of {searches} searches",
+        "main-line extension: {} nodes ({:.2}% of all), {} decided, {} of them ({:.1}%) another card than the rules'; it extended the last iteration's main line in {} of {} searches",
         extension.nodes,
         100.0 * extension.nodes as f64 / nodes.max(1) as f64,
         extension.decided,
         extension.not_rules_first,
-        100.0 * extension.not_rules_first as f64 / extension.decided.max(1) as f64
+        100.0 * extension.not_rules_first as f64 / extension.decided.max(1) as f64,
+        searches.iter().filter(|s| s.extended()).count(),
+        searches.len()
     );
-    for (name, v) in ["best move's node share", "time budget scale"].iter().zip(tm.iter_mut()) {
+    let tm: [(&str, fn(&bot::bench::Search) -> f64); 2] = [("best move's node share", |s| s.best_fraction), ("time budget scale", |s| s.tm_scale)];
+    for (name, f) in tm {
+        let mut v: Vec<f64> = searches.iter().map(f).collect();
         v.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let q = |f: f64| v.get(((v.len() as f64 - 1.0) * f).round() as usize).copied().unwrap_or(0.0);
         let mean = v.iter().sum::<f64>() / v.len().max(1) as f64;
         println!("{name:>22}: mean {mean:.3}, p10 {:.3}, p25 {:.3}, median {:.3}, p75 {:.3}, p90 {:.3}", q(0.1), q(0.25), q(0.5), q(0.75), q(0.9));
     }
-    if time_eval {
-        println!("evaluation: {:.2} us per call ({eval_calls} calls)", eval_secs / eval_calls as f64 * 1e6);
+    if opts.time_eval {
+        println!("evaluation: {:.2} us per call ({} calls)", report.eval.0 / report.eval.1 as f64 * 1e6, report.eval.1);
     }
+    let (probes, hits, broken) = searches.iter().fold((0, 0, 0), |(p, h, b), s| (p + s.tt_probes, h + s.tt_hits, b + s.broken));
     println!(
-        "{searches} searches, {nodes} nodes in {secs:.1} s: {:.0} nodes/s, mean depth {:.2}; TT hits {} of {} probes; {broken} broken lines; checksum {checksum:016x}",
-        nodes as f64 / secs,
-        depth_sum as f64 / searches.max(1) as f64,
-        tt.1,
-        tt.0
+        "{} searches, {nodes} nodes in {:.1} s: {:.0} nodes/s, mean depth {:.2}; TT hits {hits} of {probes} probes; {broken} broken lines; checksum {:016x}",
+        searches.len(),
+        report.secs(),
+        nodes as f64 / report.secs(),
+        searches.iter().map(|s| s.depth as f64).sum::<f64>() / searches.len().max(1) as f64,
+        report.checksum()
     );
-}
-
-fn merge<K: Ord, V: AddAssign + Default>(into: &mut BTreeMap<K, V>, from: BTreeMap<K, V>) {
-    for (k, v) in from {
-        *into.entry(k).or_default() += v;
-    }
 }
 
 /// The tables, and the counts as JSON lines to `path`.

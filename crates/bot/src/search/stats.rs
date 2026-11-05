@@ -97,6 +97,19 @@ pub struct NodeSummary {
 }
 
 impl NodeStats {
+    /// Adds `other`'s counts.
+    pub fn merge(&mut self, other: NodeStats) {
+        fn add<K: Ord, V: AddAssign + Default>(into: &mut BTreeMap<K, V>, from: BTreeMap<K, V>) {
+            for (k, v) in from {
+                *into.entry(k).or_default() += v;
+            }
+        }
+        add(&mut self.widths, other.widths);
+        add(&mut self.cuts, other.cuts);
+        add(&mut self.lmr, other.lmr);
+        add(&mut self.subtree, other.subtree);
+    }
+
     /// A reduced search of the move at index `i`, searched again if it raised alpha.
     pub fn reduction(&mut self, prompt: &Msg, i: usize, researched: bool) {
         let e = self.lmr.entry((prompt_label(prompt), i.min(15) as u8)).or_default();
