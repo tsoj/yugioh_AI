@@ -61,7 +61,6 @@ fn default_specs() -> Vec<Spec> {
     let s = |name: &str, is_int: bool, min: f64, max: f64, c_end: f64| Spec { name: name.into(), is_int, min, max, c_end, r_end: 0.002 };
     vec![
         // (the widths card_width, root_card_width are not tuned: a spec line adds them)
-        s("lmr_min_depth", false, 1.0, 8.0, 0.5),
         s("lmr_min_move_counter", true, 0.0, 10.0, 1.0),
         s("lmr_reduction", false, 0.0, 4.0, 0.25),
         s("futility_max_depth", false, 0.0, 20.0, 1.0),

@@ -63,10 +63,9 @@ pub const HIST_MALUS: f64 = 1.0;
 
 /// (the null window's width, 1 LP: the smallest step of a value)
 pub const NULL_WINDOW: f64 = 1.0;
-/// (late move reductions by LMR_REDUCTION plies from this depth on, for the moves after the first
-/// LMR_MIN_MOVE_COUNTER, with a null window: SPRT H1 +19.1 +/- 14.9 at 1204 games, 2026-10-13; the
+/// (late move reductions by LMR_REDUCTION plies at every depth (before 2026-11-05 from depth 2 on),
+/// for the moves after the first LMR_MIN_MOVE_COUNTER, with a null window: SPRT H1 +19.1 +/- 14.9 at 1204 games, 2026-10-13; the
 /// null window +11.1 +/- 8.8 at 3074 games at 1000 nodes, 2026-10-16. Depths are fractional)
-pub const LMR_MIN_DEPTH: f64 = 2.0;
 pub const LMR_MIN_MOVE_COUNTER: usize = 2;
 pub const LMR_REDUCTION: f64 = 1.0;
 /// (futility pruning up to this depth, margin FUTILITY_MARGIN + FUTILITY_MARGIN_PER_PLY * depth:
@@ -140,7 +139,6 @@ fn count(value: f64) -> usize {
 tunable! {
     card_width: usize = CARD_WIDTH, |v| count(v).max(1);
     root_card_width: usize = ROOT_CARD_WIDTH, |v| count(v).max(1);
-    lmr_min_depth: f64 = LMR_MIN_DEPTH, |v| v;
     lmr_min_move_counter: usize = LMR_MIN_MOVE_COUNTER, count;
     lmr_reduction: f64 = LMR_REDUCTION, |v| v.max(0.0);
     futility_max_depth: f64 = FUTILITY_MAX_DEPTH, |v| v;
