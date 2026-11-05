@@ -1,0 +1,45 @@
+# The bot's build for OpenBench (make -j EXE=PATH): the binary `bot`, profile-guided (as
+# scripts/sprt_branch.sh: an instrumented bot plays `bot bench`, then the bot is built with that
+# profile; ~25% more nodes/s). The submodules must be present: ygopro-core-rust and
+# external/HiGHS to build, external/CardScripts and external/BabelCDB to run (the bot runs with
+# YGO_ROOT set to this directory).
+#
+#   make [EXE=bot] [PGO=1]       the bot
+#   make arbiter [ARBITER=ygo-arbiter]
+#
+# CARGO_TARGET_DIR (default target/) can be shared between builds of different commits.
+# LLVM_PROFDATA must be of rustc's LLVM version (rustc -vV).
+
+EXE ?= bot
+ARBITER ?= ygo-arbiter
+PGO ?= 1
+LLVM_PROFDATA ?= llvm-profdata
+CARGO_TARGET_DIR ?= $(CURDIR)/target
+
+# (the profile's directory names this tree, so that no build uses another commit's profile)
+PROFILE := $(CARGO_TARGET_DIR)/pgo/$(notdir $(CURDIR))
+
+.PHONY: all arbiter
+
+ifeq ($(PGO),1)
+all:
+	rm -rf $(PROFILE) $(PROFILE).profdata
+	mkdir -p $(PROFILE)
+	RUSTFLAGS="-Cprofile-generate=$(PROFILE)" CARGO_TARGET_DIR=$(CARGO_TARGET_DIR)/pgo-gen \
+		cargo build --release -p bot --bin bot
+	rm -f $(PROFILE)/*.profraw
+	YGO_ROOT=$(CURDIR) $(CARGO_TARGET_DIR)/pgo-gen/release/bot bench
+	$(LLVM_PROFDATA) merge -o $(PROFILE).profdata $(PROFILE)/*.profraw
+	RUSTFLAGS="-Cprofile-use=$(PROFILE).profdata" CARGO_TARGET_DIR=$(CARGO_TARGET_DIR)/pgo-use \
+		cargo build --release -p bot --bin bot
+	cp $(CARGO_TARGET_DIR)/pgo-use/release/bot $(EXE)
+else
+all:
+	CARGO_TARGET_DIR=$(CARGO_TARGET_DIR) cargo build --release -p bot --bin bot
+	cp $(CARGO_TARGET_DIR)/release/bot $(EXE)
+endif
+
+arbiter:
+	CARGO_TARGET_DIR=$(CARGO_TARGET_DIR)/arbiter \
+		cargo build --release --manifest-path ygopro-core-rust/Cargo.toml -p ygo-arbiter --bin ygo-arbiter
+	cp $(CARGO_TARGET_DIR)/arbiter/release/ygo-arbiter $(ARBITER)

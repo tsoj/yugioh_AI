@@ -4,11 +4,12 @@
 //! under it.
 //!
 //! * [`bots`], [`heuristic`], [`belief_bots`]: the strategies
-//! * [`search`], [`mcts`]: searches on a duel
+//! * [`search`], [`mcts`]: searches on a duel; [`bench`]: the search benchmark
 //! * [`belief`]: the belief replay and deck completion
 //! * [`datarow`], [`rl_policy`], [`policy_features`], [`imitation`], [`policy_remote`]: training
 //!   data, the learned policies
 
+pub mod bench;
 pub mod belief;
 pub mod belief_bots;
 pub mod datarow;
