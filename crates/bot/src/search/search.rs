@@ -491,7 +491,7 @@ impl SearchState<'_> {
             // late move reduction: a late move, unlikely the best by the move ordering, searched
             // `lmr_reduction` plies less with a null window (it only has to show that it does not
             // raise alpha)
-            let reduced = if depth >= tune.lmr_min_depth && i >= tune.lmr_min_move_counter {
+            let reduced = if i >= tune.lmr_min_move_counter {
                 let reduced_beta = if alpha.is_finite() { alpha + NULL_WINDOW } else { beta };
                 let value = self.search_move(duel, prompt, mv, Node { beta: reduced_beta, depth: lmr_depth(&tune, child.depth), pv: false, ..child }, MakeOn::Copy)?;
                 if let Some(st) = &mut self.tables.stats {
