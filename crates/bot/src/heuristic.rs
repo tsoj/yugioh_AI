@@ -9,7 +9,7 @@ use ygo_core::constants::*;
 use ygo_core::types::CardData;
 
 use ygo_arbiter::actions::{Command, Response, available_places, battle_options, idle_options};
-use crate::bots::ActivationCaps;
+use crate::bots::{ActivationCaps, CappedUse};
 use ygo_arbiter::random::random_response;
 use ygo_arbiter::game::{Bot, BotError, card_db};
 use ygo_arbiter::messages::{Card, Msg};
@@ -111,25 +111,27 @@ impl Heuristic {
 
     /// The effect (or card) that `r` activates or Special Summons at `prompt` (an idle, battle or
     /// chain decision), whose uses this turn are capped.
-    fn capped_use<'a>(prompt: &'a Msg, r: &Response) -> Option<&'a Card> {
+    fn capped_use<'a>(prompt: &'a Msg, r: &Response) -> Option<(CappedUse, &'a Card)> {
         let i = usize::try_from(r.index?).ok()?;
         match (prompt, r.kind) {
-            (Msg::SelectChain { chains, .. }, _) => chains.get(i),
-            (_, Some(command @ (Command::Activate | Command::Spsummon))) => command.cards(prompt)?.get(i),
+            (Msg::SelectChain { chains, .. }, _) => Some((CappedUse::Activation, chains.get(i)?)),
+            (_, Some(command @ (Command::Activate | Command::Spsummon))) => Some((CappedUse::Activation, command.cards(prompt)?.get(i)?)),
+            (_, Some(Command::Attack)) => Some((CappedUse::Attack, Command::Attack.cards(prompt)?.get(i)?)),
             _ => None,
         }
     }
 
-    /// Whether `r` at `prompt` stays within the uses per turn (MAX_SAME_ACTIVATION_PER_TURN) of
-    /// what it activates; another player's (a search's) choices are capped like the rules' own.
+    /// Whether `r` at `prompt` stays within the uses per turn (MAX_SAME_ACTIVATION_PER_TURN,
+    /// MAX_SAME_ATTACK_PER_TURN) of what it activates or what attacks; another player's (a
+    /// search's) choices are capped like the rules' own.
     pub fn within_cap(&self, prompt: &Msg, r: &Response) -> bool {
-        Self::capped_use(prompt, r).is_none_or(|e| self.caps.allowed(e))
+        Self::capped_use(prompt, r).is_none_or(|(u, e)| self.caps.allowed_use(u, e))
     }
 
     /// Counts `r` at `prompt` (chosen by someone else, e.g. the search) towards the cap.
     pub fn note_choice(&mut self, prompt: &Msg, r: &Response) {
-        if let Some(e) = Self::capped_use(prompt, r) {
-            self.caps.note(e);
+        if let Some((u, e)) = Self::capped_use(prompt, r) {
+            self.caps.note_use(u, e);
         }
     }
 
