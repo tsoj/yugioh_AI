@@ -507,6 +507,15 @@ butterfly-style history, hard/soft time bounds, LMR (default since f783119).
 - [x] Linear LMR (`lmr_reduction_per_move`, the reduction 1 + x * (move - 2), 2026-10-19, without
       the 12 cap): x = 0.1 at 500 nodes stopped at 680 games (-3.6 +/- 17.7, LLR -1.05); x = 0.25 at
       1000 nodes stopped at 1160 games (-1.5 +/- 13.9, LLR -1.29): not merged.
+- [x] LMR variants (2026-11-05, NPS-adjusted 2000 nodes, era book, vs main):
+  - from the second move (`LMR_MIN_MOVE_COUNTER` 1, branch lmr-min1): 10d nodes -12%, 3000n depth
+    12.99 -> 13.48; H0, -4.2 +/- 6.6 at 5904 games.
+  - by 2 plies (branch lmr-red2): stopped by the user at 7520 games, -0.9 +/- 5.8, LLR -1.93.
+  - at every depth, no minimum depth 2 (branch lmr-any-depth): H1, +7.8 +/- 5.9 at 5086 games,
+    merged. Same depth (11.88 -> 11.87 at 2000n): at depth < 2 the reduced depth stays 0, so only
+    the null window and the lost main-line extension of the reduced search change.
+  - [ ] Not run yet: the second move by 1 ply, the later ones by 2 (branch lmr-graded, 32d78f24,
+        from the old main).
 - [x] Futility reductions instead of the pruning (Nalwald's, the static eval after the move in place
       of static eval + SEE, `futility_reduction_div`, 58ce4b1, 2026-10-19). Mean depth at bench
       3000n (default 13.05), fractional: div 300 15.50, 500 14.75, 800 13.82, 1200 13.26, 2400
