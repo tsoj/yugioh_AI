@@ -10,3 +10,6 @@
 [submodule "external/HiGHS"]
 	path = external/HiGHS
 	url = https://github.com/ERGO-Code/HiGHS.git
+[submodule "external/openbench"]
+	path = external/openbench
+	url = git@github.com:tsoj/OpenBenchYGO.git
