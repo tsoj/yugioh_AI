@@ -11,7 +11,8 @@
 # checkout's data. The match uses BASE's ygo-arbiter. Log and records go to runs/sprt/<name>_<time>.*, a summary line to
 # runs/sprt/results.jsonl.
 #
-# Environment: ALLOW_DIVERGED=1 (NEW need not contain BASE); TC (default 10+0.1); NODES=N for fixed-node searches (BOT_SEARCH_NODES, --tc
+# Environment: ALLOW_DIVERGED=1 (NEW need not contain BASE); TC (default 10+0.1); NPS_NODES=N for an NPS-adjusted node limit
+# (ygo-arbiter --nps-nodes: BASE N nodes per decision, NEW N times their nodes/s ratio; --tc 60+1); NODES=N for fixed-node searches (BOT_SEARCH_NODES, --tc
 # 60+1); CONC (16 games at once); OPENINGS (10000: 20000 games); ELO ("0 5"; "none": all OPENINGS, no SPRT);
 # NAME (default NEW); SHUF (the book's shuffle seed, random by default); BOOK (runs/books/match2.jsonl;
 # a missing book is unpacked from books/, the books in git)
@@ -145,17 +146,18 @@ if [ -n "${NODES:-}" ]; then
     base_env="$base_env BOT_SEARCH_NODES=$NODES"
     TC=60+1
 fi
+[ -n "${NPS_NODES:-}" ] && TC=60+1
 T=$(date +%Y%m%d-%H%M%S)
 log=runs/sprt/${NAME}_$T.log
 mkdir -p runs/sprt
-echo "$(date) start $NAME: $NEW ($new_sha) vs $BASE ($base_sha), tc $TC${NODES:+, $NODES nodes}${RESUME:+, resuming $RESUME} -> $log"
+echo "$(date) start $NAME: $NEW ($new_sha) vs $BASE ($base_sha), tc $TC${NODES:+, $NODES nodes}${NPS_NODES:+, NPS-adjusted $NPS_NODES nodes}${RESUME:+, resuming $RESUME} -> $log"
 YGO_ROOT=$base_dir/root "$base_dir/ygo-arbiter" --bot "new=$new_env $new_dir/bot alphabeta" --bot "base=$base_env $base_dir/bot alphabeta" \
     --book "$BOOK" --pool "$POOL" --shuffle "$SHUF" -n "$OPENINGS" -c "$CONC" --tc "$TC" $([ "$ELO" = none ] || echo --sprt $ELO) \
-    --records "runs/sprt/${NAME}_$T.jsonl" ${RESUME:+--resume "$RESUME"} > "$log" 2>&1 || true
+    --records "runs/sprt/${NAME}_$T.jsonl" ${RESUME:+--resume "$RESUME"} ${NPS_NODES:+--nps-nodes "$NPS_NODES"} > "$log" 2>&1 || true
 final=$(grep -E "^(SPRT finished|final:)" "$log" | tr '\n' ' ' || true)
 [ -z "$final" ] && final="stopped: $(grep "games" "$log" | tail -1)"
-python3 -c "import json,sys; a=sys.argv; print(json.dumps({'new': a[2], 'new_sha': a[3], 'base': a[4], 'base_sha': a[5], 'agent': {'new': 'alphabeta', 'base': 'alphabeta'}, 'tc': a[6], 'nodes': int(a[7]) if a[7] else None, 'elo': [float(x) for x in a[8].split()] if a[8] != 'none' else None, 'verdict': a[1], 'engine': 'rust', 'shuffle': int(a[9]), 'pool': int(a[11]), **({'resumed': a[12]} if a[12] else {}), **({'book': a[10]} if a[10] != 'runs/books/match1.jsonl' else {})}))" \
-    "$final" "$NAME" "$new_sha" "$BASE" "$base_sha" "$TC" "${NODES:-}" "$ELO" "$SHUF" "$BOOK" "$POOL" "$RESUME" >> runs/sprt/results.jsonl
+python3 -c "import json,sys; a=sys.argv; print(json.dumps({'new': a[2], 'new_sha': a[3], 'base': a[4], 'base_sha': a[5], 'agent': {'new': 'alphabeta', 'base': 'alphabeta'}, 'tc': a[6], 'nodes': int(a[7]) if a[7] else None, 'elo': [float(x) for x in a[8].split()] if a[8] != 'none' else None, 'verdict': a[1], 'engine': 'rust', 'shuffle': int(a[9]), 'pool': int(a[11]), **({'resumed': a[12]} if a[12] else {}), **({'nps_nodes': int(a[13])} if a[13] else {}), **({'book': a[10]} if a[10] != 'runs/books/match1.jsonl' else {})}))" \
+    "$final" "$NAME" "$new_sha" "$BASE" "$base_sha" "$TC" "${NODES:-}" "$ELO" "$SHUF" "$BOOK" "$POOL" "$RESUME" "${NPS_NODES:-}" >> runs/sprt/results.jsonl
 echo "$(date) done $NAME: $final"
 }
 main "$@"; exit
