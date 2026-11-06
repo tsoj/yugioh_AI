@@ -459,7 +459,8 @@ impl SearchState<'_> {
         }
 
         let tune = self.tables.tune;
-        let futility_value = (depth <= tune.futility_max_depth).then(|| evaluate_at(duel, us, Some(prompt)) + futility_margin(&tune, depth));
+        // (not on the main line, as in chess engines' PV nodes)
+        let futility_value = (depth <= tune.futility_max_depth && !pv).then(|| evaluate_at(duel, us, Some(prompt)) + futility_margin(&tune, depth));
 
         let ctx = key_context(duel, prompt, card_order.as_ref().and_then(|c| c.hint));
         let history_keys: Vec<usize> = moves.iter().map(|m| move_key(prompt, m, &ctx)).collect();
