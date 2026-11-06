@@ -66,7 +66,7 @@ pub const NULL_WINDOW: f64 = 1.0;
 /// (late move reductions by LMR_REDUCTION plies at every depth (before 2026-11-05 from depth 2 on),
 /// for the moves after the first LMR_MIN_MOVE_COUNTER, with a null window: SPRT H1 +19.1 +/- 14.9 at 1204 games, 2026-10-13; the
 /// null window +11.1 +/- 8.8 at 3074 games at 1000 nodes, 2026-10-16. Depths are fractional)
-pub const LMR_MIN_MOVE_COUNTER: usize = 2;
+pub const LMR_MIN_MOVE_COUNTER: usize = 3;
 pub const LMR_REDUCTION: f64 = 1.0;
 /// (futility pruning up to this depth, margin FUTILITY_MARGIN + FUTILITY_MARGIN_PER_PLY * depth:
 /// 5 + 2 * depth points of the mover2 eval (1 point = 116.68 LP), chosen for +2 plies at 3000
