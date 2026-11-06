@@ -16,8 +16,10 @@ PGO ?= 1
 LLVM_PROFDATA ?= llvm-profdata
 CARGO_TARGET_DIR ?= $(CURDIR)/target
 
-# (the profile's directory names this tree, so that no build uses another commit's profile)
-PROFILE := $(CARGO_TARGET_DIR)/pgo/$(notdir $(CURDIR))
+# (fixed paths: RUSTFLAGS stay the same from commit to commit, so that the dependencies of an
+# earlier build are used again. Cargo does not see a new profile: a dependency keeps the profile
+# of its first build, only this tree's crates get this commit's profile. One build at a time.)
+PROFILE := $(CARGO_TARGET_DIR)/pgo/profile
 
 .PHONY: all arbiter
 
