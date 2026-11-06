@@ -438,6 +438,8 @@ impl SearchState<'_> {
         let key = hash_key(duel, prompt);
         let hash_result = self.tables.hash_table.get(key);
         let (mut tt_move, mut tt_entry) = (None, TtEntry::Missing);
+        // (a shallower entry that cut at a beta at or below this one: its move is probed at beta)
+        let mut tt_beta_probe = false;
         let nodes_before = self.tables.nodes;
         self.tables.tt_probes += 1;
         if let Some(h) = hash_result {
@@ -455,6 +457,7 @@ impl SearchState<'_> {
             }
             if h.best_move >= 0 && (h.best_move as usize) < moves.len() {
                 tt_move = Some(h.best_move as usize);
+                tt_beta_probe = h.node_type == NodeType::CutNode && h.value >= beta && beta.is_finite() && beta - NULL_WINDOW > alpha;
             }
         }
 
@@ -488,24 +491,30 @@ impl SearchState<'_> {
             let make_on = if i == move_order.len() - 1 { MakeOn::InPlace } else { MakeOn::Copy };
             let child = Node { alpha, beta, depth: depth - 1.0, height: height + 1, pv: pv && i == 0 };
 
-            // late move reduction: a late move, unlikely the best by the move ordering, searched
-            // `lmr_reduction` plies less with a null window (it only has to show that it does not
-            // raise alpha)
-            let reduced = if i >= tune.lmr_min_move_counter {
+            // null-window searches that can decide a move's value:
+            // - late move reduction: a late move, unlikely the best by the move ordering, searched
+            //   `lmr_reduction` plies less with a null window (it only has to show that it does not
+            //   raise alpha)
+            // - the TT beta probe: the TT move of a shallower entry that cut at this beta, searched
+            //   with a null window at beta (it only has to show that it still cuts)
+            let decided = if i >= tune.lmr_min_move_counter {
                 let reduced_beta = if alpha.is_finite() { alpha + NULL_WINDOW } else { beta };
                 let value = self.search_move(duel, prompt, mv, Node { beta: reduced_beta, depth: lmr_depth(&tune, child.depth), pv: false, ..child }, MakeOn::Copy)?;
                 if let Some(st) = &mut self.tables.stats {
                     st.reduction(prompt, i, value > alpha);
                 }
-                Some(value)
+                (value <= alpha).then_some(value)
+            } else if tt_beta_probe && tt_move == Some(m) {
+                let value = self.search_move(duel, prompt, mv, Node { alpha: beta - NULL_WINDOW, pv: false, ..child }, MakeOn::Copy)?;
+                (value >= beta).then_some(value)
             } else {
                 None
             };
 
-            // (the full depth and window: without a reduction, or if the reduced search raised alpha)
-            let value = match reduced {
-                Some(v) if v <= alpha => v,
-                _ => self.search_move(duel, prompt, mv, child, make_on)?,
+            // (the full depth and window: if no null-window search decided the value)
+            let value = match decided {
+                Some(v) => v,
+                None => self.search_move(duel, prompt, mv, child, make_on)?,
             };
 
             if value > best_value {
