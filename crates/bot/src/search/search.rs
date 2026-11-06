@@ -443,7 +443,9 @@ impl SearchState<'_> {
         if let Some(h) = hash_result {
             self.tables.tt_hits += 1;
             tt_entry = if h.best_move >= 0 { TtEntry::WithMove(h.node_type) } else { TtEntry::WithoutMove };
-            if h.depth as f64 >= depth {
+            // (not on the main line: its value comes from this search, not from an earlier one's
+            // entry, as in chess engines' PV nodes)
+            if h.depth as f64 >= depth && !pv {
                 match h.node_type {
                     NodeType::PvNode => return Ok(h.value),
                     NodeType::CutNode => alpha = alpha.max(h.value),
