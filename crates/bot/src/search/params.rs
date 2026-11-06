@@ -9,7 +9,7 @@ pub const DEPTH_NO_CLOCK: i32 = 2;
 /// (a card selection: the first choices only, below the root (of several cards: the first sets,
 /// `card_sets`), and a one-card selection at the root; the root's width 3 -> 5 by SPSA run 1, see
 /// FUTILITY_MARGIN)
-pub const CARD_WIDTH: usize = 3;
+pub const CARD_WIDTH: usize = 4;
 pub const ROOT_CARD_WIDTH: usize = 5;
 /// (the root's other decisions, `root_candidates`: at most this many choices of several cards,
 /// tributes, sums, places, orders or counters, the subsets among the rules' first
