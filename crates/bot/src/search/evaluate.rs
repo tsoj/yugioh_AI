@@ -673,7 +673,7 @@ impl LearnedEval {
         for c in card_list(d, mover) {
             let Some(s) = self.strength.get(&c.code) else { continue };
             let b = c.bucket as usize;
-            let v = s[b] * term.mult[b][c.negated as usize * 2 + c.used as usize];
+            let v = CARD_TERM_SCALE * s[b] * term.mult[b][c.negated as usize * 2 + c.used as usize];
             x[b] += if c.mine { v } else { -v };
         }
         x
@@ -731,6 +731,10 @@ impl LearnedEval {
 /// 2026-10-24, 184522 games, 28.1M positions, runs/data/sprt_net2/; card lists:
 /// scripts/eval_cards/sprt_cards_to_npz.py) and on rounds 2 and 3 (no card lists), without the deck
 /// pairs where one deck won every game (its predecessors and their SPRTs: TODO.md, "Evaluation").
+/// (the card term's weight: the trained table's values times this; the training's weight decay
+/// shrinks them)
+const CARD_TERM_SCALE: f64 = 1.3;
+
 const DEFAULT_EVAL: &str = include_str!("../../models/eval_mover2_sprt2r23os_cardstable_64.json");
 
 /// The position's value for `me` (in LP): the trained evaluation (`LearnedEval::from_env`).
