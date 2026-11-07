@@ -437,7 +437,7 @@ impl SearchState<'_> {
         // transposition table: update alpha, beta or return immediately
         let key = hash_key(duel, prompt);
         let hash_result = self.tables.hash_table.get(key);
-        let (mut tt_move, mut tt_entry) = (None, TtEntry::Missing);
+        let (mut tt_move, mut second_move, mut tt_entry) = (None, None, TtEntry::Missing);
         let nodes_before = self.tables.nodes;
         self.tables.tt_probes += 1;
         if let Some(h) = hash_result {
@@ -456,6 +456,9 @@ impl SearchState<'_> {
             if h.best_move >= 0 && (h.best_move as usize) < moves.len() {
                 tt_move = Some(h.best_move as usize);
             }
+            if h.second_move >= 0 && (h.second_move as usize) < moves.len() {
+                second_move = Some(h.second_move as usize);
+            }
         }
 
         let tune = self.tables.tune;
@@ -463,7 +466,7 @@ impl SearchState<'_> {
 
         let ctx = key_context(duel, prompt, card_order.as_ref().and_then(|c| c.hint));
         let history_keys: Vec<usize> = moves.iter().map(|m| move_key(prompt, m, &ctx)).collect();
-        let move_order = self.move_order(tt_move, &history_keys);
+        let move_order = self.move_order(tt_move, second_move, &history_keys);
 
         let mut node_type = NodeType::AllNode;
         let (mut best_value, mut best_move) = (f64::NEG_INFINITY, move_order[0]);
@@ -540,11 +543,13 @@ impl SearchState<'_> {
         Ok(best_value)
     }
 
-    /// Move ordering: the TT move first, then by history (the rules' order among equals).
-    fn move_order(&self, tt_move: Option<usize>, history_keys: &[usize]) -> Vec<usize> {
+    /// Move ordering: the TT move first, the TT's second move (the position's previous best move)
+    /// second, then by history (the rules' order among equals).
+    fn move_order(&self, tt_move: Option<usize>, second_move: Option<usize>, history_keys: &[usize]) -> Vec<usize> {
         let history = |k: usize| self.tables.history_table.get(history_keys[k]);
+        let tt_rank = |k: usize| if Some(k) == tt_move { 0 } else if Some(k) == second_move { 1 } else { 2 };
         let mut order: Vec<usize> = (0..history_keys.len()).collect();
-        order.sort_by(|&a, &b| (Some(a) != tt_move).cmp(&(Some(b) != tt_move)).then_with(|| history(b).partial_cmp(&history(a)).unwrap_or(Ordering::Equal)));
+        order.sort_by(|&a, &b| tt_rank(a).cmp(&tt_rank(b)).then_with(|| history(b).partial_cmp(&history(a)).unwrap_or(Ordering::Equal)));
         order
     }
 

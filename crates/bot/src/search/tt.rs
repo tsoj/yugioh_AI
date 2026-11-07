@@ -16,16 +16,24 @@ pub enum NodeType {
     AllNode,
 }
 
-/// A stored search result: its value, depth, node type and best move (an index into the node's
-/// ordered moves).
-#[derive(Clone, Copy, Default)]
+/// A stored search result: its value, depth, node type, best move and second move (indices into
+/// the node's ordered moves; -1: none). The second move is the best move of the position's
+/// previous entry, if that was another move.
+#[derive(Clone, Copy)]
 pub struct HashResult {
     key: u64,
     pub value: f64,
     pub depth: f32,
     pub node_type: NodeType,
     pub best_move: i8,
+    pub second_move: i8,
     generation: u16,
+}
+
+impl Default for HashResult {
+    fn default() -> Self {
+        HashResult { key: 0, value: 0.0, depth: 0.0, node_type: NodeType::default(), best_move: -1, second_move: -1, generation: 0 }
+    }
 }
 
 pub struct TranspositionTable {
@@ -51,9 +59,16 @@ impl TranspositionTable {
         (e.key == key && e.generation == self.generation).then_some(e)
     }
 
-    /// Stores a result (always replacing the slot's entry).
+    /// Stores a result (always replacing the slot's entry). The second move: the position's
+    /// previous best move if it is another one, else the previous second move.
     pub fn add(&mut self, key: u64, node_type: NodeType, value: f64, depth: f64, best_move: usize) {
-        self.entries[Self::slot(key)] = HashResult { key, value, depth: depth as f32, node_type, best_move: best_move as i8, generation: self.generation };
+        let best_move = best_move as i8;
+        let second_move = match self.get(key) {
+            Some(old) if old.best_move >= 0 && old.best_move != best_move => old.best_move,
+            Some(old) if old.second_move != best_move => old.second_move,
+            _ => -1,
+        };
+        self.entries[Self::slot(key)] = HashResult { key, value, depth: depth as f32, node_type, best_move, second_move, generation: self.generation };
     }
 
     /// A new decision: the entries so far stop counting.
