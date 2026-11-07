@@ -20,3 +20,20 @@ does not decide too often. Each step's usage is in its script's docstring.
    results. SPRTs draw from its first 42,049 openings (`scripts/sprt_branch.sh`: POOL).
 
 Both files are in git as `books/match2.jsonl.zst` and `books/match2_tested.jsonl.zst`.
+
+## The era books (OpenBench: `books/openbench/era_sprt.zip`, `era_sprt2.zip`)
+
+Same-era deck pairs, so that fewer openings are one-sided.
+
+1. Candidates: `era_candidates.py OUT --part sprt -n N --seed S`: random deck pairs whose eras (a
+   deck's newest card's first release, `card_dates.py`) are at most 365 days apart. Each deck is
+   in one part, sprt (16% of the decks) or data: the SPRT books' decks are never in training data.
+2. Test games: `bot-book-test CANDIDATES TESTED --policies
+   runs/nn/rl4/iter71.npz,runs/nn/rl3/iter100.npz,runs/nn/rl2/iter95.npz,runs/nn/rl1/iter28.npz,runs/nn/boot1_policy.npz -j 30`.
+3. The book: `select_openings.py TESTED [TESTED ...] BOOK` (each seat won at least 2 test games;
+   each deck pair once).
+
+- `era_sprt`: 24,000 candidates (seed 92), 18,224 openings (63 deck pairs twice).
+- `era_sprt2`: `select_openings.py runs/books/era/tested_sprt.jsonl runs/books/era/tested_sprt2.jsonl`,
+  the second file 110,000 candidates of seed 94: 100,072 openings, each deck pair once. Its first
+  18,161 openings are `era_sprt`'s, without the repeated pairs.
