@@ -51,9 +51,15 @@ impl TranspositionTable {
         (e.key == key && e.generation == self.generation).then_some(e)
     }
 
-    /// Stores a result (always replacing the slot's entry).
+    /// Stores a result. For the same position, keep a result more than two plies deeper
+    /// rather than overwrite it with a shallow bound (e.g. from an LMR probe). Exact results
+    /// always replace it; a different position or a new decision starts afresh.
     pub fn add(&mut self, key: u64, node_type: NodeType, value: f64, depth: f64, best_move: usize) {
-        self.entries[Self::slot(key)] = HashResult { key, value, depth: depth as f32, node_type, best_move: best_move as i8, generation: self.generation };
+        let entry = &mut self.entries[Self::slot(key)];
+        if entry.key == key && entry.generation == self.generation && node_type != NodeType::PvNode && depth + 2.0 < entry.depth as f64 {
+            return;
+        }
+        *entry = HashResult { key, value, depth: depth as f32, node_type, best_move: best_move as i8, generation: self.generation };
     }
 
     /// A new decision: the entries so far stop counting.
@@ -62,6 +68,52 @@ impl TranspositionTable {
         if self.generation == 0 {
             self.generation = 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shallow_bound_keeps_deeper_result_and_its_move() {
+        let mut tt = TranspositionTable::default();
+        tt.new_generation();
+        tt.add(1, NodeType::CutNode, 700.0, 8.0, 3);
+        tt.add(1, NodeType::AllNode, 200.0, 5.0, 0);
+        let h = tt.get(1).unwrap();
+        assert_eq!((h.value, h.depth, h.best_move, h.node_type), (700.0, 8.0, 3, NodeType::CutNode));
+        // A close-depth bound is fresh enough to replace it.
+        tt.add(1, NodeType::AllNode, 400.0, 6.0, 2);
+        let h = tt.get(1).unwrap();
+        assert_eq!((h.value, h.depth, h.best_move, h.node_type), (400.0, 6.0, 2, NodeType::AllNode));
+    }
+
+    #[test]
+    fn exact_result_replaces_even_a_deeper_bound() {
+        let mut tt = TranspositionTable::default();
+        tt.new_generation();
+        tt.add(1, NodeType::CutNode, 700.0, 8.0, 3);
+        tt.add(1, NodeType::PvNode, 500.0, 2.0, 1);
+        let h = tt.get(1).unwrap();
+        assert_eq!((h.value, h.depth, h.best_move, h.node_type), (500.0, 2.0, 1, NodeType::PvNode));
+    }
+
+    #[test]
+    fn collision_and_new_decision_replace_deeper_entries() {
+        let mut tt = TranspositionTable::default();
+        tt.new_generation();
+        let collision = 1 + (1 << TT_BITS);
+        tt.add(1, NodeType::PvNode, 700.0, 8.0, 3);
+        tt.add(collision, NodeType::AllNode, 100.0, 1.0, 0);
+        assert!(tt.get(1).is_none());
+        assert_eq!(tt.get(collision).unwrap().value, 100.0);
+
+        tt.add(1, NodeType::PvNode, 700.0, 8.0, 3);
+        tt.new_generation();
+        assert!(tt.get(1).is_none());
+        tt.add(1, NodeType::AllNode, 200.0, 1.0, 0);
+        assert_eq!(tt.get(1).unwrap().value, 200.0);
     }
 }
 
