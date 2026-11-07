@@ -502,9 +502,20 @@ impl SearchState<'_> {
                 None
             };
 
-            // (the full depth and window: without a reduction, or if the reduced search raised alpha)
+            // A reduced fail high may disappear at full depth. Verify it with a null window
+            // before paying for a wide search. Unlike full PVS this applies only to LMR
+            // re-searches, and only when both the depth and window actually differ. In
+            // particular, the depth-zero probes keep their existing horizon behavior.
             let value = match reduced {
                 Some(v) if v <= alpha => v,
+                Some(_) if lmr_depth(&tune, child.depth) < child.depth && alpha.is_finite() && beta > alpha + NULL_WINDOW => {
+                    let verified = self.search_move(duel, prompt, mv, Node { beta: alpha + NULL_WINDOW, ..child }, MakeOn::Copy)?;
+                    if verified <= alpha || verified >= beta {
+                        verified
+                    } else {
+                        self.search_move(duel, prompt, mv, child, make_on)?
+                    }
+                }
                 _ => self.search_move(duel, prompt, mv, child, make_on)?,
             };
 
