@@ -157,7 +157,9 @@ pub fn root_candidates(m: &Msg, rules: &Heuristic, state: Option<&Snapshot>) -> 
 /// The candidates of a selection of several cards, best first by `order` (the cards' indices,
 /// the preferred first): the first cards, as many as the rules take, then subsets of the first
 /// ROOT_COMBO_CARDS cards by how far they are from the best of their size (at most
-/// ROOT_COMBO_WIDTH).
+/// ROOT_COMBO_WIDTH). For fixed-size selections of several cards, reserve alternatives
+/// for leaving out each of the first set's cards, instead of retaining the same early
+/// cards in every candidate.
 pub fn card_sets(m: &Msg, order: &[usize]) -> Vec<Response> {
     let Msg::SelectCard { min, max, cards, .. } = m else { return vec![] };
     if *max < 1 || cards.is_empty() {
@@ -178,6 +180,27 @@ pub fn card_sets(m: &Msg, order: &[usize]) -> Vec<Response> {
     let mut out: Vec<Response> = sets.into_iter().map(|(_, _, s)| Response::cards(s)).collect();
     if lo > top.len() {
         out.push(Response::cards(order[..lo].to_vec()));
+    }
+    if lo >= 2 && min == max && lo < n {
+        let mut diverse = vec![out[0].clone()];
+        for &excluded in order.iter().take(lo) {
+            let alternative = Response::cards(order.iter().copied().filter(|&i| i != excluded).take(lo).collect());
+            if !diverse.contains(&alternative) {
+                diverse.push(alternative);
+            }
+            if diverse.len() == ROOT_COMBO_WIDTH {
+                break;
+            }
+        }
+        for old in out {
+            if diverse.len() == ROOT_COMBO_WIDTH {
+                break;
+            }
+            if !diverse.contains(&old) {
+                diverse.push(old);
+            }
+        }
+        out = diverse;
     }
     out.truncate(ROOT_COMBO_WIDTH);
     out
@@ -235,4 +258,59 @@ fn sum_selections(m: &Msg, order: &[usize]) -> Vec<Vec<usize>> {
     let (mut out, mut steps) = (Vec::new(), 0);
     dfs(m, order, 0, (*max as usize).max(1), &mut Vec::new(), &mut out, &mut steps);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn selection(n: usize, min: usize, max: usize) -> Msg {
+        serde_json::from_value(serde_json::json!({
+            "type": "SELECT_CARD", "player": 0, "cancelable": 0, "min": min, "max": max,
+            "cards": (0..n).map(|i| serde_json::json!({
+                "code": i + 1, "con": 0, "loc": LOCATION_EXTRA, "seq": i,
+            })).collect::<Vec<_>>()
+        })).unwrap()
+    }
+
+    #[test]
+    fn fixed_sets_can_leave_out_every_initial_card() {
+        let order = [9, 0, 7, 2, 4, 3, 5, 1, 6, 8];
+        let sets = card_sets(&selection(10, 4, 4), &order);
+        assert_eq!(sets.len(), ROOT_COMBO_WIDTH);
+        assert_eq!(sets[0], Response::cards(vec![9, 0, 7, 2]));
+        for &card in &order[..4] {
+            assert!(sets.iter().any(|s| !s.indices.as_ref().unwrap().contains(&(card as i64))));
+        }
+    }
+
+    #[test]
+    fn generated_sets_are_valid_unique_and_bounded() {
+        for n in 2..=10 {
+            for k in 2..=n {
+                let order: Vec<_> = (0..n).rev().collect();
+                let sets = card_sets(&selection(n, k, k), &order);
+                assert!(!sets.is_empty() && sets.len() <= ROOT_COMBO_WIDTH);
+                for (j, set) in sets.iter().enumerate() {
+                    let cards = set.indices.as_ref().unwrap();
+                    assert_eq!(cards.len(), k);
+                    assert!(cards.iter().all(|&i| i >= 0 && i < n as i64));
+                    assert_eq!(cards.iter().collect::<std::collections::HashSet<_>>().len(), k);
+                    assert!(!sets[..j].contains(set));
+                }
+                if k < n {
+                    assert!(sets.iter().any(|s| !s.indices.as_ref().unwrap().contains(&(order[0] as i64))));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn optional_counts_keep_their_original_neighbour_order() {
+        let sets = card_sets(&selection(4, 2, 3), &[0, 1, 2, 3]);
+        assert_eq!(sets, vec![
+            Response::cards(vec![0, 1]), Response::cards(vec![0, 1, 2]),
+            Response::cards(vec![0, 2]), Response::cards(vec![0, 1, 3]), Response::cards(vec![0, 3]),
+        ]);
+    }
 }

@@ -196,6 +196,22 @@ should guide the scope, not veto targeted retries.
 
 ## Reproduction
 
+### Implemented experiment: `search-set-diversity`
+
+For fixed-size selections of at least two cards, retain the original first set,
+then construct the best same-size set excluding each of its cards in turn (up to
+the existing five-set cap). Fill unused slots with the old neighbours. Exclusions
+can draw from beyond the old six-card pool when the required count exceeds six.
+Optional-count selections keep their original enumeration. The set policy still
+ranks the resulting sets, including at the horizon.
+
+Release library tests cover exclusion coverage, legality, uniqueness and variable
+counts. Bench **186418** (base 186381); 3,000-node mean depth **12.97**, zero broken
+lines. In Dogmatika game 174 / decision 250, a candidate preserving Fleurdelis is
+now present and selected at 5,000 nodes (`[1,2,4,9]`, -35,097 LP). This is not the
+WindBot set, and the experiment does not claim to recover that loss. Strength is
+untested.
+
 The records and local helper scripts live in ignored `runs/windbot/`; they are
 not distributed with this document. The analyzer source is tracked at
 `crates/bot/src/bin/bot-analyze.rs`.
