@@ -260,6 +260,7 @@ struct Node {
     depth: f64,
     height: i32,
     pv: bool,
+    resolving_left: u8,
 }
 
 impl Node {
@@ -271,6 +272,13 @@ impl Node {
     /// Whether the main-line horizon extension applies (see `search`).
     fn extends(&self) -> bool {
         self.pv && self.height < MAX_DEPTH
+    }
+
+    /// Finish choices within an effect already resolving, not optional new chain links or
+    /// free actions. Existing card/sum extensions use their original rule and allowance.
+    fn extends_resolution(&self, prompt: &Msg, chain_solving: bool) -> bool {
+        self.depth <= 0.0 && self.extends() && self.resolving_left > 0 && chain_solving
+            && matches!(prompt, Msg::SelectOption { .. } | Msg::SelectYesno { .. } | Msg::SelectEffectyn { .. })
     }
 }
 
@@ -389,7 +397,7 @@ impl SearchState<'_> {
         let mut iteration = Iteration { values: vec![None; root.moves.len()], best: None, aborted: false };
         let mut alpha = f64::NEG_INFINITY;
         for &m in move_order {
-            let child = Node { alpha: if root.exact { f64::NEG_INFINITY } else { alpha }, beta: f64::INFINITY, depth: (depth - 1) as f64, height: 1, pv: m == move_order[0] };
+            let child = Node { alpha: if root.exact { f64::NEG_INFINITY } else { alpha }, beta: f64::INFINITY, depth: (depth - 1) as f64, height: 1, pv: m == move_order[0], resolving_left: RESOLVING_EXTENSION_LIMIT };
             let nodes_before = self.tables.nodes;
             let result = self.search_move(&mut root.duel, root.prompt, &root.moves[m], child, MakeOn::Copy);
             time.root_nodes[m] += self.tables.nodes - nodes_before;
@@ -407,16 +415,18 @@ impl SearchState<'_> {
 
     /// The value of the decision `prompt` for its player (negamax), searched `node.depth` plies deep.
     fn search(&mut self, duel: &mut Duel, prompt: &Msg, node: Node) -> Result<f64, Stop> {
-        let Node { mut alpha, mut beta, depth, height, pv } = node;
+        let Node { mut alpha, mut beta, depth, height, pv, resolving_left } = node;
         let us = prompt.player().unwrap_or(0);
         // (the main-line horizon extension: on the main line a card selection or sum, a decision
         // inside a move, is searched one ply deep at the horizon too, so that the search finishes
         // the move, not the rules; SPRT at 10+0.1 H1, +25.4 +/- 16.4 at 890 games, 2026-10-19)
         let extended = depth <= 0.0;
-        if extended && !(node.extends() && inside_move(prompt)) {
+        let resolving_extension = node.extends_resolution(prompt, duel.core.chain_solving);
+        if extended && !(node.extends() && inside_move(prompt) || resolving_extension) {
             return Ok(evaluate_at(duel, us, Some(prompt)));
         }
         let depth = if extended { 1.0 } else { depth };
+        let resolving_left = resolving_left - u8::from(resolving_extension);
 
         // (moves are indices into the rules' order: the hash table keeps one, the history reorders them)
         let card_order = self.card_order(duel, prompt);
@@ -435,7 +445,11 @@ impl SearchState<'_> {
         }
 
         // transposition table: update alpha, beta or return immediately
-        let key = hash_key(duel, prompt);
+        // The extra allowance is path-dependent. Keep its results separate from a search
+        // with a different allowance, and a resolving extension separate from real depth 1.
+        let key = hash_key(duel, prompt)
+            ^ ((RESOLVING_EXTENSION_LIMIT - resolving_left) as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+            ^ if resolving_extension { 0xd1b5_4a32_d192_ed03 } else { 0 };
         let hash_result = self.tables.hash_table.get(key);
         let (mut tt_move, mut tt_entry) = (None, TtEntry::Missing);
         let nodes_before = self.tables.nodes;
@@ -486,7 +500,7 @@ impl SearchState<'_> {
             }
 
             let make_on = if i == move_order.len() - 1 { MakeOn::InPlace } else { MakeOn::Copy };
-            let child = Node { alpha, beta, depth: depth - 1.0, height: height + 1, pv: pv && i == 0 };
+            let child = Node { alpha, beta, depth: depth - 1.0, height: height + 1, pv: pv && i == 0, resolving_left };
 
             // late move reduction: a late move, unlikely the best by the move ordering, searched
             // `lmr_reduction` plies less with a null window (it only has to show that it does not
@@ -697,4 +711,27 @@ pub fn panic_messages_once() {
             hook(info);
         }
     }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolution_extension_is_bounded_and_main_line_only() {
+        let prompt = Msg::SelectOption { player: 0, options: vec![1, 2] };
+        let node = Node { alpha: -100.0, beta: 100.0, depth: 0.0, height: 10, pv: true, resolving_left: 2 };
+        assert!(node.extends_resolution(&prompt, true));
+        assert!(!node.extends_resolution(&prompt, false));
+        assert!(!Node { resolving_left: 0, ..node }.extends_resolution(&prompt, true));
+        assert!(!Node { pv: false, ..node }.extends_resolution(&prompt, true));
+        assert!(!Node { height: MAX_DEPTH, ..node }.extends_resolution(&prompt, true));
+        assert!(!Node { depth: 1.0, ..node }.extends_resolution(&prompt, true));
+        let chain: Msg = serde_json::from_value(serde_json::json!({
+            "type": "SELECT_CHAIN", "player": 0, "forced": 0, "chains": [],
+        })).unwrap();
+        assert!(!node.extends_resolution(&chain, true));
+        // Negamax changes the window, not the extension allowance.
+        assert_eq!(node.negated().resolving_left, node.resolving_left);
+    }
 }

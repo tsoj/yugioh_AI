@@ -196,6 +196,23 @@ should guide the scope, not veto targeted retries.
 
 ## Reproduction
 
+### Implemented experiment: `search-resolving-horizon`
+
+At a main-line leaf, search an option or yes/no decision during `chain_solving`
+one ply deeper, with at most two such extra decision plies per line. This does not
+replenish the allowance for a new effect, extend new chain response windows, or
+change the existing card/sum extension. Same-player and opposite-player transitions
+carry the same allowance. The TT key includes the allowance consumed and whether
+the node was extended by this rule, separating these values from ordinary depth-1
+search results.
+
+This is deliberately narrower than the historical action-under-way/whole-stack
+extension. It tests resolving choices only, not all costs, material selections,
+or combo setup. Release library tests pass, including the main-line, horizon,
+height, resolving-state and allowance gates. Bench **186030** (base 186381);
+3,000-node mean depth **12.98**, zero broken lines. The Exosister diagnostic at
+decision 87 still prefers passing at 5,000 nodes. No strength gain is claimed.
+
 The records and local helper scripts live in ignored `runs/windbot/`; they are
 not distributed with this document. The analyzer source is tracked at
 `crates/bot/src/bin/bot-analyze.rs`.
