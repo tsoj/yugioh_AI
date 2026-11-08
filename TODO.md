@@ -20,6 +20,12 @@ decisions (alphabeta activated Zoodiac Whiptail's attach effect, negated every t
 one turn, then lost on time): fixed by capping the search agent's own activations per turn (1c731b1;
 the rerun: longest game 941 decisions).
 
+# some idea
+
+- nodes searched: how difficult it is to refute move
+- safe nodes search in TT
+- if nodes change more than expected, maybe search deeper?
+
 ## Next (user's order, 2026-10-16)
 
 1. [x] Different card guesses per iteration (below): `resample` stopped near zero (2026-10-16).
