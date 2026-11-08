@@ -154,6 +154,20 @@ pub fn root_candidates(m: &Msg, rules: &Heuristic, state: Option<&Snapshot>) -> 
     out
 }
 
+/// In one-card selections entirely from our main deck, try distinct codes before repeated
+/// copies. Keep the policy's first instance of each code and all duplicates as fallbacks:
+/// this is a width-allocation preference, not a claim that copies have identical state.
+/// The first choice stays first, so horizon answers do not change.
+pub(super) fn diversify_deck_cards(m: &Msg, order: &mut Vec<usize>) {
+    let Msg::SelectCard { player, min: 1, max: 1, cards, .. } = m else { return };
+    if !cards.iter().all(|c| c.con == *player && c.loc == LOCATION_DECK && c.code != 0) {
+        return;
+    }
+    let mut seen = std::collections::HashSet::new();
+    let (first, copies): (Vec<_>, Vec<_>) = order.iter().copied().partition(|&i| seen.insert(cards[i].code));
+    *order = first.into_iter().chain(copies).collect();
+}
+
 /// The candidates of a selection of several cards, best first by `order` (the cards' indices,
 /// the preferred first): the first cards, as many as the rules take, then subsets of the first
 /// ROOT_COMBO_CARDS cards by how far they are from the best of their size (at most
@@ -235,4 +249,35 @@ fn sum_selections(m: &Msg, order: &[usize]) -> Vec<Vec<usize>> {
     let (mut out, mut steps) = (Vec::new(), 0);
     dfs(m, order, 0, (*max as usize).max(1), &mut Vec::new(), &mut out, &mut steps);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn selection(codes: &[u32], location: u32, count: u32) -> Msg {
+        serde_json::from_value(serde_json::json!({
+            "type": "SELECT_CARD", "player": 0, "cancelable": 0, "min": count, "max": count,
+            "cards": codes.iter().enumerate().map(|(i, code)| serde_json::json!({
+                "code": code, "con": 0, "loc": location, "seq": i,
+            })).collect::<Vec<_>>()
+        })).unwrap()
+    }
+
+    #[test]
+    fn deck_diversity_preserves_first_instances_and_fallbacks() {
+        let prompt = selection(&[11, 11, 22, 22, 33, 44], LOCATION_DECK, 1);
+        let mut order = vec![1, 0, 3, 2, 4, 5];
+        diversify_deck_cards(&prompt, &mut order);
+        assert_eq!(order, vec![1, 3, 4, 5, 0, 2]);
+    }
+
+    #[test]
+    fn diversity_does_not_merge_field_cards_or_material_sets() {
+        for prompt in [selection(&[11, 11, 22], LOCATION_MZONE, 1), selection(&[11, 11, 22], LOCATION_DECK, 2), selection(&[0, 0, 22], LOCATION_DECK, 1)] {
+            let mut order = vec![0, 1, 2];
+            diversify_deck_cards(&prompt, &mut order);
+            assert_eq!(order, vec![0, 1, 2]);
+        }
+    }
 }

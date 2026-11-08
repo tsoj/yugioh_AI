@@ -196,6 +196,19 @@ should guide the scope, not veto targeted retries.
 
 ## Reproduction
 
+### Implemented experiment: `search-card-diversity`
+
+In one-card selections entirely from the deciding player's main deck, the policy's
+first instance of each nonzero code precedes repeated copies. All instances remain
+in the list; root width 5 and tree width 3 are unchanged. The first policy choice
+and hence the horizon answer remain unchanged. Other locations and mixed-location
+selections retain their order.
+
+Release library tests pass. Bench **180640** (base 186381); 3,000-node mean depth
+**13.02** (base 12.97), zero broken lines. The ABC game 14 / decision 31 probe now
+selects Union Driver at **+3,962 LP**, at the default width and 5,000 nodes.
+Strength remains untested.
+
 The records and local helper scripts live in ignored `runs/windbot/`; they are
 not distributed with this document. The analyzer source is tracked at
 `crates/bot/src/bin/bot-analyze.rs`.

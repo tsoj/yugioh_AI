@@ -19,7 +19,7 @@ use ygo_core::duel::Duel;
 use super::cardpolicy::{card_policy, card_policy_applies, selection_cards, set_policy, set_policy_applies};
 use super::evaluate::evaluate_at;
 use super::history::HistoryTable;
-use super::movegen::{candidates, is_searched, root_candidates};
+use super::movegen::{candidates, diversify_deck_cards, is_searched, root_candidates};
 use super::movepick::{KeyContext, move_key, ordered};
 use super::params::*;
 use super::stats::{Extension, NodeStats, NodeSummary, TtEntry};
@@ -317,10 +317,11 @@ impl SearchState<'_> {
         let (Msg::SelectCard { cards, player, .. } | Msg::SelectSum { cards, player, .. }) = m else { return None };
         let rules = &mut self.policies[*player as usize];
         let (order, hint) = (rules.card_order(cards), rules.hint.take());
-        let order = match card_policy() {
+        let mut order = match card_policy() {
             Some(policy) if card_policy_applies(m) => policy.order(duel, m, hint, &order),
             _ => order,
         };
+        diversify_deck_cards(m, &mut order);
         Some(CardOrder { order, hint })
     }
 
