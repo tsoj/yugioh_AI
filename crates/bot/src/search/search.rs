@@ -23,7 +23,7 @@ use super::movegen::{candidates, is_searched, root_candidates};
 use super::movepick::{KeyContext, move_key, ordered};
 use super::params::*;
 use super::stats::{Extension, NodeStats, NodeSummary, TtEntry};
-use super::tt::{NodeType, TranspositionTable, hash_key};
+use super::tt::{MoveEffort, NodeType, TranspositionTable, hash_key};
 use ygo_arbiter::actions::{Response, encode};
 use ygo_arbiter::game::run_until_prompt;
 use crate::heuristic::Heuristic;
@@ -68,6 +68,7 @@ impl Growth {
 /// The search's tables, kept from one decision to the next (a bot holds one).
 pub struct AlphaBeta {
     hash_table: TranspositionTable,
+    move_effort: MoveEffort,
     history_table: HistoryTable,
     pub nodes: u64,
     /// transposition table lookups, and those that found the position
@@ -101,6 +102,7 @@ impl Default for AlphaBeta {
     fn default() -> Self {
         AlphaBeta {
             hash_table: TranspositionTable::default(),
+            move_effort: MoveEffort::default(),
             history_table: HistoryTable::default(),
             nodes: 0,
             tt_probes: 0,
@@ -148,6 +150,7 @@ impl AlphaBeta {
     /// The tables for a new decision.
     pub fn prepare(&mut self) {
         self.hash_table.new_generation();
+        self.move_effort.clear();
         self.history_table.decay(self.tune.hist_decay);
     }
 
@@ -463,7 +466,9 @@ impl SearchState<'_> {
 
         let ctx = key_context(duel, prompt, card_order.as_ref().and_then(|c| c.hint));
         let history_keys: Vec<usize> = moves.iter().map(|m| move_key(prompt, m, &ctx)).collect();
-        let move_order = self.move_order(tt_move, &history_keys);
+        let effort = self.tables.move_effort.get(key).filter(|e| e.len() == moves.len()).map(<[u32]>::to_vec);
+        let move_order = self.move_order(tt_move, effort.as_deref(), &history_keys);
+        let mut move_nodes = vec![0u32; moves.len()];
 
         let mut node_type = NodeType::AllNode;
         let (mut best_value, mut best_move) = (f64::NEG_INFINITY, move_order[0]);
@@ -486,6 +491,7 @@ impl SearchState<'_> {
             }
 
             let make_on = if i == move_order.len() - 1 { MakeOn::InPlace } else { MakeOn::Copy };
+            let nodes_before_move = self.tables.nodes;
             let child = Node { alpha, beta, depth: depth - 1.0, height: height + 1, pv: pv && i == 0 };
 
             // late move reduction: a late move, unlikely the best by the move ordering, searched
@@ -507,6 +513,7 @@ impl SearchState<'_> {
                 Some(v) if v <= alpha => v,
                 _ => self.search_move(duel, prompt, mv, child, make_on)?,
             };
+            move_nodes[m] = (self.tables.nodes - nodes_before_move).min(u32::MAX as u64) as u32;
 
             if value > best_value {
                 (best_value, best_move) = (value, m);
@@ -537,14 +544,23 @@ impl SearchState<'_> {
             // (not a win or loss: those depend on the height)
             self.tables.hash_table.add(key, node_type, best_value, depth, best_move);
         }
+        self.tables.move_effort.set(key, move_nodes);
         Ok(best_value)
     }
 
-    /// Move ordering: the TT move first, then by history (the rules' order among equals).
-    fn move_order(&self, tt_move: Option<usize>, history_keys: &[usize]) -> Vec<usize> {
+    /// Move ordering: the TT move first, then by the nodes each move took in the position's last
+    /// search (`effort`: most first; the moves that took longest to refute are the likeliest to be
+    /// good), then by history (the rules' order among equals).
+    fn move_order(&self, tt_move: Option<usize>, effort: Option<&[u32]>, history_keys: &[usize]) -> Vec<usize> {
         let history = |k: usize| self.tables.history_table.get(history_keys[k]);
+        let nodes = |k: usize| effort.map_or(0, |e| e[k]);
         let mut order: Vec<usize> = (0..history_keys.len()).collect();
-        order.sort_by(|&a, &b| (Some(a) != tt_move).cmp(&(Some(b) != tt_move)).then_with(|| history(b).partial_cmp(&history(a)).unwrap_or(Ordering::Equal)));
+        order.sort_by(|&a, &b| {
+            (Some(a) != tt_move)
+                .cmp(&(Some(b) != tt_move))
+                .then_with(|| nodes(b).cmp(&nodes(a)))
+                .then_with(|| history(b).partial_cmp(&history(a)).unwrap_or(Ordering::Equal))
+        });
         order
     }
 
