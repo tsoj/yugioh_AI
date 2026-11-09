@@ -144,12 +144,9 @@ pub fn settable_as(d: &mut Duel, li: (u8, u32), sumtype: u32, trib_locs: &[(u8, 
     .unwrap_or_default()
 }
 
-/// The parsed messages of the last process call, with the arbiter's confirmations of selected
-/// hidden cards (`ygo_arbiter::reveal::annotate`; as the arbiter's games have them).
+/// The parsed messages of the last process call.
 pub fn messages(d: &mut Duel) -> Result<Vec<Msg>, ParseError> {
-    let mut msgs: Vec<Msg> = split_messages(d.ocg_get_message()).into_iter().map(parse).collect::<Result<_, _>>()?;
-    ygo_arbiter::reveal::annotate(d, &mut msgs);
-    Ok(msgs)
+    split_messages(d.ocg_get_message()).into_iter().map(parse).collect()
 }
 
 /// A duel of the belief replay: the engine's duel, stopping where the C++ core stops (fine

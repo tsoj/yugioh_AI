@@ -112,10 +112,18 @@ from your hand into the Deck". We think that the player does not reveal the card
 but we did not find an official ruling. The change shows the card to the opponent in all cases.
 **This is a possible leak.**
 
-Status: not corrected in the matches. Later correction (2026-11-09, after the matches): our arbiter
-now uses a table that tells for each selection if it has a requirement (ygopro-core-rust
-`ygo-arbiter/data/reveals.tsv`, made with `ygo-reveal-audit`). The arbiter shows the card only for a
-selection with a requirement. The audit found these free costs that the change showed: Plaguespreader
-Zombie, Edge Imp Sabres, Reeze, Whirlwind of Gusto and Card Trader. Our EDOPro client filters the
-messages with the arbiter's filter, which now hides these cards. The patch in `filter.py` still shows
-them.
+Status: not corrected in the matches.
+
+Later correction (2026-11-09, after the matches): our arbiter does not have this rule any more. It
+adds no reveals of its own. The card script shows a selected card that has a requirement
+(`ConfirmCards`), and all other cards stay hidden. EDOPro works the same way. Thus the arbiter now
+hides the free costs that the change showed: Plaguespreader Zombie, Edge Imp Sabres, Reeze, Whirlwind
+of Gusto and Card Trader.
+
+We also examined if the card scripts show all cards that have a requirement. A test with all
+official cards (`ygo-reveal-audit`) and a search of the scripts found 14 scripts that do not show
+such a card, for example T.A.D.P.O.L.E. (search) and Dark Guardian (cost). We corrected these
+scripts (`lua_fixes/` and the Rust cards).
+
+Our EDOPro client filters the messages with the arbiter's filter. A client that is built on this
+change hides the free costs. The patch in `filter.py` still shows them.
