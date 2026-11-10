@@ -3,7 +3,10 @@
 //! the game number its line), in; a row per labeled decision with the feature sets FEATURES out
 //! (`bot::datarow`).
 //!
-//!   bot-refeature GAMES.jsonl OUT.jsonl --features SET,SET... [JOBS]
+//!   bot-refeature GAMES.jsonl OUT.jsonl --features SET,SET... [JOBS] [--unlabeled]
+//!
+//! --unlabeled: a game without labels (a record without the bots' searches) gets a row at each
+//! decision the bot would search, with the value null (`datarow::replay_rows`).
 
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -18,7 +21,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let usage = || -> ! {
-        eprintln!("usage: bot-refeature GAMES.jsonl OUT.jsonl --features SET,SET... [JOBS]  (sets: {})", FEATURE_SETS.join(", "));
+        eprintln!("usage: bot-refeature GAMES.jsonl OUT.jsonl --features SET,SET... [JOBS] [--unlabeled]  (sets: {})", FEATURE_SETS.join(", "));
         std::process::exit(2)
     };
     if a.len() < 5 || a[3] != "--features" {
@@ -29,7 +32,8 @@ fn main() {
         eprintln!("unknown feature set {s}");
         usage();
     }
-    let jobs: usize = a.get(5).map_or(8, |s| s.parse().unwrap_or_else(|_| usage()));
+    let unlabeled = a.iter().any(|s| s == "--unlabeled");
+    let jobs: usize = a.get(5).filter(|s| *s != "--unlabeled").map_or(8, |s| s.parse().unwrap_or_else(|_| usage()));
     init(None).unwrap();
     // (the games are read as the workers go, not all at once: a large file would not fit in memory)
     let games = Arc::new(Mutex::new(std::io::BufReader::new(std::fs::File::open(&a[1]).expect("games")).lines().enumerate()));
@@ -48,7 +52,7 @@ fn main() {
                         GameData { game: i, labels: record.labels.clone(), record, viewer_responses: true }
                     });
                     let g = &g;
-                    match std::panic::catch_unwind(|| replay_rows(g, &sets)) {
+                    match std::panic::catch_unwind(|| replay_rows(g, &sets, unlabeled)) {
                         Ok(Ok(rows)) => {
                             let mut w = out.lock().unwrap();
                             for r in rows {
