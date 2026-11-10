@@ -500,7 +500,8 @@ pub fn card_list(d: &mut Duel, mover: u32) -> Vec<CardEntry> {
 /// features of the view of the player to move, z = (x - mu) / scale, hidden layers relu(w h + b),
 /// output w2 . h + b2 for the mover (negated for the other player). Its value is in LP: the
 /// network's output times its `lp_anchor`'s factor (see `LpAnchor`; without one, in the network's
-/// own points, with a warning). Nets on other feature sets are not loaded (the other evaluations
+/// own points, with a warning), minus the bias of the turn's stage if the model has a
+/// `stage_calibration` (see `StageCalibration`). Nets on other feature sets are not loaded (the other evaluations
 /// were removed on 2026-10-18: the hand-written one, linear and antisymmetric models, the `mover`,
 /// `mover3`, `mover4` and `rich` feature sets; datagen still writes those features).
 #[derive(serde::Deserialize, Clone)]
@@ -528,6 +529,8 @@ pub struct LearnedEval {
     layers: Vec<Layer>,
     #[serde(default)]
     pub lp_anchor: Option<LpAnchor>,
+    #[serde(default)]
+    pub stage_calibration: Option<StageCalibration>,
     /// (the card term, if the net has one: its 3 inputs follow the normalized features)
     #[serde(default)]
     cards: Option<CardTerm>,
@@ -552,6 +555,35 @@ pub struct LpAnchor {
     pub data: String,
     pub weights_hash: String,
 }
+
+/// The evaluation's bias by the stage of the turn (bot-eval-calib). A stage is a phase group
+/// (`MOVER_PHASES`) and whether the mover is the turn player (`stage`). `bias[group][other]`: the
+/// mover's value (in LP) at which the mover wins half of its games (`other`: 0 for the turn player,
+/// 1 for the other player); an evaluation without bias has 0 at each stage. The evaluation subtracts
+/// it, so that the search compares positions of different stages on one scale. Measured by a
+/// logistic fit of the results on the values (`slope`: the logit of a win per 1000 LP, one for all
+/// stages) at the `positions` searched decisions of the `games` games with a winner of `data`, on
+/// the values of the network with the hash `weights_hash` and its LP anchor (so: measure the anchor
+/// first).
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
+pub struct StageCalibration {
+    pub bias: [[f64; 2]; MOVER_PHASES.len()],
+    pub slope: f64,
+    pub positions: u64,
+    pub games: u64,
+    pub data: String,
+    pub weights_hash: String,
+}
+
+/// The stage of the turn for `mover` (`StageCalibration`): the phase's group and 0 for the turn
+/// player, 1 for the other player. None outside the phases (before the first turn).
+pub fn stage(d: &Duel, mover: u32) -> Option<(usize, usize)> {
+    let group = MOVER_PHASES.iter().position(|g| g.contains(&(d.infos.phase as u32)))?;
+    Some((group, (d.infos.turn_player as u32 != mover) as usize))
+}
+
+/// The names of the phase groups (`stage`).
+pub const STAGE_PHASES: [&str; MOVER_PHASES.len()] = ["Draw", "Standby", "Main 1", "Battle", "Main 2", "End"];
 
 /// (`LpAnchor`: the positions measured have both players at this many LP or more)
 pub const LP_ANCHOR_MIN_LP: f64 = 2000.0;
@@ -596,6 +628,13 @@ impl LearnedEval {
                 e.weights_hash()
             ),
             Some(a) => e.lp_factor = a.factor,
+        }
+        if let Some(c) = e.stage_calibration.as_ref().filter(|c| c.weights_hash != e.weights_hash()) {
+            panic!(
+                "eval {name}: the stage calibration was measured on other weights (hash {} vs {}): run bot-eval-calib MODEL RECORDS --write again",
+                c.weights_hash,
+                e.weights_hash()
+            );
         }
         e
     }
@@ -704,9 +743,16 @@ impl LearnedEval {
     /// opponent.
     pub fn value(&self, d: &mut Duel, me: u32, prompt: Option<&Msg>) -> f64 {
         let mover = prompt.and_then(|m| m.player()).unwrap_or(me);
+        let bias = self.stage_calibration.as_ref().zip(stage(d, mover)).map_or(0.0, |(c, (group, other))| c.bias[group][other]);
+        let v = self.mover_value_uncalibrated(d, mover, prompt) - bias;
+        if mover == me { v } else { -v }
+    }
+
+    /// The position's value for `mover`, the player who decides it (in LP), without the stage
+    /// calibration: what bot-eval-calib measures.
+    pub fn mover_value_uncalibrated(&self, d: &mut Duel, mover: u32, prompt: Option<&Msg>) -> f64 {
         let cards = self.card_inputs(d, mover);
-        let v = self.mover_output(&mover_features2(d, mover, prompt), &cards);
-        self.lp_factor * if mover == me { v } else { -v }
+        self.lp_factor * self.mover_output(&mover_features2(d, mover, prompt), &cards)
     }
 
     /// The trained evaluation in use (read once): $BOT_EVAL's JSON file if set, the built-in
