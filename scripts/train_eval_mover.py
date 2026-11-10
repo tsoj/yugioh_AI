@@ -5,7 +5,8 @@ seat order, as books/pairs500x20.jsonl.zst, or explicit deck pairs: `pair`, `ase
 Mover-view eval with a deck-pair term (experiment).
 
 logit P(mover wins) = sgn * a[pair, seat order] + v(x); the search value's target is sigmoid(v(x))
-alone (the search knows nothing of deck strength). a is dropped at inference.
+alone (the search knows nothing of deck strength). a is dropped at inference. Rows without a search
+value (`value` NaN: bot-refeature --unlabeled) count for the result only.
 
 With --cards (scripts/eval_cards/cards_to_npz.py, the rows' card lists) and --effects
 (scripts/eval_cards/embed_effects.py) the card term: per bucket b (hand, GY, field) a card's
@@ -30,6 +31,7 @@ ap.add_argument("--hidden", type=int, default=32)
 ap.add_argument("--layers", type=int, default=1, help="hidden layers")
 ap.add_argument("--dims", help="the hidden layers' widths, comma list (e.g. 8,32), instead of --hidden and --layers")
 ap.add_argument("--lam", type=float, default=0.5)
+ap.add_argument("--host-x", action="store_true", help="the features in the host's memory, a batch at a time on the device (data larger than the device's memory)")
 ap.add_argument("--epochs", type=int, default=12)
 ap.add_argument("--lr", type=float, default=2e-3)
 ap.add_argument("--wd", type=float, default=0.0)
@@ -82,7 +84,7 @@ sgn = np.where(player == 0, 1.0, -1.0).astype(np.float32)
 
 def fit_k(v, r):
     # (no wins and losses: +/-100000 before the values were in LP, +/-1e7 since)
-    keep = (r != 0) & (np.abs(v) < 90000)
+    keep = (r != 0) & (np.abs(v) < 90000)  # (NaN, no search value: out)
     # (on the device: millions of rows times 400 scales)
     v = torch.tensor(v[keep], dtype=torch.float64, device=dev)
     y = torch.tensor((r[keep] + 1) / 2, dtype=torch.float64, device=dev)
@@ -96,7 +98,8 @@ def fit_k(v, r):
 # (a merged npz has `src` per row: each data set's search values in its own scale; the export
 # uses the first set's, so put the newest data first)
 src = d["src"] if "src" in d.files else np.zeros(len(X), np.int64)
-Ks = {s_: fit_k(value[src == s_], result[src == s_]) for s_ in np.unique(src)}
+hasv = np.isfinite(value)
+Ks = {s_: fit_k(value[src == s_], result[src == s_]) for s_ in np.unique(src[hasv])}
 K, Kr = Ks[src[0]], np.array([Ks.get(i, 1.0) for i in range(src.max() + 1)])[src]
 
 rng = np.random.default_rng(0)
@@ -129,17 +132,25 @@ if min_wins or args.balance_wins:
         W = np.where(won == 2, 1.0, lo / np.maximum(np.where(won == 0, w0, w1), 1)).astype(np.float32)
         print(f"--balance-wins: training rows' weight {W[is_tr].sum():.0f} of {is_tr.sum()}")
 # (normalized on the device in chunks: no float copies of X in memory)
-Z = torch.tensor(X, device=dev); TR = torch.tensor(is_tr, device=dev)
-s1 = torch.zeros(X.shape[1], dtype=torch.float64, device=dev); s2 = torch.zeros_like(s1)
+# (the held-out pairs' rows as they are, for the LP anchor: Z below is X normalized in place with --host-x)
+X_hp = X[is_hp]
+zdev = "cpu" if args.host_x else dev
+Z = torch.from_numpy(X) if args.host_x else torch.tensor(X, device=dev)
+TR = torch.tensor(is_tr, device=zdev)
+s1 = torch.zeros(X.shape[1], dtype=torch.float64, device=zdev); s2 = torch.zeros_like(s1)
 for i in range(0, len(X), 1 << 20):
     z = Z[i:i + (1 << 20)][TR[i:i + (1 << 20)]].double()
     s1 += z.sum(0); s2 += (z * z).sum(0)
 n_tr = int(is_tr.sum()); m_ = s1 / n_tr
 mu, sd = m_.cpu().numpy().astype(np.float32), ((s2 / n_tr - m_ * m_).clamp_min(0).sqrt().cpu().numpy() + 1e-6).astype(np.float32)
-Z.sub_(torch.tensor(mu, device=dev)).div_(torch.tensor(sd, device=dev))
+Z.sub_(torch.tensor(mu, device=zdev)).div_(torch.tensor(sd, device=zdev))
+
+def z_of(idx):
+    return Z[idx.cpu()].to(dev, non_blocking=True) if args.host_x else Z[idx]
 del TR
 Yr = torch.tensor((result + 1) / 2, dtype=torch.float32, device=dev)
-Yv = torch.tensor(1 / (1 + np.exp(-np.clip(value / Kr, -50, 50))), dtype=torch.float32, device=dev)
+Yv = torch.tensor(1 / (1 + np.exp(-np.clip(np.nan_to_num(value) / Kr, -50, 50))), dtype=torch.float32, device=dev)
+HV = torch.tensor(hasv, device=dev)
 PS = torch.tensor(ps, device=dev); SG = torch.tensor(sgn, device=dev)
 dec = torch.tensor(result != 0, device=dev)
 Wt = torch.tensor(W, device=dev)
@@ -246,10 +257,10 @@ bce = torch.nn.functional.binary_cross_entropy_with_logits
 
 def v_of(idx):
     if card_params and args.card_out:
-        return net(Z[idx]).squeeze(-1) + card_x(idx).sum(1)
+        return net(z_of(idx)).squeeze(-1) + card_x(idx).sum(1)
     if card_params:
-        return net(torch.cat([Z[idx], card_x(idx)], 1)).squeeze(-1)
-    return net(Z[idx]).squeeze(-1)
+        return net(torch.cat([z_of(idx), card_x(idx)], 1)).squeeze(-1)
+    return net(z_of(idx)).squeeze(-1)
 
 def loss_of(idx, use_a=True, weighted=False, v=None):
     v = v_of(idx) if v is None else v
@@ -258,10 +269,12 @@ def loss_of(idx, use_a=True, weighted=False, v=None):
     if weighted:
         w = Wt[idx]
         l_res = (bce(lr_[m], Yr[idx][m], reduction="none") * w[m]).sum() / w[m].sum().clamp_min(1e-9) if m.any() else torch.zeros((), device=dev)
-        l_val = (bce(v, Yv[idx], reduction="none") * w).sum() / w.sum().clamp_min(1e-9)
+        wv = w * HV[idx]
+        l_val = (bce(v, Yv[idx], reduction="none") * wv).sum() / wv.sum().clamp_min(1e-9)
         return l_res, l_val
     l_res = bce(lr_[m], Yr[idx][m]) if m.any() else torch.zeros((), device=dev)
-    l_val = bce(v, Yv[idx])
+    hv = HV[idx]
+    l_val = bce(v[hv], Yv[idx][hv]) if hv.any() else torch.zeros((), device=dev)
     return l_res, l_val
 
 def ranking(vals, mask):
@@ -341,7 +354,7 @@ for ep in range(args.epochs):
         b = perm[i:i + B]
         if args.card_decorr:
             cs = card_x(b).sum(1)
-            l_res, l_val = loss_of(b, weighted=args.balance_wins, v=net(Z[b]).squeeze(-1) + cs)
+            l_res, l_val = loss_of(b, weighted=args.balance_wins, v=net(z_of(b)).squeeze(-1) + cs)
             t = SG[b] * a.detach()[PS[b]]
             cs_, t_ = cs - cs.mean(), t - t.mean()
             corr2 = (cs_ * t_).mean() ** 2 / ((cs_ ** 2).mean() * (t_ ** 2).mean()).clamp_min(1e-12)
@@ -407,7 +420,7 @@ if args.output:
                 if args.card_out:
                     cx = cx * K
         with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
-            for j, row in enumerate(d["x"][hp][:, :n_in]):
+            for j, row in enumerate(X_hp[:, :n_in]):
                 r = {FEATURE_SETS.get(n_in, "mover"): row.astype(float).tolist()}
                 if card_params:
                     r["card_x"] = cx[j].astype(float).tolist()
