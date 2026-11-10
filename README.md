@@ -122,7 +122,7 @@ during a run does not change it.
 
 The bot's models are in `crates/bot/models/` and compiled in. To make them again:
 
-- The evaluation `eval_mover2_sprt2r23os_cardstable_64.json`: SPRT records →
+- The evaluation `eval_mover2_sprt2r23ob_cardstable_64.json`: SPRT records →
   `scripts/collect_sprt_games.py` → `bot-refeature --features mover2` →
   `scripts/sprt_games_to_npz.py` (with rounds 2 and 3: `bot-datagen` →
   `scripts/eval_mover_features.py`, in `runs/data/rounds23/`). The card term: the same games →
