@@ -710,7 +710,7 @@ impl LearnedEval {
     }
 
     /// The trained evaluation in use (read once): $BOT_EVAL's JSON file if set, the built-in
-    /// models/eval_mover2_sprt2r23os_cardstable_64.json otherwise.
+    /// models/eval_mover2_sprt2r23obr_cardstable_64.json otherwise.
     pub fn from_env() -> &'static LearnedEval {
         static E: std::sync::OnceLock<LearnedEval> = std::sync::OnceLock::new();
         E.get_or_init(|| match std::env::var("BOT_EVAL").ok().filter(|p| !p.is_empty()) {
@@ -718,7 +718,7 @@ impl LearnedEval {
                 let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("BOT_EVAL {path}: {e}"));
                 LearnedEval::from_json(&text, &path)
             }
-            None => LearnedEval::from_json(DEFAULT_EVAL, "models/eval_mover2_sprt2r23os_cardstable_64.json"),
+            None => LearnedEval::from_json(DEFAULT_EVAL, "models/eval_mover2_sprt2r23obr_cardstable_64.json"),
         })
     }
 }
@@ -731,7 +731,7 @@ impl LearnedEval {
 /// 2026-10-24, 184522 games, 28.1M positions, runs/data/sprt_net2/; card lists:
 /// scripts/eval_cards/sprt_cards_to_npz.py) and on rounds 2 and 3 (no card lists), without the deck
 /// pairs where one deck won every game (its predecessors and their SPRTs: TODO.md, "Evaluation").
-const DEFAULT_EVAL: &str = include_str!("../../models/eval_mover2_sprt2r23os_cardstable_64.json");
+const DEFAULT_EVAL: &str = include_str!("../../models/eval_mover2_sprt2r23obr_cardstable_64.json");
 
 /// The position's value for `me` (in LP): the trained evaluation (`LearnedEval::from_env`).
 pub fn evaluate(d: &mut Duel, me: u32) -> f64 {

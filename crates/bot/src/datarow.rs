@@ -18,7 +18,8 @@ use ygo_arbiter::actions::encode;
 use ygo_arbiter::game::{GameRecord, run_until_prompt};
 use ygo_arbiter::messages::Msg;
 use ygo_arbiter::observe::to_core_response;
-use crate::search::{card_list, eval_features, evaluate_at, mover_features, mover_features2, mover_features3, mover_features4, rich_features};
+use crate::heuristic::Heuristic;
+use crate::search::{root_candidates, card_list, eval_features, evaluate_at, mover_features, mover_features2, mover_features3, mover_features4, rich_features};
 use ygo_arbiter::state::parse_location_query;
 
 /// The feature sets a row can carry:
@@ -133,14 +134,20 @@ pub fn set_results(rows: &mut [Value], record: &GameRecord) {
 }
 
 /// The rows of a game: its record replayed (no search), features `sets` at each labeled decision.
-pub fn replay_rows(g: &GameData, sets: &[String]) -> Result<Vec<Value>, String> {
-    let labels: HashMap<usize, &Label> = g.labels.iter().map(|l| (l.decision, l)).collect();
+/// With `unlabeled`, a game without labels gets a row at each decision the bot would search (more
+/// than one root candidate), with no search value (`value` null, `depth` 0): its result only.
+pub fn replay_rows(g: &GameData, sets: &[String], unlabeled: bool) -> Result<Vec<Value>, String> {
+    let mut labels: HashMap<usize, Label> = g.labels.iter().map(|l| (l.decision, l.clone())).collect();
+    let unlabeled = unlabeled && labels.is_empty();
     let mut duel = g.record.setup(None).map_err(|e| e.0)?;
     duel.ocg_start_duel();
     let (mut rows, mut prompt): (Vec<Value>, Option<Msg>) = (Vec::new(), None);
     for (i, entry) in g.record.responses.iter().enumerate() {
         let step = run_until_prompt(&mut duel, prompt.as_ref()).map_err(|e| e.0)?;
         let p = step.prompt.ok_or_else(|| format!("game {}: the duel ended before response {i}", g.game))?;
+        if unlabeled && root_candidates(&p, &Heuristic::new(0, entry.player), None).len() > 1 {
+            labels.insert(i, Label { decision: i, player: entry.player, value: f64::NAN, depth: 0, nodes: None, time: None, search_time: None });
+        }
         if let Some(l) = labels.get(&i) {
             rows.push(row(&mut duel, g.game, &p, l, sets)?);
         }
