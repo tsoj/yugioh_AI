@@ -65,6 +65,31 @@ impl TranspositionTable {
     }
 }
 
+/// The nodes each move of a position took in its last search (by the move's index into the node's
+/// ordered moves; 0: not searched), kept within a decision as the TT. At most as many positions
+/// as the TT has entries (later ones are not stored).
+#[derive(Default)]
+pub struct MoveEffort {
+    positions: rustc_hash::FxHashMap<u64, Vec<u32>>,
+}
+
+impl MoveEffort {
+    pub fn get(&self, key: u64) -> Option<&[u32]> {
+        self.positions.get(&key).map(Vec::as_slice)
+    }
+
+    pub fn set(&mut self, key: u64, nodes: Vec<u32>) {
+        if self.positions.len() < 1 << TT_BITS || self.positions.contains_key(&key) {
+            self.positions.insert(key, nodes);
+        }
+    }
+
+    /// A new decision: the positions so far are removed.
+    pub fn clear(&mut self) {
+        self.positions.clear();
+    }
+}
+
 /// The key of a position and its pending decision (the chess engines' Zobrist key): a fast hash
 /// over the engine's state (where every card is, its position, status, counters, materials and
 /// equip target; what the cards on the field are now, stats included; turn, phase, LP, chain)
