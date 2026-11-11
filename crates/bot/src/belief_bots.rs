@@ -4,6 +4,8 @@
 //! reconstruction fails or time is short, go to the heuristic player. And belief_mc, the
 //! belief checks' test bot.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::Instant;
 
 use serde_json::Value;
@@ -16,7 +18,7 @@ use crate::belief::check::state_diffs;
 use crate::belief::completion::{Completion, VanillaCompletion, by_name, card};
 use crate::belief::tracker::Need;
 use crate::belief::script_index::zone_sensitive;
-use ygo_arbiter::game::{Bot, BotError, InitInfo, ObsItem, run_until_prompt};
+use ygo_arbiter::game::{Bot, BotError, InitInfo, ObsItem, Observer, run_until_prompt};
 use crate::heuristic::Heuristic;
 use ygo_arbiter::messages::Msg;
 use ygo_arbiter::observe::to_core_response;
@@ -79,8 +81,32 @@ pub fn completion(name: &str) -> Result<Option<&'static dyn Completion>, String>
     by_name(name)
 }
 
+/// What a bot that searches the true duel knows (a measurement of the cost of the hidden cards,
+/// bot-truth-match).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Truth {
+    /// the duel as it is: all cards, the order of the Decks, the random numbers to come
+    Full,
+    /// the true cards, with both Main Decks shuffled: no card that a player draws later is known
+    ShuffledDecks,
+}
+
+/// The true duel at the last prompt, from the arbiter's god view (`TruthFeed`).
+type TrueDuel = Rc<RefCell<Option<(Msg, Duel)>>>;
+
+/// The observer that gives a true-state bot the duel (`BeliefSearchBot::truth_feed`).
+pub struct TruthFeed(TrueDuel);
+
+impl Observer for TruthFeed {
+    fn prompt(&mut self, prompt: &Msg, duel: &mut Duel) {
+        *self.0.borrow_mut() = Some((prompt.clone(), duel.clone()));
+    }
+}
+
 pub struct BeliefSearchBot {
     name: String,
+    /// (a true-state bot: what it knows, and the duel its `TruthFeed` gives it)
+    truth: Option<(Truth, TrueDuel)>,
     rng: PyRandom,
     fallback: Heuristic,
     search: Search,
@@ -109,18 +135,23 @@ pub struct BeliefSearchBot {
 }
 
 impl BeliefSearchBot {
-    /// `name`: alphabeta, alphabeta_naive or mcts; `seed`: None for an unseeded generator.
+    /// `name`: alphabeta, alphabeta_naive or mcts, or alpha-beta on the true duel (in-process
+    /// games with its `truth_feed` only): alphabeta_true, alphabeta_true_shuffled (`Truth`);
+    /// `seed`: None for an unseeded generator.
     pub fn new(name: &str, seed: Option<i64>) -> Result<BeliefSearchBot, String> {
-        let search = match name {
-            "alphabeta" => Search::alphabeta("full"),
-            "alphabeta_naive" => Search::alphabeta("naive"),
-            "mcts" => Search::mcts(),
+        let (search, truth) = match name {
+            "alphabeta" => (Search::alphabeta("full"), None),
+            "alphabeta_naive" => (Search::alphabeta("naive"), None),
+            "alphabeta_true" => (Search::alphabeta("full"), Some(Truth::Full)),
+            "alphabeta_true_shuffled" => (Search::alphabeta("full"), Some(Truth::ShuffledDecks)),
+            "mcts" => (Search::mcts(), None),
             _ => return Err(format!("unknown belief bot {name}")),
         };
         let s = seed.map(|s| s as i128).unwrap_or_else(entropy);
         let completion = completion(&std::env::var("BOT_COMPLETION").unwrap_or_else(|_| "neural".into()))?;
         Ok(BeliefSearchBot {
             name: name.into(),
+            truth: truth.map(|t| (t, TrueDuel::default())),
             rng: PyRandom::new(s),
             // (the rules' player answers what is not searched: alphabeta.py's HeuristicBot(seed))
             fallback: Heuristic::new(s, 0),
@@ -140,6 +171,11 @@ impl BeliefSearchBot {
             failures: 0,
             nodes: 0,
         })
+    }
+
+    /// A true-state bot's observer: the game must have it (`game::play`'s observers).
+    pub fn truth_feed(&self) -> Option<TruthFeed> {
+        self.truth.as_ref().map(|(_, duel)| TruthFeed(duel.clone()))
     }
 
     /// Replaces the response this bot just gave (a replay of a recorded game: the bot's
@@ -186,6 +222,33 @@ impl BeliefSearchBot {
         })
     }
 
+    /// The duel to search and its prompt: the belief's reconstruction, or the true duel for a bot
+    /// that knows it (None: no duel fit to search).
+    fn search_duel(&mut self, prompt: &Msg, state: Option<&Snapshot>, timeout: Option<std::time::Duration>) -> Option<(Duel, Msg)> {
+        if let Some((truth, true_duel)) = &self.truth {
+            let (true_prompt, mut duel) = true_duel.borrow().clone()?;
+            if *truth == Truth::ShuffledDecks {
+                // (the shuffles' messages are not the search's)
+                let messages = duel.messages.len();
+                for p in 0..2 {
+                    duel.shuffle(p, LOCATION_DECK as u8);
+                }
+                duel.messages.truncate(messages);
+            }
+            return Some((duel, true_prompt));
+        }
+        let (r, duel) = self.belief.as_mut()?.reconstruct(&self.items, timeout);
+        let mut duel = duel?;
+        // (a best-effort state only if it matches what this bot observes now)
+        if r.approximate && !state.is_some_and(|s| state_diffs(s, &mut duel.d, self.player) <= MAX_APPROX_DIFFS) {
+            return None;
+        }
+        if matches!(self.search, Search::AlphaBetaNaive { .. }) {
+            naive_hidden_cards(&mut duel, self.player, self.completion, &mut self.rng);
+        }
+        Some((duel.d, r.final_prompt.unwrap_or_else(|| prompt.clone())))
+    }
+
     /// The index of the candidate to play, from a search of the reconstruction (None: no
     /// reconstruction fit to search).
     fn search(&mut self, prompt: &Msg, state: Option<&Snapshot>, cands: &[Response], clock: Option<(f64, f64)>) -> Option<usize> {
@@ -193,29 +256,16 @@ impl BeliefSearchBot {
         let budget = self.budget(clock);
         // (a reconstruction past the search's hard limit gives up: the rules' player answers)
         let timeout = clock.zip(budget).map(|((remaining, _), b)| std::time::Duration::from_secs_f64(hard_limit(b, remaining)));
-        let (r, duel) = self.belief.as_mut()?.reconstruct(&self.items, timeout);
-        let Some(mut duel) = duel else {
+        let Some((duel, core_prompt)) = self.search_duel(prompt, state, timeout) else {
             self.failures += 1;
             return None;
         };
-        if r.approximate {
-            // (a best-effort state only if it matches what this bot observes now)
-            let ok = state.is_some_and(|s| state_diffs(s, &mut duel.d, self.player) <= MAX_APPROX_DIFFS);
-            if !ok {
-                self.failures += 1;
-                return None;
-            }
-        }
         self.searches += 1;
-        let core_prompt = r.final_prompt.clone().unwrap_or_else(|| prompt.clone());
         let core_cands: Vec<Response> = cands.iter().map(|c| to_core_response(&core_prompt, self.player, c).ok()).collect::<Option<_>>()?;
         let hint = self.fallback.hint.take(); // (the select hint: the search answers this selection)
         let elapsed = t0.elapsed().as_secs_f64();
         self.slowest_reconstruction = self.slowest_reconstruction.max(elapsed);
         let remaining = clock.map_or(0.0, |c| c.0);
-        if matches!(self.search, Search::AlphaBetaNaive { .. }) {
-            naive_hidden_cards(&mut duel, self.player, self.completion, &mut self.rng);
-        }
         Some(match &mut self.search {
             Search::AlphaBeta { ab, max_nodes } | Search::AlphaBetaNaive { ab, max_nodes } => {
                 let max_nodes = self.node_limit.or(*max_nodes);
@@ -225,7 +275,7 @@ impl BeliefSearchBot {
                 let before = ab.nodes;
                 let params = SearchParams { budget, elapsed, clock_remaining: remaining, hint, seeds, max_nodes, depth: None, exact_root: false };
                 let t_search = Instant::now();
-                let (best, depth) = ab.search(&duel.d, &core_prompt, &core_cands, &params);
+                let (best, depth) = ab.search(&duel, &core_prompt, &core_cands, &params);
                 self.nodes += ab.nodes - before;
                 let (nodes, secs) = (ab.nodes - before, t_search.elapsed().as_secs_f64());
                 self.root_values = ab.last_root_values.clone();
@@ -236,7 +286,7 @@ impl BeliefSearchBot {
                 let seeds = [self.rng.getrandbits(32) as u32, self.rng.getrandbits(32) as u32, self.rng.getrandbits(32) as u32];
                 let budget = if max_sims.is_some() { None } else { budget };
                 let params = crate::mcts::MctsParams { budget, elapsed, max_sims: *max_sims, c: *c, rollout_turns: *rollout_turns, cutoff_eval: *cutoff_eval, hint, seeds };
-                let (best, stats) = crate::mcts::search(&duel.d, &core_prompt, &core_cands, &params);
+                let (best, stats) = crate::mcts::search(&duel, &core_prompt, &core_cands, &params);
                 self.nodes += stats.sims;
                 best
             }
