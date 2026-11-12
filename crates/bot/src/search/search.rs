@@ -23,7 +23,7 @@ use super::movegen::{candidates, is_searched, root_candidates};
 use super::movepick::{KeyContext, move_key, ordered};
 use super::params::*;
 use super::stats::{Extension, NodeStats, NodeSummary, TtEntry};
-use super::tt::{MoveEffort, NodeType, TranspositionTable, hash_key};
+use super::tt::{Effort, EffortFit, MoveEffort, NodeType, TranspositionTable, effort_order, hash_key};
 use ygo_arbiter::actions::{Response, encode};
 use ygo_arbiter::game::run_until_prompt;
 use crate::heuristic::Heuristic;
@@ -69,6 +69,7 @@ impl Growth {
 pub struct AlphaBeta {
     hash_table: TranspositionTable,
     move_effort: MoveEffort,
+    effort_fit: EffortFit,
     history_table: HistoryTable,
     pub nodes: u64,
     /// transposition table lookups, and those that found the position
@@ -103,6 +104,7 @@ impl Default for AlphaBeta {
         AlphaBeta {
             hash_table: TranspositionTable::default(),
             move_effort: MoveEffort::default(),
+            effort_fit: EffortFit::default(),
             history_table: HistoryTable::default(),
             nodes: 0,
             tt_probes: 0,
@@ -151,6 +153,7 @@ impl AlphaBeta {
     pub fn prepare(&mut self) {
         self.hash_table.new_generation();
         self.move_effort.clear();
+        self.effort_fit = EffortFit::default();
         self.history_table.decay(self.tune.hist_decay);
     }
 
@@ -211,14 +214,15 @@ struct Iteration {
 }
 
 impl Iteration {
-    /// Keep the winner first. The other values can be fail-low bounds rather than scores:
-    /// try the alternatives that took longest to refute first next time. Equal efforts keep
-    /// their previous order. References with exact root values still order by those values.
-    fn reorder(&self, order: &mut [usize], exact: bool) {
+    /// Keep the winner first. The other values can be fail-low bounds rather than scores: the
+    /// alternatives by their effort over the iterations and their previous order
+    /// (`tt::effort_order`). References with exact root values still order by those values.
+    fn reorder(&self, order: &mut [usize], exact: bool, efforts: &[Effort], slope: f64) {
         if exact {
             order.sort_by(|&a, &b| self.values[b].unwrap().partial_cmp(&self.values[a].unwrap()).unwrap_or(Ordering::Equal));
         } else {
-            order.sort_by(|&a, &b| (Some(a) != self.best).cmp(&(Some(b) != self.best)).then_with(|| self.nodes[b].cmp(&self.nodes[a])));
+            order.sort_by_key(|&a| Some(a) != self.best);
+            effort_order(&mut order[1..], efforts, slope);
         }
     }
 }
@@ -360,6 +364,7 @@ impl SearchState<'_> {
         self.tables.last_root_values = vec![None; root.moves.len()];
         // (the last completed iteration's nodes and seconds)
         let (mut last_nodes, mut last_secs) = (0u64, 0.0);
+        let mut root_effort = vec![Effort::default(); root.moves.len()];
         for depth in 1..=max_depth {
             if !time.starts_iteration(depth, last_secs, self.tables.growth(depth).expected()) {
                 break;
@@ -390,7 +395,15 @@ impl SearchState<'_> {
             self.tables.tm_scale = time.scale;
             (best_move, completed_depth) = (best, depth);
             self.tables.pv_height = self.tables.pv_height_now;
-            iteration.reorder(&mut move_order, root.exact);
+            let samples: Vec<(f64, f64)> = (0..root.moves.len())
+                .filter(|&m| iteration.values[m].is_some())
+                .map(|m| {
+                    root_effort[m].add(iteration.nodes[m], (depth - 1) as f64);
+                    (((iteration.nodes[m] + 1) as f64).log2(), (depth - 1) as f64)
+                })
+                .collect();
+            self.tables.effort_fit.add(&samples);
+            iteration.reorder(&mut move_order, root.exact, &root_effort, self.tables.effort_fit.slope());
             let values = iteration.values;
             self.tables.last_value = values[best].unwrap();
             self.tables.last_root_values = values.clone();
@@ -481,9 +494,10 @@ impl SearchState<'_> {
 
         let ctx = key_context(duel, prompt, card_order.as_ref().and_then(|c| c.hint));
         let history_keys: Vec<usize> = moves.iter().map(|m| move_key(prompt, m, &ctx)).collect();
-        let effort = self.tables.move_effort.get(key).filter(|e| e.len() == moves.len()).map(<[u32]>::to_vec);
-        let move_order = self.move_order(tt_move, effort.as_deref(), &history_keys);
-        let mut move_nodes = vec![0u32; moves.len()];
+        let mut efforts = self.tables.move_effort.get(key).filter(|e| e.len() == moves.len()).map_or_else(|| vec![Effort::default(); moves.len()], <[Effort]>::to_vec);
+        let move_order = self.move_order(tt_move, &efforts, &history_keys);
+        // (each searched move's last search: its nodes and depth)
+        let mut searches: Vec<(usize, u64, f64)> = Vec::new();
 
         let mut node_type = NodeType::AllNode;
         let (mut best_value, mut best_move) = (f64::NEG_INFINITY, move_order[0]);
@@ -506,7 +520,6 @@ impl SearchState<'_> {
             }
 
             let make_on = if i == move_order.len() - 1 { MakeOn::InPlace } else { MakeOn::Copy };
-            let nodes_before_move = self.tables.nodes;
             let child = Node { alpha, beta, depth: depth - 1.0, height: height + 1, pv: pv && i == 0 };
 
             // late move reduction: a late move, unlikely the best by the move ordering, searched
@@ -514,7 +527,9 @@ impl SearchState<'_> {
             // raise alpha)
             let reduced = if i >= tune.lmr_min_move_counter {
                 let reduced_beta = if alpha.is_finite() { alpha + NULL_WINDOW } else { beta };
-                let value = self.search_move(duel, prompt, mv, Node { beta: reduced_beta, depth: lmr_depth(&tune, child.depth), pv: false, ..child }, MakeOn::Copy)?;
+                let (nodes_before_move, reduced_depth) = (self.tables.nodes, lmr_depth(&tune, child.depth));
+                let value = self.search_move(duel, prompt, mv, Node { beta: reduced_beta, depth: reduced_depth, pv: false, ..child }, MakeOn::Copy)?;
+                searches.push((m, self.tables.nodes - nodes_before_move, reduced_depth));
                 if let Some(st) = &mut self.tables.stats {
                     st.reduction(prompt, i, value > alpha);
                 }
@@ -526,9 +541,15 @@ impl SearchState<'_> {
             // (the full depth and window: without a reduction, or if the reduced search raised alpha)
             let value = match reduced {
                 Some(v) if v <= alpha => v,
-                _ => self.search_move(duel, prompt, mv, child, make_on)?,
+                _ => {
+                    let nodes_before_move = self.tables.nodes;
+                    let value = self.search_move(duel, prompt, mv, child, make_on)?;
+                    // (a re-search replaces the reduced one)
+                    searches.retain(|s| s.0 != m);
+                    searches.push((m, self.tables.nodes - nodes_before_move, child.depth));
+                    value
+                }
             };
-            move_nodes[m] = (self.tables.nodes - nodes_before_move).min(u32::MAX as u64) as u32;
 
             if value > best_value {
                 (best_value, best_move) = (value, m);
@@ -559,23 +580,24 @@ impl SearchState<'_> {
             // (not a win or loss: those depend on the height)
             self.tables.hash_table.add(key, node_type, best_value, depth, best_move);
         }
-        self.tables.move_effort.set(key, move_nodes);
+        for &(m, nodes, d) in &searches {
+            efforts[m].add(nodes, d);
+        }
+        let samples: Vec<(f64, f64)> = searches.iter().map(|&(_, nodes, d)| (((nodes + 1) as f64).log2(), d)).collect();
+        self.tables.effort_fit.add(&samples);
+        self.tables.move_effort.set(key, efforts);
         Ok(best_value)
     }
 
-    /// Move ordering: the TT move first, then by the nodes each move took in the position's last
-    /// search (`effort`: most first; the moves that took longest to refute are the likeliest to be
-    /// good), then by history (the rules' order among equals).
-    fn move_order(&self, tt_move: Option<usize>, effort: Option<&[u32]>, history_keys: &[usize]) -> Vec<usize> {
+    /// Move ordering: the TT move first, then by history (the rules' order among equals), then the
+    /// moves after the TT move by their effort in the position's earlier searches and that order
+    /// (`tt::effort_order`).
+    fn move_order(&self, tt_move: Option<usize>, efforts: &[Effort], history_keys: &[usize]) -> Vec<usize> {
         let history = |k: usize| self.tables.history_table.get(history_keys[k]);
-        let nodes = |k: usize| effort.map_or(0, |e| e[k]);
         let mut order: Vec<usize> = (0..history_keys.len()).collect();
-        order.sort_by(|&a, &b| {
-            (Some(a) != tt_move)
-                .cmp(&(Some(b) != tt_move))
-                .then_with(|| nodes(b).cmp(&nodes(a)))
-                .then_with(|| history(b).partial_cmp(&history(a)).unwrap_or(Ordering::Equal))
-        });
+        order.sort_by(|&a, &b| (Some(a) != tt_move).cmp(&(Some(b) != tt_move)).then_with(|| history(b).partial_cmp(&history(a)).unwrap_or(Ordering::Equal)));
+        let first = usize::from(tt_move.is_some());
+        effort_order(&mut order[first..], efforts, self.tables.effort_fit.slope());
         order
     }
 
@@ -741,9 +763,14 @@ mod tests {
             values: vec![Some(100.0), Some(-200.0), Some(90.0), None, Some(0.0)],
             nodes: vec![10, 500, 30, 0, 30], best: Some(0), aborted: false,
         };
+        let mut efforts = vec![Effort::default(); 5];
+        for m in [0, 1, 2, 4] {
+            efforts[m].add(iteration.nodes[m], 3.0);
+        }
         let mut order = vec![4, 0, 2, 1];
-        iteration.reorder(&mut order, false);
-        assert_eq!(order, vec![0, 1, 4, 2]);
+        iteration.reorder(&mut order, false, &efforts, 1.0);
+        // (4 and 2 took as long: the earlier first; 1 took longest, after 4 by its rank)
+        assert_eq!(order, vec![0, 4, 1, 2]);
     }
 
     #[test]
@@ -753,7 +780,7 @@ mod tests {
             nodes: vec![10, 500, 30], best: Some(0), aborted: false,
         };
         let mut order = vec![1, 2, 0];
-        iteration.reorder(&mut order, true);
+        iteration.reorder(&mut order, true, &[Effort::default(); 3], 1.0);
         assert_eq!(order, vec![0, 2, 1]);
     }
 }
