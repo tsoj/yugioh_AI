@@ -19,9 +19,19 @@ whitened); --card-hidden H1,H2,..: hidden layers (ReLU) before the strengths (s 
 --card-no-gy: only the cards in the hand and on the field (the GY's strengths 0); --card-decorr W:
 a penalty on the card term's correlation with the pair term (the decks' strength). A
 card's strengths depend on its code only: the export is a table in both cases.
+
+--value-filter forward|both --value-decay D: the search value's target of a row is a weighted mean of
+the search values (as win probabilities, for the row's mover) of the rows of its game, weight D^k for
+the row k decisions away: `forward` the row and the later rows only, `both` the earlier rows too.
+The result's target stays the game's result.
+
+In memory are only the rows in use (the training's, the validation games' and the held-out
+pairs'), with --host-x as float16.
 """
 import argparse
+import zipfile
 import numpy as np
+import scipy.signal
 import torch
 
 ap = argparse.ArgumentParser()
@@ -31,7 +41,9 @@ ap.add_argument("--hidden", type=int, default=32)
 ap.add_argument("--layers", type=int, default=1, help="hidden layers")
 ap.add_argument("--dims", help="the hidden layers' widths, comma list (e.g. 8,32), instead of --hidden and --layers")
 ap.add_argument("--lam", type=float, default=0.5)
-ap.add_argument("--host-x", action="store_true", help="the features in the host's memory, a batch at a time on the device (data larger than the device's memory)")
+ap.add_argument("--host-x", action="store_true", help="the features in the host's memory as float16, a batch at a time on the device (data larger than the device's memory)")
+ap.add_argument("--value-filter", choices=["forward", "both"], help="the search value's target: a weighted mean over the game's rows (--value-decay)")
+ap.add_argument("--value-decay", type=float, default=0.9, help="the weight per decision of --value-filter")
 ap.add_argument("--epochs", type=int, default=12)
 ap.add_argument("--lr", type=float, default=2e-3)
 ap.add_argument("--wd", type=float, default=0.0)
@@ -67,10 +79,21 @@ dev = "cuda" if torch.cuda.is_available() else "cpu"
 if args.threads:
     torch.set_num_threads(args.threads)
 
+def member(path, name):
+    """The array `name` of an npz without compression as a memory map (np.load reads it whole)."""
+    info = zipfile.ZipFile(path).getinfo(name + ".npy")
+    assert info.compress_type == zipfile.ZIP_STORED, f"{path}: {name} is compressed"
+    with open(path, "rb") as f:
+        f.seek(info.header_offset + 26)
+        f.seek(info.header_offset + 30 + int.from_bytes(f.read(2), "little") + int.from_bytes(f.read(2), "little"))
+        version = np.lib.format.read_magic(f)
+        shape, _, dtype = (np.lib.format.read_array_header_1_0 if version == (1, 0) else np.lib.format.read_array_header_2_0)(f)
+        return np.memmap(path, dtype, "r", f.tell(), shape)
+
 d = np.load(args.data)
-X, value, static, result, game, player, turn = (d[k] for k in ["x", "value", "static", "result", "game", "player", "turn"])
-if args.drop:
-    X = X.copy(); X[:, [int(i) for i in args.drop.split(",")]] = 0
+value, static, game = d["value"], d["static"], d["game"]
+result, player, turn = d["result"].astype(np.int8), d["player"].astype(np.int8), d["turn"].astype(np.int16)
+X_all = member(args.data, "x")
 # (explicit deck pairs if the npz has them, e.g. match records: `pair`, `aseat` the seat of the
 # pair's first deck, `valgame` the validation games within training pairs; else blocks of 20 games
 # per pair with alternating seat order, the last 2 of each for validation)
@@ -97,10 +120,33 @@ def fit_k(v, r):
     return best[1]
 # (a merged npz has `src` per row: each data set's search values in its own scale; the export
 # uses the first set's, so put the newest data first)
-src = d["src"] if "src" in d.files else np.zeros(len(X), np.int64)
+src = d["src"] if "src" in d.files else np.zeros(len(X_all), np.int64)
 hasv = np.isfinite(value)
 Ks = {s_: fit_k(value[src == s_], result[src == s_]) for s_ in np.unique(src[hasv])}
-K, Kr = Ks[src[0]], np.array([Ks.get(i, 1.0) for i in range(src.max() + 1)])[src]
+K, Kr = Ks[src[0]], np.array([Ks.get(i, 1.0) for i in range(src.max() + 1)], np.float32)[src]
+
+def decayed_sums(x, game, decay):
+    """Per row t: the sum of decay^(t - s) * x[s] over the rows s <= t of its game (rows of a game in order)."""
+    y = scipy.signal.lfilter([1.0], [1.0, -decay], x)
+    starts = np.r_[0, np.flatnonzero(np.diff(game)) + 1]
+    first = np.repeat(starts, np.diff(np.r_[starts, len(x)]))
+    return y - decay ** (np.arange(len(x)) - first + 1) * np.where(first > 0, y[first - 1], 0)
+
+# (the search value as the mover's win probability: its target)
+pv = 1 / (1 + np.exp(-np.clip(np.nan_to_num(value) / Kr, -50, 50)))
+if args.value_filter:
+    # (averaged for player 0, then back to the row's mover)
+    p0 = np.where(player == 0, pv, 1 - pv)
+    mp, m = np.where(hasv, p0, 0), hasv.astype(np.float64)
+    later = lambda x: decayed_sums(x[::-1], game[::-1], args.value_decay)[::-1]
+    num, den = later(mp), later(m)
+    if args.value_filter == "both":
+        num, den = num + decayed_sums(mp, game, args.value_decay) - mp, den + decayed_sums(m, game, args.value_decay) - m
+    p0 = np.where(den > 0, num / np.maximum(den, 1e-30), p0)
+    pv = np.where(player == 0, p0, 1 - p0)
+    del p0, mp, m, num, den
+pv = pv.astype(np.float32)
+del Kr
 
 rng = np.random.default_rng(0)
 if args.fold:
@@ -111,7 +157,7 @@ else:
 is_hp = np.isin(pair, list(held_pairs))
 is_vin = ~is_hp & valgame
 is_tr = ~is_hp & ~is_vin
-W = np.ones(len(X), np.float32)
+W = np.ones(len(X_all), np.float32)
 min_wins = max(args.min_wins, 1 if args.drop_onesided else 0)
 if min_wins or args.balance_wins:
     # (the pair's first deck sits in seat aseat; per game: 0 or 1 the deck that won, 2 a draw)
@@ -131,27 +177,45 @@ if min_wins or args.balance_wins:
         lo = np.minimum(w0, w1)
         W = np.where(won == 2, 1.0, lo / np.maximum(np.where(won == 0, w0, w1), 1)).astype(np.float32)
         print(f"--balance-wins: training rows' weight {W[is_tr].sum():.0f} of {is_tr.sum()}")
-# (normalized on the device in chunks: no float copies of X in memory)
-# (the held-out pairs' rows as they are, for the LP anchor: Z below is X normalized in place with --host-x)
+# (only the rows in use in memory; `use` and `n_all`: of the files' rows)
+use, n_all = is_tr | is_vin | is_hp, len(X_all)
+CHUNK = 1 << 20
+X = np.empty((int(use.sum()), X_all.shape[1]), np.float16 if args.host_x else np.float32)
+at = 0
+for i in range(0, n_all, CHUNK):
+    rows = X_all[i:i + CHUNK][use[i:i + CHUNK]]
+    X[at:at + len(rows)] = rows
+    at += len(rows)
+del X_all
+if args.drop:
+    X[:, [int(i) for i in args.drop.split(",")]] = 0
+value, static, result, game, player, turn, ps, sgn, pv, hasv, W, is_tr, is_vin, is_hp = (
+    v[use] for v in (value, static, result, game, player, turn, ps, sgn, pv, hasv, W, is_tr, is_vin, is_hp))
+del pair, aseat, valgame, src
+# (the held-out pairs' rows as they are, for the LP anchor)
 X_hp = X[is_hp]
+# (with --host-x normalized a batch at a time, else on the device in place, in chunks: no float copies of X in memory)
 zdev = "cpu" if args.host_x else dev
 Z = torch.from_numpy(X) if args.host_x else torch.tensor(X, device=dev)
 TR = torch.tensor(is_tr, device=zdev)
 s1 = torch.zeros(X.shape[1], dtype=torch.float64, device=zdev); s2 = torch.zeros_like(s1)
-for i in range(0, len(X), 1 << 20):
-    z = Z[i:i + (1 << 20)][TR[i:i + (1 << 20)]].double()
+for i in range(0, len(X), CHUNK):
+    z = Z[i:i + CHUNK][TR[i:i + CHUNK]].double()
     s1 += z.sum(0); s2 += (z * z).sum(0)
 n_tr = int(is_tr.sum()); m_ = s1 / n_tr
 mu, sd = m_.cpu().numpy().astype(np.float32), ((s2 / n_tr - m_ * m_).clamp_min(0).sqrt().cpu().numpy() + 1e-6).astype(np.float32)
-Z.sub_(torch.tensor(mu, device=zdev)).div_(torch.tensor(sd, device=zdev))
+MU, SD = torch.tensor(mu, device=dev), torch.tensor(sd, device=dev)
+if not args.host_x:
+    Z.sub_(MU).div_(SD)
 
 def z_of(idx):
-    return Z[idx.cpu()].to(dev, non_blocking=True) if args.host_x else Z[idx]
+    return (Z[idx.cpu()].to(dev, non_blocking=True).float() - MU) / SD if args.host_x else Z[idx]
 del TR
 Yr = torch.tensor((result + 1) / 2, dtype=torch.float32, device=dev)
-Yv = torch.tensor(1 / (1 + np.exp(-np.clip(np.nan_to_num(value) / Kr, -50, 50))), dtype=torch.float32, device=dev)
+Yv = torch.tensor(pv, device=dev)
+del pv
 HV = torch.tensor(hasv, device=dev)
-PS = torch.tensor(ps, device=dev); SG = torch.tensor(sgn, device=dev)
+PS = torch.tensor(ps, dtype=torch.int32, device=dev); SG = torch.tensor(sgn, device=dev)
 dec = torch.tensor(result != 0, device=dev)
 Wt = torch.tensor(W, device=dev)
 
@@ -159,7 +223,7 @@ n = X.shape[1]
 N_BUCKETS, N_STATES = 3, 4
 if args.cards:
     cd = np.load(args.cards); ef = np.load(args.effects)
-    assert len(cd["off"]) == len(X) + 1, "the card lists are not the npz's rows"
+    assert len(cd["off"]) == n_all + 1, "the card lists are not the npz's rows"
     # (each data code's effect embedding: the mean over the seeds; none: 0)
     at = {c: i for i, c in enumerate(ef["codes"].tolist())}
     emb = ef["emb"].astype(np.float32).mean(0) * ef["has_effect"][:, None]
@@ -177,14 +241,27 @@ if args.cards:
     HE = np.zeros(len(rows_of), np.float32); HE[rows_of >= 0] = ef["has_effect"][rows_of[rows_of >= 0]]
     EC_t = torch.tensor(EC, device=dev); HE_t = torch.tensor(HE, device=dev)
     EF_codes, EF_emb, EF_has = ef["codes"], torch.tensor(emb), torch.tensor(ef["has_effect"].astype(np.float32))  # (every card: the export's table)
-    OFF = torch.tensor(cd["off"], device=dev)
+    # (the entries of the rows in use, a chunk of rows at a time)
+    off = cd["off"]
+    OFF = torch.tensor(np.concatenate([[0], np.cumsum(np.diff(off)[use])]), device=dev)
     DATA_CODES = cd["codes"]
-    # (compact on the device: 500M entries of the SPRT data; widened per batch)
-    CI = torch.tensor(cd["cidx"].astype(np.int32), device=dev)
-    BK = torch.tensor(cd["bucket"].astype(np.int8), device=dev)
-    ST = torch.tensor((cd["negated"] * 2 + cd["used"]).astype(np.int8), device=dev)
-    SGN = torch.tensor(np.where(cd["mine"] > 0, 1, -1).astype(np.int8), device=dev)
-    del cd, ef, emb
+    # (compact on the device: 1000M entries of the SPRT and OpenBench data; widened per batch.
+    # PK: an entry's bucket, state (negated * 2 + used) and side (the mover's: 1) in the bits
+    # 0-1, 2-3 and 4)
+    ci = np.empty(int(OFF[-1]), np.int16 if len(DATA_CODES) < 1 << 15 else np.int32)
+    pk = np.empty(len(ci), np.int8)
+    cidx, bucket, used, negated, mine = (member(args.cards, name) for name in ("cidx", "bucket", "used", "negated", "mine"))
+    at_e = 0
+    for i in range(0, n_all, CHUNK):
+        j = min(i + CHUNK, n_all)
+        e = slice(off[i], off[j])
+        ent = np.repeat(use[i:j], np.diff(off[i:j + 1]))
+        to = slice(at_e, at_e + int(ent.sum()))
+        ci[to] = cidx[e][ent]
+        pk[to] = (bucket[e] | used[e] << 2 | negated[e] << 3 | (mine[e] > 0) << 4)[ent]
+        at_e = to.stop
+    CI, PK = torch.from_numpy(ci).to(dev), torch.from_numpy(pk).to(dev)
+    del cd, ef, emb, off, ci, pk, cidx, bucket, used, negated, mine
     emb_dim = EC.shape[1]
     card_hid = [int(h) for h in args.card_hidden.split(",") if h]
     if card_hid:
@@ -228,8 +305,9 @@ def card_x(idx):
     cnt = hi - lo
     row = torch.repeat_interleave(torch.arange(len(idx), device=dev), cnt)
     ent = torch.repeat_interleave(lo - torch.cumsum(cnt, 0) + cnt, cnt) + torch.arange(int(cnt.sum()), device=dev)
-    b = BK[ent].long()
-    val = SGN[ent].float() * m[b, ST[ent].long()] * s[CI[ent].long(), b]
+    pk = PK[ent].long()
+    b = pk & 3
+    val = ((pk >> 4 & 1) * 2 - 1).float() * m[b, pk >> 2 & 3] * s[CI[ent].long(), b]
     if use_hold[0]:
         val = val * (~HOLD[CI[ent].long()]).float()
     out = torch.zeros(len(idx) * N_BUCKETS, device=dev)
@@ -374,7 +452,7 @@ if card_params:
         if args.output:
             np.savez(args.output + ".cards.npz", codes=np.load(args.cards)["codes"], strength=s, mult=torch.cat([torch.ones(N_BUCKETS, 1, device=dev), 1 + card_m], 1).cpu().numpy())
 if args.save_v:
-    np.savez(args.save_v, v=all_v())
+    np.savez(args.save_v, v=all_v(), rows=np.nonzero(use)[0])
 def card_table():
     """The card term for the bot: every card's strength per bucket (the cards with an effect), the
     multipliers per bucket and state. With --card-out (`direct`) the strengths in the output's
