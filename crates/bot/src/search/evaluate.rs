@@ -728,9 +728,8 @@ impl LearnedEval {
 /// an MLP with a hidden layer of 64 on the 87 mover2 features plus the card term on its output, the
 /// search value's target a mean of the game's later search values; a card's strengths a value per
 /// code learned for the codes of the data, no effect embeddings; a code not in the data has none),
-/// trained on all
-/// SPRT games with search values since the round-2+3 net became the default (2026-10-17 23:22 to
-/// 2026-10-24, 184522 games, 28.1M positions, runs/data/sprt_net2/; card lists:
+/// trained on all SPRT games with search values since the round-2+3 net became the default
+/// (2026-10-17 23:22 to 2026-10-24, 184522 games, 28.1M positions, runs/data/sprt_net2/; card lists:
 /// scripts/eval_cards/sprt_cards_to_npz.py) and on rounds 2 and 3 (no card lists), without the deck
 /// pairs where one deck won every game (its predecessors and their SPRTs: TODO.md, "Evaluation").
 const DEFAULT_EVAL: &str = include_str!("../../models/eval_mover2_sprt2r23obr_cardstable_vf097_64.json");
