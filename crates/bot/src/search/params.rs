@@ -27,6 +27,14 @@ pub const SUM_STEPS: usize = 20_000;
 pub const GROWTH_PRIOR: f64 = 1.6;
 pub const GROWTH_PRIOR_WEIGHT: f64 = 4.0;
 pub const GROWTH_MAX_WEIGHT: f64 = 200.0;
+/// Move ordering by effort (`tt::effort_order`): a move's earlier searches count this much more
+/// per new search; the slope of log2 nodes per ply while the depths have hardly differed (the
+/// nodes' growth per iteration, GROWTH_PRIOR); the depths' variance from which the fitted slope
+/// counts; the fitted slope's maximum.
+pub const EFFORT_DECAY: f64 = 61.0 / 64.0;
+pub const EFFORT_PRIOR_SLOPE: f64 = 0.678; // (log2 1.6)
+pub const EFFORT_MIN_DEPTH_VARIANCE: f64 = 1.0;
+pub const EFFORT_MAX_SLOPE: f64 = 4.0;
 /// (the hard deadline: max(budget, min(HARD_FACTOR * budget, HARD_SHARE * the clock)), but at most
 /// HARD_MAX_SHARE of the clock and at least TIME_BUFFER before it runs out; an iteration it
 /// interrupts is dropped, and without a completed one the rules' first choice is played)
