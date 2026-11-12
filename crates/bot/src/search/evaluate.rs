@@ -115,6 +115,8 @@ pub fn rich_features(d: &mut Duel, me: u32) -> Vec<f64> {
 
 /// (`mover_features`: the phases by group, and the prompts by type)
 const MOVER_PHASES: [&[u32]; 6] = [&[PHASE_DRAW], &[PHASE_STANDBY], &[PHASE_MAIN1], &[PHASE_BATTLE_START, PHASE_BATTLE_STEP, PHASE_DAMAGE, PHASE_DAMAGE_CAL, PHASE_BATTLE], &[PHASE_MAIN2], &[PHASE_END]];
+/// (`mover_view`'s feature "the mover is the turn player"; the features of `MOVER_PHASES` follow it)
+const TURN_PLAYER_FEATURE: usize = 34;
 const MOVER_PROMPTS: [&str; 7] = ["SELECT_IDLECMD", "SELECT_CHAIN", "SELECT_CARD", "SELECT_BATTLECMD", "SELECT_EFFECTYN", "SELECT_YESNO", "SELECT_OPTION"];
 
 /// The face-up Attack Position monsters of `mine` with more ATK than every monster of `theirs`
@@ -349,6 +351,7 @@ fn mover_view(d: &mut Duel, mover: u32, prompt: Option<&Msg>, level: u8) -> Vec<
     f.push(dominant(&a.mons, &b.mons) as f64);
     f.extend(b.base);
     f.push(dominant(&b.mons, &a.mons) as f64);
+    debug_assert_eq!(f.len(), TURN_PLAYER_FEATURE);
     f.push((d.infos.turn_player as u32 == mover) as u8 as f64);
     f.extend(MOVER_PHASES.iter().map(|g| g.contains(&(d.infos.phase as u32)) as u8 as f64));
     let name = prompt.map(|m| m.name());
@@ -498,7 +501,8 @@ pub fn card_list(d: &mut Duel, mover: u32) -> Vec<CardEntry> {
 
 /// The trained evaluation (scripts/train_eval_mover.py's export): an MLP on the 87 `mover2`
 /// features of the view of the player to move, z = (x - mu) / scale, hidden layers relu(w h + b),
-/// output w2 . h + b2 for the mover (negated for the other player). Its value is in LP: the
+/// output w2 . h + b2 for the mover (negated for the other player). With `stages` (--stages) each
+/// stage of the turn (`stage`) has its own network. Its value is in LP: the
 /// network's output times its `lp_anchor`'s factor (see `LpAnchor`; without one, in the network's
 /// own points, with a warning). Nets on other feature sets are not loaded (the other evaluations
 /// were removed on 2026-10-18: the hand-written one, linear and antisymmetric models, the `mover`,
@@ -512,20 +516,15 @@ pub struct LearnedEval {
     scale: Vec<f64>,
     #[serde(default)]
     weights: Vec<f64>,
-    #[serde(default)]
-    w1: Vec<Vec<f64>>,
-    #[serde(default)]
-    b1: Vec<f64>,
-    #[serde(default)]
-    w2: Vec<f64>,
-    /// (the features' mean, subtracted before `scale` divides; the output's bias)
+    /// (the features' mean, subtracted before `scale` divides)
     #[serde(default)]
     mu: Vec<f64>,
+    /// (the network of every stage, if `stages` is empty)
+    #[serde(flatten)]
+    net: Net,
+    /// (the networks by stage, STAGES of them, or none)
     #[serde(default)]
-    b2: f64,
-    /// (hidden layers after the first, each relu(w h + b); `w2` reads the last)
-    #[serde(default)]
-    layers: Vec<Layer>,
+    stages: Vec<Net>,
     #[serde(default)]
     pub lp_anchor: Option<LpAnchor>,
     /// (the card term, if the net has one: its 3 inputs follow the normalized features)
@@ -578,6 +577,42 @@ struct Layer {
     b: Vec<f64>,
 }
 
+/// A network of `LearnedEval`: the first hidden layer relu(w1 z + b1), the hidden layers after it
+/// (`layers`, each relu(w h + b)), the output w2 . h + b2.
+#[derive(serde::Deserialize, Clone)]
+struct Net {
+    #[serde(default)]
+    w1: Vec<Vec<f64>>,
+    #[serde(default)]
+    b1: Vec<f64>,
+    #[serde(default)]
+    layers: Vec<Layer>,
+    #[serde(default)]
+    w2: Vec<f64>,
+    #[serde(default)]
+    b2: f64,
+}
+
+impl Net {
+    fn output(&self, z: &[f64]) -> f64 {
+        let mut h = dense_relu(&self.w1, &self.b1, z);
+        for l in &self.layers {
+            h = dense_relu(&l.w, &l.b, &h);
+        }
+        self.b2 + self.w2.iter().zip(&h).map(|(w, x)| w * x).sum::<f64>()
+    }
+}
+
+/// The number of stages of the turn (`stage`).
+pub const STAGES: usize = 2 * MOVER_PHASES.len();
+
+/// The stage of the turn of the mover's features `x` (`mover_view`): the phase's group
+/// (`MOVER_PHASES`), and whether the mover is the turn player.
+fn stage(x: &[f64]) -> usize {
+    let phases = &x[TURN_PLAYER_FEATURE + 1..][..MOVER_PHASES.len()];
+    2 * phases.iter().position(|&p| p > 0.0).unwrap_or(0) + (x[TURN_PLAYER_FEATURE] > 0.0) as usize
+}
+
 /// relu(w x + b)
 fn dense_relu(w: &[Vec<f64>], b: &[f64], x: &[f64]) -> Vec<f64> {
     w.iter().zip(b).map(|(row, b)| (row.iter().zip(x).map(|(w, x)| w * x).sum::<f64>() + b).max(0.0)).collect()
@@ -605,6 +640,7 @@ impl LearnedEval {
     pub fn from_json_unanchored(text: &str, name: &str) -> LearnedEval {
         let mut e: LearnedEval = serde_json::from_str(text).unwrap_or_else(|err| panic!("eval {name}: {err}"));
         assert!(e.features == "mover2" && e.mu.len() == e.scale.len(), "eval {name}: a {} net; only mover2 MLPs are evaluated", e.features);
+        assert!(e.stages.is_empty() || e.stages.len() == STAGES, "eval {name}: {} networks by stage, not {STAGES}", e.stages.len());
         if let Some(c) = &e.cards {
             assert!(c.codes.len() == c.strength.len(), "eval {name}: the card term's codes and strengths differ in number");
             e.strength = c.codes.iter().copied().zip(c.strength.iter().copied()).collect();
@@ -624,15 +660,22 @@ impl LearnedEval {
         eat(self.features.as_bytes());
         eat(self.model.as_bytes());
         let mut all: Vec<f64> = Vec::new();
-        for v in [&self.mu, &self.scale, &self.weights, &self.b1, &self.w2] {
-            all.extend(v.iter().copied());
+        let list = |all: &mut Vec<f64>, v: &[f64]| {
+            all.extend(v);
             all.push(f64::NAN); // (a separator)
+        };
+        for v in [&self.mu, &self.scale, &self.weights] {
+            list(&mut all, v);
         }
-        all.extend(self.w1.iter().flatten().copied());
-        for l in &self.layers {
-            all.extend(l.w.iter().flatten().chain(&l.b).copied());
+        for net in std::iter::once(&self.net).chain(&self.stages) {
+            list(&mut all, &net.b1);
+            list(&mut all, &net.w2);
+            all.extend(net.w1.iter().flatten().copied());
+            for l in &net.layers {
+                all.extend(l.w.iter().flatten().chain(&l.b).copied());
+            }
+            all.push(net.b2);
         }
-        all.push(self.b2);
         if let Some(c) = &self.cards {
             all.extend(c.codes.iter().map(|&x| x as f64));
             all.extend(c.strength.iter().flatten().chain(c.mult.iter().flatten()).copied());
@@ -687,11 +730,8 @@ impl LearnedEval {
         if !direct {
             z.extend_from_slice(cards);
         }
-        let mut h = dense_relu(&self.w1, &self.b1, &z);
-        for l in &self.layers {
-            h = dense_relu(&l.w, &l.b, &h);
-        }
-        let out = self.b2 + self.w2.iter().zip(&h).map(|(w, x)| w * x).sum::<f64>();
+        let net = if self.stages.is_empty() { &self.net } else { &self.stages[stage(x)] };
+        let out = net.output(&z);
         if direct { out + cards.iter().sum::<f64>() } else { out }
     }
 
@@ -710,7 +750,7 @@ impl LearnedEval {
     }
 
     /// The trained evaluation in use (read once): $BOT_EVAL's JSON file if set, the built-in
-    /// models/eval_mover2_sprt2r23obr_cardstable_64.json otherwise.
+    /// models/eval_mover2_sprt2r23obr_cardstable_stages_64.json otherwise.
     pub fn from_env() -> &'static LearnedEval {
         static E: std::sync::OnceLock<LearnedEval> = std::sync::OnceLock::new();
         E.get_or_init(|| match std::env::var("BOT_EVAL").ok().filter(|p| !p.is_empty()) {
@@ -718,20 +758,20 @@ impl LearnedEval {
                 let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("BOT_EVAL {path}: {e}"));
                 LearnedEval::from_json(&text, &path)
             }
-            None => LearnedEval::from_json(DEFAULT_EVAL, "models/eval_mover2_sprt2r23obr_cardstable_64.json"),
+            None => LearnedEval::from_json(DEFAULT_EVAL, "models/eval_mover2_sprt2r23obr_cardstable_stages_64.json"),
         })
     }
 }
 
 /// The default evaluation (scripts/train_eval_mover.py --dims 64 --held 400 --drop-onesided --lam 0.5
-/// --cards --effects --card-out --card-free --card-wd 0.0001: an MLP with a hidden layer of 64 on the
-/// 87 mover2 features plus the card term on its output; a card's strengths a value per code learned
+/// --cards --effects --card-out --card-free --card-wd 0.0001 --stages all: an MLP with a hidden layer
+/// of 64 on the 87 mover2 features, with weights per stage of the turn, plus the card term on its output; a card's strengths a value per code learned
 /// for the codes of the data, no effect embeddings; a code not in the data has none), trained on all
 /// SPRT games with search values since the round-2+3 net became the default (2026-10-17 23:22 to
 /// 2026-10-24, 184522 games, 28.1M positions, runs/data/sprt_net2/; card lists:
 /// scripts/eval_cards/sprt_cards_to_npz.py) and on rounds 2 and 3 (no card lists), without the deck
 /// pairs where one deck won every game (its predecessors and their SPRTs: TODO.md, "Evaluation").
-const DEFAULT_EVAL: &str = include_str!("../../models/eval_mover2_sprt2r23obr_cardstable_64.json");
+const DEFAULT_EVAL: &str = include_str!("../../models/eval_mover2_sprt2r23obr_cardstable_stages_64.json");
 
 /// The position's value for `me` (in LP): the trained evaluation (`LearnedEval::from_env`).
 pub fn evaluate(d: &mut Duel, me: u32) -> f64 {

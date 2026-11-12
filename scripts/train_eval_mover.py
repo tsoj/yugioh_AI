@@ -19,8 +19,17 @@ whitened); --card-hidden H1,H2,..: hidden layers (ReLU) before the strengths (s 
 --card-no-gy: only the cards in the hand and on the field (the GY's strengths 0); --card-decorr W:
 a penalty on the card term's correlation with the pair term (the decks' strength). A
 card's strengths depend on its code only: the export is a table in both cases.
+
+--stages out|all: weights per stage of the turn (the phase's group times whether the mover is the
+turn player: 12 stages, read from the features), as the buckets of an NNUE: `out` the output layer
+only, `all` every layer. A layer's weights for a stage are a shared layer's plus the stage's
+difference (0 at the start; --stage-wd: its weight decay). The export: `stages`, one network per stage.
+
+In memory are only the rows in use (the training's, the validation games' and the held-out
+pairs'), with --host-x as float16.
 """
 import argparse
+import zipfile
 import numpy as np
 import torch
 
@@ -31,7 +40,9 @@ ap.add_argument("--hidden", type=int, default=32)
 ap.add_argument("--layers", type=int, default=1, help="hidden layers")
 ap.add_argument("--dims", help="the hidden layers' widths, comma list (e.g. 8,32), instead of --hidden and --layers")
 ap.add_argument("--lam", type=float, default=0.5)
-ap.add_argument("--host-x", action="store_true", help="the features in the host's memory, a batch at a time on the device (data larger than the device's memory)")
+ap.add_argument("--host-x", action="store_true", help="the features in the host's memory as float16, a batch at a time on the device (data larger than the device's memory)")
+ap.add_argument("--stages", choices=["out", "all"], help="weights per stage of the turn: of the output layer, or of all layers")
+ap.add_argument("--stage-wd", type=float, default=0.0, help="weight decay of the stages' differences to the shared layers")
 ap.add_argument("--epochs", type=int, default=12)
 ap.add_argument("--lr", type=float, default=2e-3)
 ap.add_argument("--wd", type=float, default=0.0)
@@ -67,10 +78,21 @@ dev = "cuda" if torch.cuda.is_available() else "cpu"
 if args.threads:
     torch.set_num_threads(args.threads)
 
+def member(path, name):
+    """The array `name` of an npz without compression as a memory map (np.load reads it whole)."""
+    info = zipfile.ZipFile(path).getinfo(name + ".npy")
+    assert info.compress_type == zipfile.ZIP_STORED, f"{path}: {name} is compressed"
+    with open(path, "rb") as f:
+        f.seek(info.header_offset + 26)
+        f.seek(info.header_offset + 30 + int.from_bytes(f.read(2), "little") + int.from_bytes(f.read(2), "little"))
+        version = np.lib.format.read_magic(f)
+        shape, _, dtype = (np.lib.format.read_array_header_1_0 if version == (1, 0) else np.lib.format.read_array_header_2_0)(f)
+        return np.memmap(path, dtype, "r", f.tell(), shape)
+
 d = np.load(args.data)
-X, value, static, result, game, player, turn = (d[k] for k in ["x", "value", "static", "result", "game", "player", "turn"])
-if args.drop:
-    X = X.copy(); X[:, [int(i) for i in args.drop.split(",")]] = 0
+value, static, game = d["value"], d["static"], d["game"]
+result, player, turn = d["result"].astype(np.int8), d["player"].astype(np.int8), d["turn"].astype(np.int16)
+X_all = member(args.data, "x")
 # (explicit deck pairs if the npz has them, e.g. match records: `pair`, `aseat` the seat of the
 # pair's first deck, `valgame` the validation games within training pairs; else blocks of 20 games
 # per pair with alternating seat order, the last 2 of each for validation)
@@ -97,10 +119,10 @@ def fit_k(v, r):
     return best[1]
 # (a merged npz has `src` per row: each data set's search values in its own scale; the export
 # uses the first set's, so put the newest data first)
-src = d["src"] if "src" in d.files else np.zeros(len(X), np.int64)
+src = d["src"] if "src" in d.files else np.zeros(len(X_all), np.int64)
 hasv = np.isfinite(value)
 Ks = {s_: fit_k(value[src == s_], result[src == s_]) for s_ in np.unique(src[hasv])}
-K, Kr = Ks[src[0]], np.array([Ks.get(i, 1.0) for i in range(src.max() + 1)])[src]
+K, Kr = Ks[src[0]], np.array([Ks.get(i, 1.0) for i in range(src.max() + 1)], np.float32)[src]
 
 rng = np.random.default_rng(0)
 if args.fold:
@@ -111,7 +133,7 @@ else:
 is_hp = np.isin(pair, list(held_pairs))
 is_vin = ~is_hp & valgame
 is_tr = ~is_hp & ~is_vin
-W = np.ones(len(X), np.float32)
+W = np.ones(len(X_all), np.float32)
 min_wins = max(args.min_wins, 1 if args.drop_onesided else 0)
 if min_wins or args.balance_wins:
     # (the pair's first deck sits in seat aseat; per game: 0 or 1 the deck that won, 2 a draw)
@@ -131,27 +153,49 @@ if min_wins or args.balance_wins:
         lo = np.minimum(w0, w1)
         W = np.where(won == 2, 1.0, lo / np.maximum(np.where(won == 0, w0, w1), 1)).astype(np.float32)
         print(f"--balance-wins: training rows' weight {W[is_tr].sum():.0f} of {is_tr.sum()}")
-# (normalized on the device in chunks: no float copies of X in memory)
-# (the held-out pairs' rows as they are, for the LP anchor: Z below is X normalized in place with --host-x)
+# (only the rows in use in memory; `use` and `n_all`: of the files' rows)
+use, n_all = is_tr | is_vin | is_hp, len(X_all)
+CHUNK = 1 << 20
+X = np.empty((int(use.sum()), X_all.shape[1]), np.float16 if args.host_x else np.float32)
+at = 0
+for i in range(0, n_all, CHUNK):
+    rows = X_all[i:i + CHUNK][use[i:i + CHUNK]]
+    X[at:at + len(rows)] = rows
+    at += len(rows)
+del X_all
+if args.drop:
+    X[:, [int(i) for i in args.drop.split(",")]] = 0
+value, static, result, game, player, turn, ps, sgn, Kr, hasv, W, is_tr, is_vin, is_hp = (
+    v[use] for v in (value, static, result, game, player, turn, ps, sgn, Kr, hasv, W, is_tr, is_vin, is_hp))
+del pair, aseat, valgame, src
+# (the stage of the turn, from the features: the phase's group, and whether the mover is the turn player)
+TURN_PLAYER, PHASES, N_STAGES = 34, slice(35, 41), 12
+stage = np.concatenate([X[i:i + CHUNK, PHASES].argmax(1) * 2 + (X[i:i + CHUNK, TURN_PLAYER] > 0) for i in range(0, len(X), CHUNK)]).astype(np.int8)
+# (the held-out pairs' rows as they are, for the LP anchor)
 X_hp = X[is_hp]
+# (with --host-x normalized a batch at a time, else on the device in place, in chunks: no float copies of X in memory)
 zdev = "cpu" if args.host_x else dev
 Z = torch.from_numpy(X) if args.host_x else torch.tensor(X, device=dev)
 TR = torch.tensor(is_tr, device=zdev)
 s1 = torch.zeros(X.shape[1], dtype=torch.float64, device=zdev); s2 = torch.zeros_like(s1)
-for i in range(0, len(X), 1 << 20):
-    z = Z[i:i + (1 << 20)][TR[i:i + (1 << 20)]].double()
+for i in range(0, len(X), CHUNK):
+    z = Z[i:i + CHUNK][TR[i:i + CHUNK]].double()
     s1 += z.sum(0); s2 += (z * z).sum(0)
 n_tr = int(is_tr.sum()); m_ = s1 / n_tr
 mu, sd = m_.cpu().numpy().astype(np.float32), ((s2 / n_tr - m_ * m_).clamp_min(0).sqrt().cpu().numpy() + 1e-6).astype(np.float32)
-Z.sub_(torch.tensor(mu, device=zdev)).div_(torch.tensor(sd, device=zdev))
+MU, SD = torch.tensor(mu, device=dev), torch.tensor(sd, device=dev)
+if not args.host_x:
+    Z.sub_(MU).div_(SD)
 
 def z_of(idx):
-    return Z[idx.cpu()].to(dev, non_blocking=True) if args.host_x else Z[idx]
+    return (Z[idx.cpu()].to(dev, non_blocking=True).float() - MU) / SD if args.host_x else Z[idx]
 del TR
+STG = torch.tensor(stage, device=dev)
 Yr = torch.tensor((result + 1) / 2, dtype=torch.float32, device=dev)
 Yv = torch.tensor(1 / (1 + np.exp(-np.clip(np.nan_to_num(value) / Kr, -50, 50))), dtype=torch.float32, device=dev)
+del Kr
 HV = torch.tensor(hasv, device=dev)
-PS = torch.tensor(ps, device=dev); SG = torch.tensor(sgn, device=dev)
+PS = torch.tensor(ps, dtype=torch.int32, device=dev); SG = torch.tensor(sgn, device=dev)
 dec = torch.tensor(result != 0, device=dev)
 Wt = torch.tensor(W, device=dev)
 
@@ -159,7 +203,7 @@ n = X.shape[1]
 N_BUCKETS, N_STATES = 3, 4
 if args.cards:
     cd = np.load(args.cards); ef = np.load(args.effects)
-    assert len(cd["off"]) == len(X) + 1, "the card lists are not the npz's rows"
+    assert len(cd["off"]) == n_all + 1, "the card lists are not the npz's rows"
     # (each data code's effect embedding: the mean over the seeds; none: 0)
     at = {c: i for i, c in enumerate(ef["codes"].tolist())}
     emb = ef["emb"].astype(np.float32).mean(0) * ef["has_effect"][:, None]
@@ -177,14 +221,27 @@ if args.cards:
     HE = np.zeros(len(rows_of), np.float32); HE[rows_of >= 0] = ef["has_effect"][rows_of[rows_of >= 0]]
     EC_t = torch.tensor(EC, device=dev); HE_t = torch.tensor(HE, device=dev)
     EF_codes, EF_emb, EF_has = ef["codes"], torch.tensor(emb), torch.tensor(ef["has_effect"].astype(np.float32))  # (every card: the export's table)
-    OFF = torch.tensor(cd["off"], device=dev)
+    # (the entries of the rows in use, a chunk of rows at a time)
+    off = cd["off"]
+    OFF = torch.tensor(np.concatenate([[0], np.cumsum(np.diff(off)[use])]), device=dev)
     DATA_CODES = cd["codes"]
-    # (compact on the device: 500M entries of the SPRT data; widened per batch)
-    CI = torch.tensor(cd["cidx"].astype(np.int32), device=dev)
-    BK = torch.tensor(cd["bucket"].astype(np.int8), device=dev)
-    ST = torch.tensor((cd["negated"] * 2 + cd["used"]).astype(np.int8), device=dev)
-    SGN = torch.tensor(np.where(cd["mine"] > 0, 1, -1).astype(np.int8), device=dev)
-    del cd, ef, emb
+    # (compact on the device: 1000M entries of the SPRT and OpenBench data; widened per batch.
+    # PK: an entry's bucket, state (negated * 2 + used) and side (the mover's: 1) in the bits
+    # 0-1, 2-3 and 4)
+    ci = np.empty(int(OFF[-1]), np.int16 if len(DATA_CODES) < 1 << 15 else np.int32)
+    pk = np.empty(len(ci), np.int8)
+    cidx, bucket, used, negated, mine = (member(args.cards, name) for name in ("cidx", "bucket", "used", "negated", "mine"))
+    at_e = 0
+    for i in range(0, n_all, CHUNK):
+        j = min(i + CHUNK, n_all)
+        e = slice(off[i], off[j])
+        ent = np.repeat(use[i:j], np.diff(off[i:j + 1]))
+        to = slice(at_e, at_e + int(ent.sum()))
+        ci[to] = cidx[e][ent]
+        pk[to] = (bucket[e] | used[e] << 2 | negated[e] << 3 | (mine[e] > 0) << 4)[ent]
+        at_e = to.stop
+    CI, PK = torch.from_numpy(ci).to(dev), torch.from_numpy(pk).to(dev)
+    del cd, ef, emb, off, ci, pk, cidx, bucket, used, negated, mine
     emb_dim = EC.shape[1]
     card_hid = [int(h) for h in args.card_hidden.split(",") if h]
     if card_hid:
@@ -228,24 +285,59 @@ def card_x(idx):
     cnt = hi - lo
     row = torch.repeat_interleave(torch.arange(len(idx), device=dev), cnt)
     ent = torch.repeat_interleave(lo - torch.cumsum(cnt, 0) + cnt, cnt) + torch.arange(int(cnt.sum()), device=dev)
-    b = BK[ent].long()
-    val = SGN[ent].float() * m[b, ST[ent].long()] * s[CI[ent].long(), b]
+    pk = PK[ent].long()
+    b = pk & 3
+    val = ((pk >> 4 & 1) * 2 - 1).float() * m[b, pk >> 2 & 3] * s[CI[ent].long(), b]
     if use_hold[0]:
         val = val * (~HOLD[CI[ent].long()]).float()
     out = torch.zeros(len(idx) * N_BUCKETS, device=dev)
     out.index_add_(0, row * N_BUCKETS + b, val)
     return out.view(len(idx), N_BUCKETS)
 
+class StageLinear(torch.nn.Linear):
+    """A layer with weights per stage: the shared layer's plus the stage's difference."""
+    def __init__(self, n_from, n_to):
+        super().__init__(n_from, n_to)
+        self.dw = torch.nn.Parameter(torch.zeros(N_STAGES, n_to, n_from))
+        self.db = torch.nn.Parameter(torch.zeros(N_STAGES, n_to))
+
+    def of_stage(self, s):
+        return self.weight + self.dw[s], self.bias + self.db[s]
+
+    def forward(self, h, bounds):
+        """`h`: rows in the stages' order, stage s from bounds[s] to bounds[s + 1]."""
+        return torch.cat([torch.nn.functional.linear(h[lo:hi], *self.of_stage(s)) for s, (lo, hi) in enumerate(zip(bounds, bounds[1:])) if hi > lo])
+
+class Net(torch.nn.Module):
+    """The MLP (ReLU between the layers); the layers of `staged` have weights per stage."""
+    def __init__(self, dims, staged):
+        super().__init__()
+        self.layers = torch.nn.ModuleList([(StageLinear if i in staged else torch.nn.Linear)(a_, b_) for i, (a_, b_) in enumerate(zip(dims, dims[1:]))])
+        self.staged = bool(staged)
+
+    def forward(self, z, stage):
+        if self.staged:
+            order = torch.argsort(stage)
+            z, bounds = z[order], [0] + torch.bincount(stage.long(), minlength=N_STAGES).cumsum(0).tolist()
+        for i, l in enumerate(self.layers):
+            z = l(z, bounds) if isinstance(l, StageLinear) else l(z)
+            if i + 1 < len(self.layers):
+                z = torch.relu(z)
+        z = z.squeeze(-1)
+        return z[torch.argsort(order)] if self.staged else z
+
+    def weights(self, s):
+        """The layers' (weight, bias) for stage s."""
+        return [[t.detach().cpu().numpy().astype(float) for t in (l.of_stage(s) if isinstance(l, StageLinear) else (l.weight, l.bias))] for l in self.layers]
+
 n_in = n
 n = n_x
-if args.model == "linear":
-    net = torch.nn.Linear(n, 1)
-else:
-    dims = [n] + hidden
-    net = torch.nn.Sequential(*[m for a_, b_ in zip(dims, dims[1:]) for m in (torch.nn.Linear(a_, b_), torch.nn.ReLU())], torch.nn.Linear(dims[-1], 1))
-net = net.to(dev)
+dims = [n] + (hidden if args.model == "mlp" else []) + [1]
+net = Net(dims, {"out": [len(dims) - 2], "all": range(len(dims) - 1), None: []}[args.stages]).to(dev)
 a = torch.zeros(int(ps.max()) + 1, device=dev, requires_grad=True)
-groups = [{"params": net.parameters(), "weight_decay": args.wd}, {"params": [a]}]
+is_diff = lambda name: name.rsplit(".", 1)[-1] in ("dw", "db")
+groups = [{"params": [p_ for name, p_ in net.named_parameters() if not is_diff(name)], "weight_decay": args.wd},
+          {"params": [p_ for name, p_ in net.named_parameters() if is_diff(name)], "weight_decay": args.stage_wd}, {"params": [a]}]
 if card_params:
     first = [card_T] if args.card_free else ([card_layers[0].weight] if card_hid else [card_w])
     rest = [card_c, card_m] + ([p_ for p_ in card_first if all(p_ is not f_ for f_ in first)] + [card_w] if card_hid else [])
@@ -257,10 +349,10 @@ bce = torch.nn.functional.binary_cross_entropy_with_logits
 
 def v_of(idx):
     if card_params and args.card_out:
-        return net(z_of(idx)).squeeze(-1) + card_x(idx).sum(1)
+        return net(z_of(idx), STG[idx]) + card_x(idx).sum(1)
     if card_params:
-        return net(torch.cat([z_of(idx), card_x(idx)], 1)).squeeze(-1)
-    return net(z_of(idx)).squeeze(-1)
+        return net(torch.cat([z_of(idx), card_x(idx)], 1), STG[idx])
+    return net(z_of(idx), STG[idx])
 
 def loss_of(idx, use_a=True, weighted=False, v=None):
     v = v_of(idx) if v is None else v
@@ -354,7 +446,7 @@ for ep in range(args.epochs):
         b = perm[i:i + B]
         if args.card_decorr:
             cs = card_x(b).sum(1)
-            l_res, l_val = loss_of(b, weighted=args.balance_wins, v=net(z_of(b)).squeeze(-1) + cs)
+            l_res, l_val = loss_of(b, weighted=args.balance_wins, v=net(z_of(b), STG[b]) + cs)
             t = SG[b] * a.detach()[PS[b]]
             cs_, t_ = cs - cs.mean(), t - t.mean()
             corr2 = (cs_ * t_).mean() ** 2 / ((cs_ ** 2).mean() * (t_ ** 2).mean()).clamp_min(1e-12)
@@ -370,11 +462,11 @@ if card_params:
     with torch.no_grad():
         s = card_strength(EC_t, HE_t).cpu().numpy()
         print("card term: multipliers (bucket x [neither, used, negated, both])\n", torch.cat([torch.ones(N_BUCKETS, 1, device=dev), 1 + card_m], 1).cpu().numpy().round(3))
-        print("card term: strength sd per bucket", s[HE > 0].std(0).round(4), *(() if args.card_out else ("first layer's weights of the card inputs", net[0].weight[:, n_in:].norm(dim=0).cpu().numpy().round(3))))
+        print("card term: strength sd per bucket", s[HE > 0].std(0).round(4), *(() if args.card_out else ("first layer's weights of the card inputs", net.layers[0].weight[:, n_in:].norm(dim=0).cpu().numpy().round(3))))
         if args.output:
             np.savez(args.output + ".cards.npz", codes=np.load(args.cards)["codes"], strength=s, mult=torch.cat([torch.ones(N_BUCKETS, 1, device=dev), 1 + card_m], 1).cpu().numpy())
 if args.save_v:
-    np.savez(args.save_v, v=all_v())
+    np.savez(args.save_v, v=all_v(), rows=np.nonzero(use)[0], stage=stage)
 def card_table():
     """The card term for the bot: every card's strength per bucket (the cards with an effect), the
     multipliers per bucket and state. With --card-out (`direct`) the strengths in the output's
@@ -394,19 +486,23 @@ if args.output:
     import json
     assert args.model == "mlp"
     FEATURE_SETS = {87: "mover2", 99: "mover5", 104: "mover3", 122: "mover4"}
-    st = {kk: vv.detach().cpu().numpy().astype(float) for kk, vv in net.state_dict().items()}
-    if args.drop:  # (dropped inputs were 0 in training but not at inference: their weights out)
-        st["0.weight"][:, [int(i) for i in args.drop.split(",")]] = 0
+    def network(s=None):
+        """The network (for stage s) as the model file has it."""
+        (w1, b1), *middle, (w2, b2) = net.weights(s)
+        if args.drop:  # (dropped inputs were 0 in training but not at inference: their weights out)
+            w1[:, [int(i) for i in args.drop.split(",")]] = 0
+        if args.indicator:  # (the indicator is 0 in play: its input (0 - mu) / sd joins the bias)
+            w1, b1 = w1[:, :-1], b1 + w1[:, -1] * (0 - mu[-1]) / sd[-1]
+        return {"w1": w1.tolist(), "b1": b1.tolist(), "layers": [{"w": w.tolist(), "b": b.tolist()} for w, b in middle],
+                "w2": (w2[0] * K).tolist(), "b2": float(b2[0] * K)}
+    nets = {"stages": [network(s) for s in range(N_STAGES)]} if args.stages else network()
+    if args.drop:
         sd[[int(i) for i in args.drop.split(",")]] = 1
-    if args.indicator:  # (the indicator is 0 in play: its input (0 - mu) / sd joins the bias)
-        st["0.bias"] = st["0.bias"] + st["0.weight"][:, -1] * (0 - mu[-1]) / sd[-1]
+    if args.indicator:
         assert not card_params
-        st["0.weight"], mu, sd, n = st["0.weight"][:, :-1], mu[:-1], sd[:-1], n - 1
+        mu, sd, n = mu[:-1], sd[:-1], n - 1
     json.dump({"features": FEATURE_SETS.get(n_in, "mover"), "model": "mover_mlp", "mu": mu.astype(float).tolist(), "scale": sd.astype(float).tolist(),
-               "w1": st["0.weight"].tolist(), "b1": st["0.bias"].tolist(),
-               "layers": [{"w": st[f"{2 * i}.weight"].tolist(), "b": st[f"{2 * i}.bias"].tolist()} for i in range(1, args.layers)],
-               "w2": (st[f"{2 * args.layers}.weight"][0] * K).tolist(), "b2": float(st[f"{2 * args.layers}.bias"][0] * K),
-               "k": float(K), "lam": args.lam, "hidden": hidden[0], "dims": hidden, "n_layers": args.layers,
+               **nets, "k": float(K), "lam": args.lam, "hidden": hidden[0], "dims": hidden, "n_layers": args.layers,
                **({"cards": card_table()} if card_params else {})}, open(args.output, "w"))
     print("saved", args.output)
     # the LP anchor (bot-anchor) on the held-out pairs' rows, so that the bot's values are in LP
