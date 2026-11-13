@@ -122,7 +122,7 @@ during a run does not change it.
 
 The bot's models are in `crates/bot/models/` and compiled in. To make them again:
 
-- The evaluation `eval_mover2_sprt2r23obr_cardstable_vf097_64.json`: SPRT records →
+- The evaluation `eval_mover2_sprt2r23obr_cardstable_vf097_debias_64.json`: SPRT records →
   `scripts/collect_sprt_games.py` → `bot-refeature --features mover2` →
   `scripts/sprt_games_to_npz.py` (with rounds 2 and 3: `bot-datagen` →
   `scripts/eval_mover_features.py`, in `runs/data/rounds23/`). The card term: the same games →
@@ -130,7 +130,8 @@ The bot's models are in `crates/bot/models/` and compiled in. To make them again
   `scripts/eval_cards/embed_effects.py --clean --codes CARDS.npz`: which cards have an effect).
   Then `scripts/train_eval_mover.py --dims 64 --held 400 --drop-onesided --lam 0.5 --cards
   CARDS.npz --effects EFFECTS.npz --card-out --card-free --card-wd 0.0001 --value-filter forward
-  --value-decay 0.97` (the search value's target: a mean of the game's later search values).
+  --value-decay 0.97 --value-debias` (the search value's target: a mean of the game's later search
+  values, each without its bias by the stage of the turn and the turn).
 - The card policy `card_policy_cp4_h16.json`: `bot-card-refs --independent` →
   `scripts/train_card_policy.py`.
 - The set policy `set_policy_s2_h16.json`: `bot-card-refs --independent --decisions` →

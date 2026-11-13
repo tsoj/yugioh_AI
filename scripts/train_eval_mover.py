@@ -20,6 +20,13 @@ whitened); --card-hidden H1,H2,..: hidden layers (ReLU) before the strengths (s 
 a penalty on the card term's correlation with the pair term (the decks' strength). A
 card's strengths depend on its code only: the export is a table in both cases.
 
+--value-debias: the search values carry a bias by the stage of the turn (the phase group, and whether
+the mover is the turn player) and by the turn (1, 2, 3-4, 5-8, 9+): the value at which the mover wins
+half of its games is not 0 (largest for the turn player in the Main Phase of turn 1). It comes from
+the search (a maximum over noisy leaves) and the eval learns it from this target. A logistic fit of
+the results on the values (one slope, a constant per stage and turn; a stage's turns with fewer than
+5000 rows together) gives the bias; the target is the value less its bias.
+
 --value-filter forward|both --value-decay D: the search value's target of a row is a weighted mean of
 the search values (as win probabilities, for the row's mover) of the rows of its game, weight D^k for
 the row k decisions away: `forward` the row and the later rows only, `both` the earlier rows too.
@@ -44,6 +51,8 @@ ap.add_argument("--lam", type=float, default=0.5)
 ap.add_argument("--host-x", action="store_true", help="the features in the host's memory as float16, a batch at a time on the device (data larger than the device's memory)")
 ap.add_argument("--value-filter", choices=["forward", "both"], help="the search value's target: a weighted mean over the game's rows (--value-decay)")
 ap.add_argument("--value-decay", type=float, default=0.9, help="the weight per decision of --value-filter")
+ap.add_argument("--value-debias", action="store_true", help="the search value's target without its bias by the stage of the turn and the turn (before --value-filter)")
+ap.add_argument("--taper", type=int, default=0, help="two output heads, mixed by the turn: the first alone in turn 1, the second alone from this turn on (0: one head; not exported)")
 ap.add_argument("--epochs", type=int, default=12)
 ap.add_argument("--lr", type=float, default=2e-3)
 ap.add_argument("--wd", type=float, default=0.0)
@@ -133,7 +142,31 @@ def decayed_sums(x, game, decay):
     return y - decay ** (np.arange(len(x)) - first + 1) * np.where(first > 0, y[first - 1], 0)
 
 # (the search value as the mover's win probability: its target)
-pv = 1 / (1 + np.exp(-np.clip(np.nan_to_num(value) / Kr, -50, 50)))
+zv = np.nan_to_num(value) / Kr
+if args.value_debias:
+    # (mover2: feature 34 the mover is the turn player, 35-40 the phase group)
+    xs = np.concatenate([np.asarray(X_all[i:i + (1 << 20), 34:41], np.float32) for i in range(0, len(X_all), 1 << 20)])
+    stage = xs[:, 1:].argmax(1) * 2 + (xs[:, 0] < 0.5)
+    tb = np.digitize(turn, [2, 3, 5, 9])
+    fit = hasv & (result != 0) & (np.abs(value) < 90000)
+    cls = tb * 12 + stage
+    few = np.bincount(cls[fit], minlength=60) < 5000
+    cls = np.where(few[cls], 60 + stage, cls)
+    zf, yf, cf = np.clip(zv[fit], -50, 50), (result[fit] > 0).astype(np.float64), cls[fit]
+    slope, const = 1.0, np.zeros(72)
+    for _ in range(40):
+        p = 1 / (1 + np.exp(-(slope * zf + const[cf])))
+        const += np.bincount(cf, yf - p, 72) / (np.bincount(cf, p * (1 - p), 72) + 1e-9)
+        p = 1 / (1 + np.exp(-(slope * zf + const[cf])))
+        slope += ((yf - p) * zf).sum() / ((p * (1 - p) * zf * zf).sum() + 1e-9)
+    bias = -const / slope
+    print(f"--value-debias: slope {slope:.3f}; the bias in LP by turn (1, 2, 3-4, 5-8, 9+; then the turns with few rows together), turn player / other player")
+    for g, name in enumerate(["Draw", "Standby", "Main 1", "Battle", "Main 2", "End"]):
+        print(f"  {name:8}" + "".join("         ----/    ----" if t < 5 and few[t * 12 + g * 2] and few[t * 12 + g * 2 + 1] else f"  {bias[t * 12 + g * 2] * K:+8.0f}/{bias[t * 12 + g * 2 + 1] * K:+8.0f}" for t in range(6)))
+    zv = zv - np.where(np.abs(value) < 90000, bias[cls], 0)
+    del xs, stage, tb, fit, cls, zf, yf, cf
+pv = 1 / (1 + np.exp(-np.clip(zv, -50, 50)))
+del zv
 if args.value_filter:
     # (averaged for player 0, then back to the row's mover)
     p0 = np.where(player == 0, pv, 1 - pv)
@@ -320,8 +353,17 @@ if args.model == "linear":
     net = torch.nn.Linear(n, 1)
 else:
     dims = [n] + hidden
-    net = torch.nn.Sequential(*[m for a_, b_ in zip(dims, dims[1:]) for m in (torch.nn.Linear(a_, b_), torch.nn.ReLU())], torch.nn.Linear(dims[-1], 1))
+    net = torch.nn.Sequential(*[m for a_, b_ in zip(dims, dims[1:]) for m in (torch.nn.Linear(a_, b_), torch.nn.ReLU())], torch.nn.Linear(dims[-1], 2 if args.taper else 1))
 net = net.to(dev)
+# (--taper: the second head's share, 0 in turn 1 to 1 from turn --taper on)
+TAPER = torch.tensor(np.clip((turn - 1) / max(args.taper - 1, 1), 0, 1), dtype=torch.float32, device=dev) if args.taper else None
+
+def out_of(o, idx):
+    """The network's output of the rows `idx`: its one head, or the two mixed by the turn."""
+    if TAPER is None:
+        return o.squeeze(-1)
+    t = TAPER[idx]
+    return o[:, 0] * (1 - t) + o[:, 1] * t
 a = torch.zeros(int(ps.max()) + 1, device=dev, requires_grad=True)
 groups = [{"params": net.parameters(), "weight_decay": args.wd}, {"params": [a]}]
 if card_params:
@@ -335,10 +377,10 @@ bce = torch.nn.functional.binary_cross_entropy_with_logits
 
 def v_of(idx):
     if card_params and args.card_out:
-        return net(z_of(idx)).squeeze(-1) + card_x(idx).sum(1)
+        return out_of(net(z_of(idx)), idx) + card_x(idx).sum(1)
     if card_params:
-        return net(torch.cat([z_of(idx), card_x(idx)], 1)).squeeze(-1)
-    return net(z_of(idx)).squeeze(-1)
+        return out_of(net(torch.cat([z_of(idx), card_x(idx)], 1)), idx)
+    return out_of(net(z_of(idx)), idx)
 
 def loss_of(idx, use_a=True, weighted=False, v=None):
     v = v_of(idx) if v is None else v
@@ -432,7 +474,7 @@ for ep in range(args.epochs):
         b = perm[i:i + B]
         if args.card_decorr:
             cs = card_x(b).sum(1)
-            l_res, l_val = loss_of(b, weighted=args.balance_wins, v=net(z_of(b)).squeeze(-1) + cs)
+            l_res, l_val = loss_of(b, weighted=args.balance_wins, v=out_of(net(z_of(b)), b) + cs)
             t = SG[b] * a.detach()[PS[b]]
             cs_, t_ = cs - cs.mean(), t - t.mean()
             corr2 = (cs_ * t_).mean() ** 2 / ((cs_ ** 2).mean() * (t_ ** 2).mean()).clamp_min(1e-12)
@@ -468,7 +510,7 @@ def card_table():
     return {"codes": codes[keep].tolist(), "strength": s[keep].astype(float).tolist(), "mult": m.astype(float).tolist(),
             **({"direct": True} if args.card_out else {})}
 
-if args.output:
+if args.output and not args.taper:  # (two heads: no export yet)
     import json
     assert args.model == "mlp"
     FEATURE_SETS = {87: "mover2", 99: "mover5", 104: "mover3", 122: "mover4"}
