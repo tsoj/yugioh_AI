@@ -24,13 +24,24 @@ pub fn is_searched(m: &Msg) -> bool {
     )
 }
 
+/// A Spell that is not a Quick-Play Spell: Set, it can do nothing in the opponent's turn, and it
+/// cannot be activated in the turn it was Set.
+fn is_slow_spell(code: u32) -> bool {
+    card(code).is_some_and(|c| c.type_ & TYPE_SPELL != 0 && c.type_ & TYPE_QUICKPLAY == 0)
+}
+
 /// The candidates of a searched prompt (belief_mc.candidates). An idle command's shuffling of the
 /// hand is none (it changes nothing but the hand's order, which nothing here tracks, and comes back
 /// to the same prompt: in the tree a copy of the node one ply shallower, at the root a search spent
-/// on nothing; the search chose it in 10.6% of its idle commands).
+/// on nothing; the search chose it in 10.6% of its idle commands). Setting a Spell that is not a
+/// Quick-Play Spell is none either (`is_slow_spell`; the search Set 1.6-1.8 of them per game, WindBot
+/// 0.03).
 pub fn candidates(m: &Msg) -> Vec<Response> {
     match m {
-        Msg::SelectIdlecmd { .. } => idle_options(m).into_iter().filter(|c| c.kind != Some(Command::Shuffle)).collect(),
+        Msg::SelectIdlecmd { ssetable, .. } => {
+            let slow_spell = |c: &Response| c.kind == Some(Command::Sset) && c.index.and_then(|i| ssetable.get(i as usize)).is_some_and(|x| is_slow_spell(x.code));
+            idle_options(m).into_iter().filter(|c| c.kind != Some(Command::Shuffle) && !slow_spell(c)).collect()
+        }
         Msg::SelectBattlecmd { .. } => battle_options(m),
         Msg::SelectChain { chains, forced, .. } => {
             let chain = (0..chains.len()).map(Response::index);
