@@ -313,6 +313,9 @@ impl Bot for BeliefSearchBot {
         self.belief = Some(BotBelief::new(player, init.clone(), self.completion));
         (self.clock_gains, self.clock_after_search, self.slowest_reconstruction) = ((0.0, 0.0), None, 0.0);
         self.own_zones = init.deck.main.iter().chain(&init.deck.extra).any(|&c| zone_sensitive(c));
+        if let Search::AlphaBeta { ab, .. } | Search::AlphaBetaNaive { ab, .. } = &mut self.search {
+            ab.new_game();
+        }
         Ok(())
     }
     fn observe(&mut self, msg: &Msg) {
@@ -364,6 +367,9 @@ impl Bot for BeliefSearchBot {
     fn end(&mut self, _result: &serde_json::Map<String, Value>) {
         if std::env::var_os("BOT_GAME_STATS").is_some() {
             eprintln!("{} stats: searches {} failures {} nodes {}", self.name, self.searches, self.failures, self.nodes);
+            if let Search::AlphaBeta { ab, .. } | Search::AlphaBetaNaive { ab, .. } = &self.search {
+                eprintln!("{} tt: probes {} hits {} of earlier decisions {} deep enough {}", self.name, ab.tt_probes, ab.tt_hits, ab.tt_hits_earlier, ab.tt_hits_earlier_deep);
+            }
         }
     }
 }

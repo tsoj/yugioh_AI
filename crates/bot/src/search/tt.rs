@@ -1,4 +1,4 @@
-//! The transposition table: a search result per position (`hash_key`), kept within a decision.
+//! The transposition table: a search result per position (`hash_key`), kept within a game.
 
 use ygo_core::duel::Duel;
 use ygo_core::types::CardId;
@@ -30,7 +30,7 @@ pub struct HashResult {
 
 pub struct TranspositionTable {
     entries: Vec<HashResult>,
-    /// (the decision the entries are for: entries of earlier ones do not count)
+    /// (the decision the new entries are of: for the count of the hits on earlier decisions' entries)
     generation: u16,
 }
 
@@ -45,10 +45,15 @@ impl TranspositionTable {
         (key & ((1 << TT_BITS) - 1)) as usize
     }
 
-    /// The entry of the position, if it has one from this decision's searches.
+    /// The entry of the position, if it has one from this game's searches (a key is never 0).
     pub fn get(&self, key: u64) -> Option<HashResult> {
         let e = self.entries[Self::slot(key)];
-        (e.key == key && e.generation == self.generation).then_some(e)
+        (e.key == key).then_some(e)
+    }
+
+    /// Whether the entry is of an earlier decision's search.
+    pub fn is_earlier(&self, e: &HashResult) -> bool {
+        e.generation != self.generation
     }
 
     /// Stores a result (always replacing the slot's entry).
@@ -56,12 +61,14 @@ impl TranspositionTable {
         self.entries[Self::slot(key)] = HashResult { key, value, depth: depth as f32, node_type, best_move: best_move as i8, generation: self.generation };
     }
 
-    /// A new decision: the entries so far stop counting.
+    /// A new decision: the entries stay.
     pub fn new_generation(&mut self) {
-        self.generation = ((self.generation as u32 + 1) % 65536) as u16;
-        if self.generation == 0 {
-            self.generation = 1;
-        }
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    /// A new game: no entries.
+    pub fn clear(&mut self) {
+        self.entries.fill(HashResult::default());
     }
 }
 
@@ -213,12 +220,13 @@ pub fn hash_key(d: &mut Duel, m: &Msg) -> u64 {
     if k == 0 { 1 } else { k }
 }
 
-/// What the key takes of a card: which one, its position, status bits, counters, materials and
+/// What the key takes of a card: which one, its code (a hidden card's guess can change from one
+/// decision to the next), its position, status bits, counters, materials and
 /// equip target.
 fn card_state(d: &Duel, c: CardId, h: &mut rustc_hash::FxHasher) {
     use std::hash::Hash;
     let x = d.card(c);
-    (x.cardid, x.current.position, x.status, &x.counters).hash(h);
+    (x.cardid, x.data.code, x.current.position, x.status, &x.counters).hash(h);
     x.xyz_materials.iter().map(|m| d.card(*m).cardid).for_each(|id| id.hash(h));
     x.equiping_target().map(|t| d.card(t).cardid).hash(h);
 }

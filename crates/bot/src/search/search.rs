@@ -65,7 +65,7 @@ impl Growth {
     }
 }
 
-/// The search's tables, kept from one decision to the next (a bot holds one).
+/// The search's tables, kept from one decision to the next (a bot holds one; `new_game`, `prepare`).
 pub struct AlphaBeta {
     hash_table: TranspositionTable,
     move_effort: MoveEffort,
@@ -75,6 +75,9 @@ pub struct AlphaBeta {
     /// transposition table lookups, and those that found the position
     pub tt_probes: u64,
     pub tt_hits: u64,
+    /// those that found an earlier decision's entry, and those of them deep enough for its value
+    pub tt_hits_earlier: u64,
+    pub tt_hits_earlier_deep: u64,
     /// (lines the core could not play: the search avoids them)
     pub broken: u64,
     /// (if set, statistics of the expanded nodes)
@@ -109,6 +112,8 @@ impl Default for AlphaBeta {
             nodes: 0,
             tt_probes: 0,
             tt_hits: 0,
+            tt_hits_earlier: 0,
+            tt_hits_earlier_deep: 0,
             broken: 0,
             stats: None,
             tune: Tune::from_env(),
@@ -149,7 +154,12 @@ impl AlphaBeta {
         &mut self.growth[(depth as usize).min(last)]
     }
 
-    /// The tables for a new decision.
+    /// The tables for a new game: an empty transposition table (then `prepare` per decision).
+    pub fn new_game(&mut self) {
+        self.hash_table.clear();
+    }
+
+    /// The tables for a new decision: the transposition table keeps the game's earlier searches.
     pub fn prepare(&mut self) {
         self.hash_table.new_generation();
         self.move_effort.clear();
@@ -473,6 +483,10 @@ impl SearchState<'_> {
         self.tables.tt_probes += 1;
         if let Some(h) = hash_result {
             self.tables.tt_hits += 1;
+            if self.tables.hash_table.is_earlier(&h) {
+                self.tables.tt_hits_earlier += 1;
+                self.tables.tt_hits_earlier_deep += (h.depth as f64 >= depth) as u64;
+            }
             tt_entry = if h.best_move >= 0 { TtEntry::WithMove(h.node_type) } else { TtEntry::WithoutMove };
             if h.depth as f64 >= depth {
                 match h.node_type {
