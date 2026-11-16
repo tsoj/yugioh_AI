@@ -1,10 +1,10 @@
-card_width, int, 3, 1, 8, 1, 0.002
-root_card_width, int, 8, 3, 20, 1.5, 0.002
-root_combo_width, int, 5, 2, 12, 1, 0.002
-root_combo_cards, int, 6, 3, 12, 1, 0.002
-lmr_min_move_counter, int, 2, 0, 8, 1, 0.002
+card_width, int, 3, 1, 8, 0.2, 0.0125
+root_card_width, int, 8, 3, 20, 0.2, 0.0125
+root_combo_width, int, 5, 2, 12, 0.2, 0.0125
+root_combo_cards, int, 6, 3, 12, 0.2, 0.0125
+lmr_min_move_counter, int, 2, 0, 8, 0.2, 0.0125
 lmr_reduction, float, 1.0, 0.0, 3.0, 0.15, 0.002
-futility_max_depth, float, 8.0, 1.0, 20.0, 1.0, 0.002
+futility_max_depth, float, 8.0, 1.0, 20.0, 0.5, 0.002
 futility_margin, float, 546.633177, 100.0, 1500.0, 50.0, 0.002
 futility_margin_per_ply, float, 228.106152, 0.0, 800.0, 20.0, 0.002
 hist_decay, float, 0.5, 0.0, 1.0, 0.05, 0.002
