@@ -1,7 +1,7 @@
 //! Move ordering: the rules' preference among a decision's moves, and the history slot of a move.
 
 use super::movegen::{candidates, card_sets};
-use super::params::HIST_BITS;
+use super::params::{HIST_BITS, ROOT_COMBO_CARDS, ROOT_COMBO_WIDTH};
 use ygo_arbiter::actions::{Command, Response};
 use crate::heuristic::db_attack;
 use ygo_arbiter::messages::Msg;
@@ -42,7 +42,7 @@ pub fn ordered(m: &Msg, turn_player: u32, card_order: Option<&[usize]>) -> Vec<R
         Msg::SelectCard { min: 1, max: 1, .. } if card_order.is_some() => {
             return card_order.unwrap().iter().filter(|&&i| i < cands.len()).map(|&i| cands[i].clone()).collect();
         }
-        Msg::SelectCard { .. } if card_order.is_some() => return card_sets(m, card_order.unwrap()),
+        Msg::SelectCard { .. } if card_order.is_some() => return card_sets(m, card_order.unwrap(), ROOT_COMBO_WIDTH, ROOT_COMBO_CARDS),
         // (the summons and attacks by the card's ATK, the highest first)
         Msg::SelectIdlecmd { summonable, .. } => cands.sort_by_key(|c| {
             let command = c.kind.unwrap();

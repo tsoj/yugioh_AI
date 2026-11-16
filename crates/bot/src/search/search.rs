@@ -362,7 +362,7 @@ impl SearchState<'_> {
         let policy = set_policy()?;
         let (cards, player) = selection_cards(m)?;
         let rules = &mut self.policies[*player as usize];
-        let moves = root_candidates(m, rules, None);
+        let moves = root_candidates(m, rules, None, &self.tables.tune);
         let best = *policy.order_sets(duel, m, rules.hint, &rules.card_order(cards), &moves).first()?;
         rules.hint = None;
         Some(moves[best].clone())
@@ -408,12 +408,12 @@ impl SearchState<'_> {
             let samples: Vec<(f64, f64)> = (0..root.moves.len())
                 .filter(|&m| iteration.values[m].is_some())
                 .map(|m| {
-                    root_effort[m].add(iteration.nodes[m], (depth - 1) as f64);
+                    root_effort[m].add(iteration.nodes[m], (depth - 1) as f64, self.tables.tune.effort_decay);
                     (((iteration.nodes[m] + 1) as f64).log2(), (depth - 1) as f64)
                 })
                 .collect();
             self.tables.effort_fit.add(&samples);
-            iteration.reorder(&mut move_order, root.exact, &root_effort, self.tables.effort_fit.slope());
+            iteration.reorder(&mut move_order, root.exact, &root_effort, self.tables.effort_fit.slope(&self.tables.tune));
             let values = iteration.values;
             self.tables.last_value = values[best].unwrap();
             self.tables.last_root_values = values.clone();
@@ -595,7 +595,7 @@ impl SearchState<'_> {
             self.tables.hash_table.add(key, node_type, best_value, depth, best_move);
         }
         for &(m, nodes, d) in &searches {
-            efforts[m].add(nodes, d);
+            efforts[m].add(nodes, d, tune.effort_decay);
         }
         let samples: Vec<(f64, f64)> = searches.iter().map(|&(_, nodes, d)| (((nodes + 1) as f64).log2(), d)).collect();
         self.tables.effort_fit.add(&samples);
@@ -611,7 +611,7 @@ impl SearchState<'_> {
         let mut order: Vec<usize> = (0..history_keys.len()).collect();
         order.sort_by(|&a, &b| (Some(a) != tt_move).cmp(&(Some(b) != tt_move)).then_with(|| history(b).partial_cmp(&history(a)).unwrap_or(Ordering::Equal)));
         let first = usize::from(tt_move.is_some());
-        effort_order(&mut order[first..], efforts, self.tables.effort_fit.slope());
+        effort_order(&mut order[first..], efforts, self.tables.effort_fit.slope(&self.tables.tune));
         order
     }
 
@@ -779,7 +779,7 @@ mod tests {
         };
         let mut efforts = vec![Effort::default(); 5];
         for m in [0, 1, 2, 4] {
-            efforts[m].add(iteration.nodes[m], 3.0);
+            efforts[m].add(iteration.nodes[m], 3.0, 1.0);
         }
         let mut order = vec![4, 0, 2, 1];
         iteration.reorder(&mut order, false, &efforts, 1.0);

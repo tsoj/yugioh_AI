@@ -31,7 +31,7 @@ fn usage() -> ! {
 fn game(opening: &Opening, names: [&str; 2], nodes: u64, seed: i64) -> Result<GameRecord, String> {
     let mut bots = Vec::new();
     for (seat, name) in names.into_iter().enumerate() {
-        let mut bot = BeliefSearchBot::new(name, Some(seed + seat as i64))?;
+        let mut bot = BeliefSearchBot::new(name, Some(seed + seat as i64), bot::search::Tune::from_env())?;
         bot.set_node_limit(Some(nodes));
         bots.push(bot);
     }

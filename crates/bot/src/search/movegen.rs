@@ -3,7 +3,7 @@
 
 use ygo_core::constants::*;
 
-use super::params::{ROOT_COMBO_CARDS, ROOT_COMBO_WIDTH, SUM_STEPS};
+use super::params::{ROOT_COMBO_CARDS, ROOT_COMBO_WIDTH, SUM_STEPS, Tune};
 use ygo_arbiter::actions::{Command, Response, available_places, battle_options, check_sum, idle_options};
 use crate::heuristic::{Heuristic, card, card_value};
 use ygo_arbiter::messages::Msg;
@@ -40,7 +40,7 @@ pub fn candidates(m: &Msg) -> Vec<Response> {
         Msg::SelectOption { options, .. } => (0..options.len()).map(Response::index).collect(),
         Msg::SelectCard { min: 1, max: 1, cards, .. } => (0..cards.len()).map(|i| Response::cards(vec![i])).collect(),
         // (several cards: the sets as listed; the search orders them by the rules' order, `card_sets`)
-        Msg::SelectCard { cards, .. } => card_sets(m, &(0..cards.len()).collect::<Vec<_>>()),
+        Msg::SelectCard { cards, .. } => card_sets(m, &(0..cards.len()).collect::<Vec<_>>(), ROOT_COMBO_WIDTH, ROOT_COMBO_CARDS),
         Msg::SelectSum { cards, .. } => {
             // (valid selections, the least valuable cards tried first; the rules' answer is random)
             let mut by_value: Vec<usize> = (0..cards.len()).collect();
@@ -54,19 +54,21 @@ pub fn candidates(m: &Msg) -> Vec<Response> {
 
 /// The moves compared at the root, best first by the rules: a searched decision's candidates
 /// (above), and for every other decision the rules' answer and alternatives to it (several cards,
-/// sums, tributes, places, orders and counters: at most ROOT_COMBO_WIDTH; positions, numbers,
-/// types and attributes: each). None of these is searched below the root (the rules answer
-/// them there). Declaring a card name and rock-paper-scissors: none (the rules answer).
-pub fn root_candidates(m: &Msg, rules: &Heuristic, state: Option<&Snapshot>) -> Vec<Response> {
+/// sums, tributes, places, orders and counters: at most `tune.root_combo_width`, of the first
+/// `tune.root_combo_cards` cards or places; positions, numbers, types and attributes: each). None
+/// of these is searched below the root (the rules answer them there). Declaring a card name and
+/// rock-paper-scissors: none (the rules answer).
+pub fn root_candidates(m: &Msg, rules: &Heuristic, state: Option<&Snapshot>, tune: &Tune) -> Vec<Response> {
+    let (width, top_cards) = (tune.root_combo_width, tune.root_combo_cards);
     if is_searched(m) && !matches!(m, Msg::SelectCard { .. }) {
         return candidates(m);
     }
     let rules_answer = || rules.clone().respond_to(m, state).ok();
     let mut out: Vec<Response> = match m {
         Msg::SelectCard { min: 1, max: 1, .. } => return candidates(m),
-        Msg::SelectCard { cards, .. } => card_sets(m, &rules.card_order(cards)),
+        Msg::SelectCard { cards, .. } => card_sets(m, &rules.card_order(cards), width, top_cards),
         Msg::SelectUnselectCard { finishable, cancelable, select_cards, .. } => {
-            let mut out: Vec<Response> = rules.card_order(select_cards).into_iter().take(ROOT_COMBO_WIDTH).map(Response::index).collect();
+            let mut out: Vec<Response> = rules.card_order(select_cards).into_iter().take(width).map(Response::index).collect();
             if *finishable != 0 || (*cancelable != 0 && select_cards.is_empty()) {
                 out.push(Response { finish: Some(true), ..Response::default() });
             }
@@ -100,7 +102,7 @@ pub fn root_candidates(m: &Msg, rules: &Heuristic, state: Option<&Snapshot>) -> 
             // (the places as listed, the rules taking the first)
             let places = available_places(*player, *flag);
             let k = (*count as usize).min(places.len());
-            let top = &places[..places.len().min(ROOT_COMBO_CARDS)];
+            let top = &places[..places.len().min(top_cards)];
             let mut sets: Vec<(usize, Vec<usize>)> = combinations(top.len(), k).into_iter().map(|c| (c.iter().sum::<usize>(), c)).collect();
             sets.sort_by_key(|(rank_sum, _)| *rank_sum);
             sets.into_iter().map(|(_, c)| Response { places: Some(c.into_iter().map(|j| top[j]).collect()), ..Response::default() }).collect()
@@ -127,7 +129,7 @@ pub fn root_candidates(m: &Msg, rules: &Heuristic, state: Option<&Snapshot>) -> 
             // (the orders in lexicographic order: as listed first, the rules' answer)
             let mut order: Vec<i64> = (0..cards.len() as i64).collect();
             let mut out = vec![Response { order: Some(order.clone()), ..Response::default() }];
-            while out.len() < ROOT_COMBO_WIDTH && next_permutation(&mut order) {
+            while out.len() < width && next_permutation(&mut order) {
                 out.push(Response { order: Some(order.clone()), ..Response::default() });
             }
             out
@@ -139,7 +141,7 @@ pub fn root_candidates(m: &Msg, rules: &Heuristic, state: Option<&Snapshot>) -> 
         }
         _ => vec![],
     };
-    // (no duplicates; combinations at most ROOT_COMBO_WIDTH)
+    // (no duplicates; combinations at most `width`)
     let mut seen: Vec<Response> = Vec::new();
     out.retain(|r| {
         let new = !seen.contains(r);
@@ -149,16 +151,15 @@ pub fn root_candidates(m: &Msg, rules: &Heuristic, state: Option<&Snapshot>) -> 
         new
     });
     if !matches!(m, Msg::SelectPosition { .. } | Msg::AnnounceNumber { .. } | Msg::AnnounceRace { .. } | Msg::AnnounceAttrib { .. }) {
-        out.truncate(ROOT_COMBO_WIDTH);
+        out.truncate(width);
     }
     out
 }
 
 /// The candidates of a selection of several cards, best first by `order` (the cards' indices,
 /// the preferred first): the first cards, as many as the rules take, then subsets of the first
-/// ROOT_COMBO_CARDS cards by how far they are from the best of their size (at most
-/// ROOT_COMBO_WIDTH).
-pub fn card_sets(m: &Msg, order: &[usize]) -> Vec<Response> {
+/// `top_cards` cards by how far they are from the best of their size (at most `width`).
+pub fn card_sets(m: &Msg, order: &[usize], width: usize, top_cards: usize) -> Vec<Response> {
     let Msg::SelectCard { min, max, cards, .. } = m else { return vec![] };
     if *max < 1 || cards.is_empty() {
         return vec![];
@@ -166,7 +167,7 @@ pub fn card_sets(m: &Msg, order: &[usize]) -> Vec<Response> {
     let n = cards.len();
     let lo = (*min).max(1).min(*max).min(n as u32) as usize;
     let hi = (*max as usize).min(n);
-    let top = &order[..n.min(ROOT_COMBO_CARDS)];
+    let top = &order[..n.min(top_cards)];
     let mut sets: Vec<(usize, usize, Vec<usize>)> = Vec::new();
     for k in lo..=hi.min(top.len()) {
         for c in combinations(top.len(), k) {
@@ -179,7 +180,7 @@ pub fn card_sets(m: &Msg, order: &[usize]) -> Vec<Response> {
     if lo > top.len() {
         out.push(Response::cards(order[..lo].to_vec()));
     }
-    out.truncate(ROOT_COMBO_WIDTH);
+    out.truncate(width);
     out
 }
 

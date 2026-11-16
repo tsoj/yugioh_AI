@@ -36,7 +36,7 @@ use ygo_core::duel::Duel;
 use bot::belief_bots::BeliefSearchBot;
 use bot::heuristic::Heuristic;
 use bot::search::movegen::root_candidates;
-use bot::search::{AlphaBeta, SearchParams};
+use bot::search::{AlphaBeta, SearchParams, Tune};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -53,7 +53,7 @@ fn candidates(prompt: &Msg, hint: Option<u64>) -> (Vec<Response>, Vec<Response>)
     let mut rules = Heuristic::new(1, player);
     rules.hint = hint;
     let seen = filter_prompt(prompt, player);
-    let cands = root_candidates(&seen, &rules, None);
+    let cands = root_candidates(&seen, &rules, None, &Tune::from_env());
     let core = cands.iter().filter_map(|c| to_core_response(prompt, player, c).ok()).collect();
     (cands, core)
 }
@@ -210,7 +210,7 @@ fn run_bot(record: &GameRecord, k: usize, nodes: u64) {
     let mut log = ObservationLog::new(player, true);
     replay(record, &mut [&mut log], Some(k + 1), None).unwrap();
     let seed = std::env::var("BOT_ANALYZE_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or(1);
-    let mut bot = BeliefSearchBot::new("alphabeta", Some(seed)).unwrap();
+    let mut bot = BeliefSearchBot::new("alphabeta", Some(seed), Tune::from_env()).unwrap();
     bot.start(player, &init_info(record, &record.setup(None).unwrap(), player)).unwrap();
     let last = log.items.iter().rposition(|x| matches!(x, ObsItem::Prompt(..))).unwrap();
     for (j, item) in log.items[..=last].iter().enumerate() {
@@ -319,7 +319,7 @@ fn run_playouts(record: &GameRecord, n: usize, nodes: u64) {
                                 let w = ygo_arbiter::protocol::BotProcess::start(&["runs/windbot/ygo-windbot".into()], "wind", &[("WindBot".into(), dir.clone())]).unwrap();
                                 Box::new(Prefixed { bot: w, played, nodes, replace: |_, _| {} })
                             }
-                            _ => Box::new(Prefixed { bot: BeliefSearchBot::new("alphabeta", Some(2 * i as i64 + 1 + p as i64)).unwrap(), played, nodes, replace: BeliefSearchBot::set_last_response }),
+                            _ => Box::new(Prefixed { bot: BeliefSearchBot::new("alphabeta", Some(2 * i as i64 + 1 + p as i64), Tune::from_env()).unwrap(), played, nodes, replace: BeliefSearchBot::set_last_response }),
                         }
                     })
                     .collect();

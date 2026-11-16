@@ -1,5 +1,7 @@
 //! The search's parameters.
 
+use ygo_arbiter::protocol::BotOption;
+
 /// (values are in LP: the learned eval's by its LP anchor)
 pub const WIN: f64 = 10_000_000.0;
 /// (a safety bound only: the clock ends the iterations)
@@ -14,7 +16,8 @@ pub const ROOT_CARD_WIDTH: usize = 8;
 /// (the root's other decisions, `root_candidates`: at most this many choices of several cards,
 /// tributes, sums, places, orders or counters, the subsets among the rules' first
 /// ROOT_COMBO_CARDS cards or places; a sum's search for valid selections stops after SUM_STEPS;
-/// SPRT at 20+0.2 H1, +11.5 +/- 9.2 at 2836 games, 2026-10-18)
+/// SPRT at 20+0.2 H1, +11.5 +/- 9.2 at 2836 games, 2026-10-18. Tunable at the root
+/// (`Tune::root_combo_*`); the sets of cards below the root and the sums keep these)
 pub const ROOT_COMBO_WIDTH: usize = 5;
 pub const ROOT_COMBO_CARDS: usize = 6;
 pub const SUM_STEPS: usize = 20_000;
@@ -95,12 +98,13 @@ pub const FUTILITY_MARGIN_PER_PLY: f64 = 228.1061522305487;
 // and failed features are branches (on there), not flags: futility-reductions, inner-decisions,
 // pvext-open-window, pv-half-ply, pv-move-half-ply, lmr-linear.
 
-/// Declares `Tune`: per parameter its type, default and how a value set at run time is bounded
-/// (a count rounds to the nearest integer; depths are fractional).
+/// Declares `Tune`: per parameter its type, default, how a value set at run time is bounded (a
+/// count rounds to the nearest integer; depths are fractional) and its range as a bot option.
 macro_rules! tunable {
-    ($($name:ident: $ty:ty = $default:expr, $bound:expr;)*) => {
-        /// The search parameters that can be set at run time (for tuning, `bot-spsa`): by default
-        /// the constants above; $BOT_TUNE as "name=value,..." overrides some (read once).
+    ($($name:ident: $ty:ty = $default:expr, $bound:expr, $range:expr;)*) => {
+        /// The search parameters that can be set at run time (for tuning: `bot-spsa`, or OpenBench
+        /// SPSA by bot options): by default the constants above; $BOT_TUNE as "name=value,..."
+        /// overrides some (read once). Time management is not among them.
         #[derive(Clone, Copy, Debug, PartialEq)]
         pub struct Tune {
             $(pub $name: $ty,)*
@@ -135,8 +139,30 @@ macro_rules! tunable {
                 }
                 true
             }
+
+            /// The parameters as bot options (PROTOCOL.md), these values the defaults.
+            pub fn options(&self) -> Vec<BotOption> {
+                vec![$(<$ty as TuneValue>::option(stringify!($name), self.$name, $range),)*]
+            }
         }
     };
+}
+
+/// A parameter's type as a bot option: a count is a `spin`, a number a `float`.
+trait TuneValue: Sized {
+    fn option(name: &str, default: Self, range: (f64, f64)) -> BotOption;
+}
+
+impl TuneValue for usize {
+    fn option(name: &str, default: usize, (min, max): (f64, f64)) -> BotOption {
+        BotOption::Spin { name: name.into(), default: default as i64, min: min as i64, max: max as i64 }
+    }
+}
+
+impl TuneValue for f64 {
+    fn option(name: &str, default: f64, (min, max): (f64, f64)) -> BotOption {
+        BotOption::Float { name: name.into(), default, min, max }
+    }
 }
 
 /// (a count: the nearest non-negative integer)
@@ -145,16 +171,22 @@ fn count(value: f64) -> usize {
 }
 
 tunable! {
-    card_width: usize = CARD_WIDTH, |v| count(v).max(1);
-    root_card_width: usize = ROOT_CARD_WIDTH, |v| count(v).max(1);
-    lmr_min_move_counter: usize = LMR_MIN_MOVE_COUNTER, count;
-    lmr_reduction: f64 = LMR_REDUCTION, |v| v.max(0.0);
-    futility_max_depth: f64 = FUTILITY_MAX_DEPTH, |v| v;
-    futility_margin: f64 = FUTILITY_MARGIN, |v| v;
-    futility_margin_per_ply: f64 = FUTILITY_MARGIN_PER_PLY, |v| v;
-    hist_decay: f64 = HIST_DECAY, |v| v.clamp(0.0, 1.0);
-    hist_exponent: f64 = HIST_EXPONENT, |v| v;
-    hist_malus: f64 = HIST_MALUS, |v| v.max(0.0);
+    card_width: usize = CARD_WIDTH, |v| count(v).max(1), (1.0, 20.0);
+    root_card_width: usize = ROOT_CARD_WIDTH, |v| count(v).max(1), (1.0, 40.0);
+    root_combo_width: usize = ROOT_COMBO_WIDTH, |v| count(v).max(1), (1.0, 40.0);
+    root_combo_cards: usize = ROOT_COMBO_CARDS, |v| count(v).max(1), (1.0, 20.0);
+    lmr_min_move_counter: usize = LMR_MIN_MOVE_COUNTER, count, (0.0, 20.0);
+    lmr_reduction: f64 = LMR_REDUCTION, |v| v.max(0.0), (0.0, 4.0);
+    futility_max_depth: f64 = FUTILITY_MAX_DEPTH, |v| v, (0.0, 30.0);
+    futility_margin: f64 = FUTILITY_MARGIN, |v| v, (0.0, 20_000.0);
+    futility_margin_per_ply: f64 = FUTILITY_MARGIN_PER_PLY, |v| v, (0.0, 10_000.0);
+    hist_decay: f64 = HIST_DECAY, |v| v.clamp(0.0, 1.0), (0.0, 1.0);
+    hist_exponent: f64 = HIST_EXPONENT, |v| v, (0.0, 4.0);
+    hist_malus: f64 = HIST_MALUS, |v| v.max(0.0), (0.0, 4.0);
+    effort_decay: f64 = EFFORT_DECAY, |v| v.clamp(0.0, 1.0), (0.0, 1.0);
+    effort_prior_slope: f64 = EFFORT_PRIOR_SLOPE, |v| v.max(0.0), (0.0, 8.0);
+    effort_min_depth_variance: f64 = EFFORT_MIN_DEPTH_VARIANCE, |v| v.max(0.0), (0.0, 100.0);
+    effort_max_slope: f64 = EFFORT_MAX_SLOPE, |v| v.max(0.0), (0.0, 16.0);
 }
 
 impl Tune {
@@ -169,6 +201,17 @@ impl Tune {
             }
         }
         Ok(t)
+    }
+
+    /// `Tune::from_env` with the bot options' `values` (by name; the others are ignored) applied.
+    pub fn from_options(values: &serde_json::Map<String, serde_json::Value>) -> Tune {
+        let mut t = Tune::from_env();
+        for (name, value) in values {
+            if let Some(v) = value.as_f64() {
+                t.set(name, v);
+            }
+        }
+        t
     }
 
     /// "name=value,..." of all the parameters.

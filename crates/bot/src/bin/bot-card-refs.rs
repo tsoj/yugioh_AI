@@ -195,7 +195,7 @@ fn rules_decision(m: &Msg, hint: Option<u64>) -> Option<(Vec<Response>, usize)> 
         Msg::SelectPlace { player, count: 1, flag } | Msg::SelectDisfield { player, count: 1, flag } => {
             available_places(*player, *flag).into_iter().map(|z| Response { places: Some(vec![z]), ..Response::default() }).collect()
         }
-        _ => root_candidates(m, &rules, None),
+        _ => root_candidates(m, &rules, None, &Tune::from_env()),
     };
     let answer = rules.respond_to(m, None).ok()?;
     let at = match moves.iter().position(|r| *r == answer) {

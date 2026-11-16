@@ -3,7 +3,7 @@
 use ygo_core::duel::Duel;
 use ygo_core::types::CardId;
 
-use super::params::{EFFORT_DECAY, EFFORT_MAX_SLOPE, EFFORT_MIN_DEPTH_VARIANCE, EFFORT_PRIOR_SLOPE, TT_BITS};
+use super::params::{TT_BITS, Tune};
 use ygo_arbiter::messages::Msg;
 
 /// What a node's value is: exact (a PV node: a move raised alpha without reaching beta), a lower
@@ -81,11 +81,11 @@ pub struct Effort {
 }
 
 impl Effort {
-    /// One more search of the move: the older ones count EFFORT_DECAY as much.
-    pub fn add(&mut self, nodes: u64, depth: f64) {
-        self.weight = self.weight * EFFORT_DECAY + 1.0;
-        self.log_nodes = self.log_nodes * EFFORT_DECAY + ((nodes + 1) as f64).log2();
-        self.depth = self.depth * EFFORT_DECAY + depth;
+    /// One more search of the move: the older ones count `decay` as much (`Tune::effort_decay`).
+    pub fn add(&mut self, nodes: u64, depth: f64, decay: f64) {
+        self.weight = self.weight * decay + 1.0;
+        self.log_nodes = self.log_nodes * decay + ((nodes + 1) as f64).log2();
+        self.depth = self.depth * decay + depth;
     }
 
     /// log2(nodes + 1) less what `slope` expects for the depth searched (None: never searched).
@@ -116,9 +116,9 @@ impl EffortFit {
         }
     }
 
-    /// log2 nodes per ply (the prior while the depths have hardly differed).
-    pub fn slope(&self) -> f64 {
-        if self.dd < EFFORT_MIN_DEPTH_VARIANCE { EFFORT_PRIOR_SLOPE } else { (self.dy / self.dd).clamp(0.0, EFFORT_MAX_SLOPE) }
+    /// log2 nodes per ply (the prior while the depths have hardly differed; `Tune::effort_*`).
+    pub fn slope(&self, tune: &Tune) -> f64 {
+        if self.dd < tune.effort_min_depth_variance { tune.effort_prior_slope } else { (self.dy / self.dd).clamp(0.0, tune.effort_max_slope) }
     }
 }
 
@@ -240,9 +240,9 @@ mod tests {
         // (moves 0..4 in order a, c, d, b: a searched deep, d and b reduced, c never searched)
         let (a, b, c, d) = (0, 1, 2, 3);
         let mut efforts = [Effort::default(); 4];
-        efforts[a].add(4095, 10.0);
-        efforts[b].add(255, 1.0);
-        efforts[d].add(1023, 3.0);
+        efforts[a].add(4095, 10.0, 1.0);
+        efforts[b].add(255, 1.0, 1.0);
+        efforts[d].add(1023, 3.0, 1.0);
         // (by nodes alone, a took longest)
         let mut order = vec![a, c, d, b];
         effort_order(&mut order, &efforts, 0.0);
@@ -256,10 +256,11 @@ mod tests {
     #[test]
     fn effort_fit_within_nodes() {
         let mut fit = EffortFit::default();
-        assert_eq!(fit.slope(), EFFORT_PRIOR_SLOPE);
+        let tune = Tune::default();
+        assert_eq!(fit.slope(&tune), tune.effort_prior_slope);
         // (two nodes of different sizes, each 1.5 log2 nodes more per ply)
         fit.add(&[(10.0, 4.0), (7.0, 2.0)]);
         fit.add(&[(20.0, 4.0), (17.0, 2.0)]);
-        assert!((fit.slope() - 1.5).abs() < 1e-12);
+        assert!((fit.slope(&tune) - 1.5).abs() < 1e-12);
     }
 }

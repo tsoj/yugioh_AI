@@ -2,6 +2,7 @@
 //! observation streams recorded while it is played.
 
 use crate::belief_bots::make_bot;
+use crate::search::Tune;
 use ygo_arbiter::game::{Deck, DuelConfig, GameError, GameRecord, ObsItem, ObservationLog, PlayOptions, new_record, play};
 use ygo_arbiter::messages::Msg;
 
@@ -10,7 +11,7 @@ use ygo_arbiter::messages::Msg;
 /// the game itself goes on to the end of its step).
 pub fn play_with_streams(seed: i64, decks: [Deck; 2], bots: [&str; 2]) -> Result<(GameRecord, [Vec<ObsItem>; 2]), GameError> {
     let mut record = new_record(&decks, seed, &DuelConfig::default());
-    let bot = |p: usize| make_bot(bots[p], Some(2 * seed + p as i64)).map_err(GameError);
+    let bot = |p: usize| make_bot(bots[p], Some(2 * seed + p as i64), Tune::from_env()).map_err(GameError);
     let (mut a, mut b) = (bot(0)?, bot(1)?);
     let mut logs = [ObservationLog::new(0, true), ObservationLog::new(1, true)];
     let [log0, log1] = &mut logs;

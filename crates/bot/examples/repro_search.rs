@@ -108,7 +108,7 @@ fn main() {
     for seed in 0..seeds {
         let mut record = base.clone();
         record.responses.clear();
-        let bot = BeliefSearchBot::new(name, Some(seed)).unwrap();
+        let bot = BeliefSearchBot::new(name, Some(seed), bot::search::Tune::from_env()).unwrap();
         let at: Cursor = Rc::new(Cell::new(0));
         let mut probe = Probe { bot, responses: all.clone(), at: at.clone(), from, seed };
         let mut other = Replay(all.clone(), at.clone());

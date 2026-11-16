@@ -24,7 +24,7 @@ use ygo_arbiter::messages::Msg;
 use ygo_arbiter::observe::to_core_response;
 use ygo_arbiter::pyrandom::PyRandom;
 use crate::rduel::RDuel;
-use crate::search::{AlphaBeta, SearchParams, TIME_BUFFER, hard_limit, root_candidates};
+use crate::search::{AlphaBeta, SearchParams, TIME_BUFFER, Tune, hard_limit, root_candidates};
 use ygo_arbiter::state::{LOCATIONS, PlayerCards, Snapshot, capture, viewer_view};
 use ygo_core::duel::Duel;
 
@@ -50,14 +50,23 @@ pub enum Search {
 }
 
 impl Search {
-    fn alphabeta(kind: &str) -> Search {
+    fn alphabeta(kind: &str, tune: Tune) -> Search {
         let max_nodes = env_num("BOT_SEARCH_NODES").filter(|&n| n > 0);
-        let ab = Box::default();
+        let mut ab = Box::<AlphaBeta>::default();
+        ab.tune = tune;
         match kind {
             "naive" => Search::AlphaBetaNaive { ab, max_nodes },
             _ => Search::AlphaBeta { ab, max_nodes },
         }
     }
+    /// The search parameters (MCTS: the defaults).
+    fn tune(&self) -> Tune {
+        match self {
+            Search::AlphaBeta { ab, .. } | Search::AlphaBetaNaive { ab, .. } => ab.tune,
+            Search::Mcts { .. } => Tune::default(),
+        }
+    }
+
     fn mcts() -> Search {
         Search::Mcts {
             max_sims: env_num("BOT_MCTS_SIMS").filter(|&n| n > 0),
@@ -137,13 +146,13 @@ pub struct BeliefSearchBot {
 impl BeliefSearchBot {
     /// `name`: alphabeta, alphabeta_naive or mcts, or alpha-beta on the true duel (in-process
     /// games with its `truth_feed` only): alphabeta_true, alphabeta_true_shuffled (`Truth`);
-    /// `seed`: None for an unseeded generator.
-    pub fn new(name: &str, seed: Option<i64>) -> Result<BeliefSearchBot, String> {
+    /// `seed`: None for an unseeded generator; `tune`: the alpha-beta search's parameters.
+    pub fn new(name: &str, seed: Option<i64>, tune: Tune) -> Result<BeliefSearchBot, String> {
         let (search, truth) = match name {
-            "alphabeta" => (Search::alphabeta("full"), None),
-            "alphabeta_naive" => (Search::alphabeta("naive"), None),
-            "alphabeta_true" => (Search::alphabeta("full"), Some(Truth::Full)),
-            "alphabeta_true_shuffled" => (Search::alphabeta("full"), Some(Truth::ShuffledDecks)),
+            "alphabeta" => (Search::alphabeta("full", tune), None),
+            "alphabeta_naive" => (Search::alphabeta("naive", tune), None),
+            "alphabeta_true" => (Search::alphabeta("full", tune), Some(Truth::Full)),
+            "alphabeta_true_shuffled" => (Search::alphabeta("full", tune), Some(Truth::ShuffledDecks)),
             "mcts" => (Search::mcts(), None),
             _ => return Err(format!("unknown belief bot {name}")),
         };
@@ -326,7 +335,7 @@ impl Bot for BeliefSearchBot {
         self.items.push(ObsItem::Prompt(prompt.clone(), state.cloned()));
         self.info = None;
         // (every decision: the rules' answer and alternatives, see `root_candidates`)
-        let mut cands = root_candidates(prompt, &self.fallback, state);
+        let mut cands = root_candidates(prompt, &self.fallback, state, &self.search.tune());
         // (the same effect at most MAX_SAME_ACTIVATION_PER_TURN times per turn, as the rules' player:
         // an effect that changes nothing, e.g. negated, would otherwise be activated forever)
         if cands.iter().any(|c| self.fallback.within_cap(prompt, c)) {
@@ -599,8 +608,9 @@ impl Bot for BeliefMcBot {
     }
 }
 
-/// Bots by name, the belief ones included (not Send: the belief's state is not); None: unknown.
-pub fn make_bot(name: &str, seed: Option<i64>) -> Result<Box<dyn Bot>, String> {
+/// Bots by name, the belief ones included (not Send: the belief's state is not), the alpha-beta
+/// ones with the search parameters `tune`.
+pub fn make_bot(name: &str, seed: Option<i64>, tune: Tune) -> Result<Box<dyn Bot>, String> {
     let seed_or_entropy = seed.unwrap_or_else(|| entropy() as i64);
     if let Some(a) = crate::bots::make_bot(name, seed_or_entropy) {
         return Ok(a);
@@ -617,5 +627,5 @@ pub fn make_bot(name: &str, seed: Option<i64>) -> Result<Box<dyn Bot>, String> {
         let net = crate::rl_policy::RlPolicyNet::load(std::path::Path::new(&path))?;
         return Ok(Box::new(crate::rl_policy::RlPolicyBot::new(seed_or_entropy as i128, std::sync::Arc::new(net), 0.0)));
     }
-    Ok(Box::new(BeliefSearchBot::new(name, seed)?))
+    Ok(Box::new(BeliefSearchBot::new(name, seed, tune)?))
 }
